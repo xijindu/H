@@ -1,0 +1,142 @@
+﻿import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+enum VideoHorizontalSwipeAction {
+  disabled,
+  adjustProgress,
+  changeVideo,
+  skipTenSeconds,
+}
+
+enum VideoVerticalSwipeAction { disabled, brightness, volume }
+
+enum VideoCompletionAction { prompt, autoplayNext, replay, returnToChat }
+
+class _VideoPlaybackPreferenceChanges extends ChangeNotifier {
+  void emit() => notifyListeners();
+}
+
+class VideoPlaybackPreferences {
+  const VideoPlaybackPreferences({
+    this.horizontalSwipeAction = VideoHorizontalSwipeAction.changeVideo,
+    this.leftVerticalSwipeAction = VideoVerticalSwipeAction.brightness,
+    this.rightVerticalSwipeAction = VideoVerticalSwipeAction.volume,
+    this.completionAction = VideoCompletionAction.prompt,
+    this.androidVideoCompatibility = true,
+  });
+
+  static const androidVideoCompatibilityPreferenceKey =
+      'videoPlayback.androidVideoCompatibility';
+
+  static const horizontalSwipePreferenceKey =
+      'videoPlayback.horizontalSwipeAction';
+  static const leftVerticalSwipePreferenceKey =
+      'videoPlayback.leftVerticalSwipeAction';
+  static const rightVerticalSwipePreferenceKey =
+      'videoPlayback.rightVerticalSwipeAction';
+  static const completionPreferenceKey = 'videoPlayback.completionAction';
+
+  /// Emits after a playback preference has been durably written.
+  ///
+  /// Preference writes need an observable source so consumers can trigger the
+  /// existing settings-changed plumbing after a durable write.
+  static final _VideoPlaybackPreferenceChanges _changes =
+      _VideoPlaybackPreferenceChanges();
+  static ChangeNotifier get changes => _changes;
+
+  final VideoHorizontalSwipeAction horizontalSwipeAction;
+  final VideoVerticalSwipeAction leftVerticalSwipeAction;
+  final VideoVerticalSwipeAction rightVerticalSwipeAction;
+  final VideoCompletionAction completionAction;
+  final bool androidVideoCompatibility;
+
+  VideoPlaybackPreferences copyWith({
+    VideoHorizontalSwipeAction? horizontalSwipeAction,
+    VideoVerticalSwipeAction? leftVerticalSwipeAction,
+    VideoVerticalSwipeAction? rightVerticalSwipeAction,
+    VideoCompletionAction? completionAction,
+    bool? androidVideoCompatibility,
+  }) {
+    return VideoPlaybackPreferences(
+      horizontalSwipeAction:
+          horizontalSwipeAction ?? this.horizontalSwipeAction,
+      leftVerticalSwipeAction:
+          leftVerticalSwipeAction ?? this.leftVerticalSwipeAction,
+      rightVerticalSwipeAction:
+          rightVerticalSwipeAction ?? this.rightVerticalSwipeAction,
+      completionAction: completionAction ?? this.completionAction,
+      androidVideoCompatibility:
+          androidVideoCompatibility ?? this.androidVideoCompatibility,
+    );
+  }
+
+  static Future<VideoPlaybackPreferences> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    return fromPreferences(prefs);
+  }
+
+  static VideoPlaybackPreferences fromPreferences(SharedPreferences prefs) {
+    return VideoPlaybackPreferences(
+      androidVideoCompatibility:
+          prefs.getBool(androidVideoCompatibilityPreferenceKey) ?? true,
+      horizontalSwipeAction: _enumByName(
+        VideoHorizontalSwipeAction.values,
+        prefs.getString(horizontalSwipePreferenceKey),
+        VideoHorizontalSwipeAction.changeVideo,
+      ),
+      leftVerticalSwipeAction: _enumByName(
+        VideoVerticalSwipeAction.values,
+        prefs.getString(leftVerticalSwipePreferenceKey),
+        VideoVerticalSwipeAction.brightness,
+      ),
+      rightVerticalSwipeAction: _enumByName(
+        VideoVerticalSwipeAction.values,
+        prefs.getString(rightVerticalSwipePreferenceKey),
+        VideoVerticalSwipeAction.volume,
+      ),
+      completionAction: _enumByName(
+        VideoCompletionAction.values,
+        prefs.getString(completionPreferenceKey),
+        VideoCompletionAction.prompt,
+      ),
+    );
+  }
+
+  static T _enumByName<T extends Enum>(
+    List<T> values,
+    String? name,
+    T fallback,
+  ) {
+    for (final value in values) {
+      if (value.name == name) return value;
+    }
+    return fallback;
+  }
+
+  static Future<void> saveHorizontalSwipeAction(
+    VideoHorizontalSwipeAction action,
+  ) => _save(horizontalSwipePreferenceKey, action);
+
+  static Future<void> saveLeftVerticalSwipeAction(
+    VideoVerticalSwipeAction action,
+  ) => _save(leftVerticalSwipePreferenceKey, action);
+
+  static Future<void> saveRightVerticalSwipeAction(
+    VideoVerticalSwipeAction action,
+  ) => _save(rightVerticalSwipePreferenceKey, action);
+
+  static Future<void> saveCompletionAction(VideoCompletionAction action) =>
+      _save(completionPreferenceKey, action);
+
+  static Future<void> saveAndroidVideoCompatibility(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (await prefs.setBool(androidVideoCompatibilityPreferenceKey, enabled)) {
+      _changes.emit();
+    }
+  }
+
+  static Future<void> _save(String key, Enum value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (await prefs.setString(key, value.name)) _changes.emit();
+  }
+}

@@ -1,0 +1,4448 @@
+﻿//
+//  td_models.dart
+//
+//  View-facing models parsed from TDLib JSON, plus content→text helpers.
+//  The Flutter port of the Swift `TDModels` / `TDParse`.
+//
+
+import 'dart:convert';
+
+import 'package:dlibphonenumber/dlibphonenumber.dart';
+import 'package:flutter/foundation.dart';
+import 'package:handy/l10n/app_localizations.dart';
+import 'package:handy/notifications/scope_notification_settings.dart';
+
+import 'json_helpers.dart';
+
+/// Reference to a downloadable TDLib file (profile photo, thumbnail, …).
+class TdFileRef {
+  TdFileRef({
+    required this.id,
+    this.localPath,
+    this.fileName,
+    this.mimeType,
+    this.miniThumb,
+    this.thumbnail,
+    this.hasAnimation = false,
+    this.photoId,
+  });
+  final int id;
+  final String? localPath;
+  final String? fileName;
+  final String? mimeType;
+  final bool hasAnimation;
+  final int? photoId;
+  Uint8List? miniThumb; // decoded JPEG for instant placeholder
+  TdFileRef? thumbnail; // downloadable thumbnail with the real aspect ratio
+
+  TdFileRef inheritLocalPathFrom(TdFileRef? previous) {
+    return TdFileRef(
+      id: id,
+      localPath: _usablePath(localPath) ?? _usablePath(previous?.localPath),
+      fileName: _usablePath(fileName) ?? _usablePath(previous?.fileName),
+      mimeType: _usablePath(mimeType) ?? _usablePath(previous?.mimeType),
+      miniThumb: miniThumb ?? previous?.miniThumb,
+      hasAnimation: hasAnimation || (previous?.hasAnimation ?? false),
+      photoId: photoId ?? previous?.photoId,
+      thumbnail:
+          thumbnail?.inheritLocalPathFrom(previous?.thumbnail) ??
+          previous?.thumbnail,
+    );
+  }
+
+  static String? _usablePath(String? path) {
+    final value = path?.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+}
+
+/// Categories surfaced by the search hub and the media browser.
+enum ChatMediaCategory {
+  media, // 图片/视频
+  file, // 文件
+  audio, // 音频/音乐
+  link, // 链接
+  sticker, // 表情
+  voice, // 语音
+  member; // 群成员
+
+  String get title => switch (this) {
+    ChatMediaCategory.media => AppStrings.t(AppStringKeys.tdMessagePhotoVideo),
+    ChatMediaCategory.file => AppStrings.t(AppStringKeys.topicPostContentFile),
+    ChatMediaCategory.audio => AppStrings.t(AppStringKeys.composerAudio),
+    ChatMediaCategory.link => AppStrings.t(AppStringKeys.sharedMediaLinks),
+    ChatMediaCategory.sticker => AppStrings.t(AppStringKeys.tdMessageSticker),
+    ChatMediaCategory.voice => AppStrings.t(AppStringKeys.sharedMediaVoice),
+    ChatMediaCategory.member => AppStrings.t(
+      AppStringKeys.chatInfoGroupMembers,
+    ),
+  };
+
+  /// The TDLib SearchMessagesFilter `@type`, or null for non-message categories.
+  String? get tdFilter => switch (this) {
+    ChatMediaCategory.media => 'searchMessagesFilterPhotoAndVideo',
+    ChatMediaCategory.file => 'searchMessagesFilterDocument',
+    ChatMediaCategory.audio => 'searchMessagesFilterAudio',
+    ChatMediaCategory.link => 'searchMessagesFilterUrl',
+    ChatMediaCategory.sticker => 'searchMessagesFilterAnimation',
+    ChatMediaCategory.voice => 'searchMessagesFilterVoiceNote',
+    ChatMediaCategory.member => null,
+  };
+
+  String get emptyText => switch (this) {
+    ChatMediaCategory.media => AppStrings.t(
+      AppStringKeys.tdMessageNoPhotoVideo,
+    ),
+    ChatMediaCategory.file => AppStrings.t(AppStringKeys.tdMessageNoFiles),
+    ChatMediaCategory.audio => AppStrings.t(AppStringKeys.tdMessageNoAudio),
+    ChatMediaCategory.link => AppStrings.t(AppStringKeys.tdMessageNoLinks),
+    ChatMediaCategory.sticker => AppStrings.t(
+      AppStringKeys.tdMessageNoStickers,
+    ),
+    ChatMediaCategory.voice => AppStrings.t(AppStringKeys.tdMessageNoVoice),
+    ChatMediaCategory.member => AppStrings.t(AppStringKeys.tdMessageNoMembers),
+  };
+}
+
+enum ChatKind { privateChat, group, channel, bot, secret, unknown }
+
+/// A custom (premium) emoji span in a message's text — covers [length] UTF-16
+/// units at [offset], rendered inline from custom_emoji_id [id].
+class CustomEmojiEntity {
+  const CustomEmojiEntity(this.offset, this.length, this.id);
+  final int offset;
+  final int length;
+  final int id;
+}
+
+/// A TDLib formattedText entity in message text/caption. Offsets and lengths
+/// are UTF-16 code units, matching Dart String indexing.
+class MessageTextEntity {
+  const MessageTextEntity({
+    required this.offset,
+    required this.length,
+    required this.type,
+    this.url,
+    this.userId,
+    this.customEmojiId,
+    this.language,
+    this.button,
+    this.typeData = const {},
+  });
+
+  final int offset;
+  final int length;
+  final String type;
+  final String? url;
+  final int? userId;
+  final int? customEmojiId;
+  final String? language;
+  final MessageButton? button;
+
+  /// Full TDLib `TextEntityType` payload, including fields introduced after
+  /// this client was built. Known convenience fields above remain available.
+  final Map<String, dynamic> typeData;
+
+  int get end => offset + length;
+  bool get isCustomEmoji => type == 'textEntityTypeCustomEmoji';
+  bool get isBlockQuote =>
+      type == 'textEntityTypeBlockQuote' ||
+      type == 'textEntityTypeExpandableBlockQuote';
+  bool get isExpandableBlockQuote =>
+      type == 'textEntityTypeExpandableBlockQuote';
+  bool get isPreBlock =>
+      type == 'textEntityTypePre' || type == 'textEntityTypePreCode';
+  bool get isMathematicalExpression =>
+      type == 'textEntityTypeMathematicalExpression';
+
+  Map<String, dynamic> toTdJson() {
+    final entityType = <String, dynamic>{...typeData, '@type': type};
+    if (url != null) entityType['url'] = url;
+    if (userId != null) entityType['user_id'] = userId;
+    if (customEmojiId != null) {
+      entityType['custom_emoji_id'] = customEmojiId.toString();
+    }
+    if (language != null) entityType['language'] = language;
+    return {
+      '@type': 'textEntity',
+      'offset': offset,
+      'length': length,
+      'type': entityType,
+    };
+  }
+}
+
+/// A server quote or a manually selected UTF-16 range from a message.
+class MessageTextQuote {
+  const MessageTextQuote({
+    required this.text,
+    required this.position,
+    this.entities = const [],
+    this.isManual = true,
+  });
+
+  final String text;
+  final int position;
+  final List<MessageTextEntity> entities;
+  final bool isManual;
+
+  Map<String, dynamic> toInputJson() => {
+    '@type': 'inputTextQuote',
+    'text': {
+      '@type': 'formattedText',
+      'text': text,
+      'entities': [for (final entity in entities) entity.toTdJson()],
+    },
+    'position': position,
+  };
+}
+
+class RichMessageTableCell {
+  const RichMessageTableCell({
+    required this.text,
+    this.entities = const [],
+    this.isHeader = false,
+    this.horizontalAlignment = 'left',
+    this.verticalAlignment = 'top',
+  });
+
+  final String text;
+  final List<MessageTextEntity> entities;
+  final bool isHeader;
+  final String horizontalAlignment;
+  final String verticalAlignment;
+}
+
+enum RichMessageBlockKind {
+  paragraph,
+  heading,
+  preformatted,
+  footer,
+  thinking,
+  divider,
+  math,
+  anchor,
+  buttonRow,
+  list,
+  blockQuote,
+  pullQuote,
+  animation,
+  audio,
+  photo,
+  video,
+  voiceNote,
+  collage,
+  slideshow,
+  table,
+  details,
+  map,
+}
+
+class RichMessageListItem {
+  const RichMessageListItem({
+    required this.blocks,
+    this.label = '',
+    this.hasCheckbox = false,
+    this.isChecked = false,
+    this.value = 0,
+    this.numberingType = '',
+  });
+
+  final List<RichMessageBlock> blocks;
+  final String label;
+  final bool hasCheckbox;
+  final bool isChecked;
+  final int value;
+  final String numberingType;
+}
+
+class RichMessageBlock {
+  const RichMessageBlock._({
+    required this.kind,
+    this.text = '',
+    this.textEntities = const [],
+    this.size = 0,
+    this.language = '',
+    this.name = '',
+    this.children = const [],
+    this.listItems = const [],
+    this.isOpen = false,
+    this.image,
+    this.imageWidth,
+    this.imageHeight,
+    this.video,
+    this.videoDuration = 0,
+    this.music,
+    this.voice,
+    this.hasSpoiler = false,
+    this.tableRows = const [],
+    this.mathExpression,
+    this.mapLocation,
+    this.mapZoom = 16,
+    this.mapWidth = 0,
+    this.mapHeight = 0,
+    this.caption = '',
+    this.captionEntities = const [],
+    this.isBordered = false,
+    this.isStriped = false,
+    this.buttons = const [],
+    this.horizontalAlignment = 'left',
+  });
+
+  const RichMessageBlock.text({
+    required RichMessageBlockKind kind,
+    required String text,
+    List<MessageTextEntity> entities = const [],
+    int size = 0,
+    String language = '',
+  }) : this._(
+         kind: kind,
+         text: text,
+         textEntities: entities,
+         size: size,
+         language: language,
+       );
+
+  const RichMessageBlock.container({
+    required RichMessageBlockKind kind,
+    List<RichMessageBlock> children = const [],
+    List<RichMessageListItem> listItems = const [],
+    String text = '',
+    List<MessageTextEntity> textEntities = const [],
+    bool isOpen = false,
+    String name = '',
+    String caption = '',
+    List<MessageTextEntity> captionEntities = const [],
+  }) : this._(
+         kind: kind,
+         children: children,
+         listItems: listItems,
+         text: text,
+         textEntities: textEntities,
+         isOpen: isOpen,
+         name: name,
+         caption: caption,
+         captionEntities: captionEntities,
+       );
+
+  const RichMessageBlock.media({
+    required RichMessageBlockKind kind,
+    TdFileRef? image,
+    int? imageWidth,
+    int? imageHeight,
+    TdFileRef? video,
+    int videoDuration = 0,
+    MessageMusic? music,
+    MessageVoice? voice,
+    bool hasSpoiler = false,
+    String caption = '',
+    List<MessageTextEntity> captionEntities = const [],
+  }) : this._(
+         kind: kind,
+         image: image,
+         imageWidth: imageWidth,
+         imageHeight: imageHeight,
+         video: video,
+         videoDuration: videoDuration,
+         music: music,
+         voice: voice,
+         hasSpoiler: hasSpoiler,
+         caption: caption,
+         captionEntities: captionEntities,
+       );
+
+  const RichMessageBlock.table(
+    List<List<RichMessageTableCell>> tableRows, {
+    bool isBordered = true,
+    bool isStriped = false,
+  }) : this._(
+         kind: RichMessageBlockKind.table,
+         tableRows: tableRows,
+         isBordered: isBordered,
+         isStriped: isStriped,
+       );
+
+  const RichMessageBlock.math(String? expression)
+    : this._(kind: RichMessageBlockKind.math, mathExpression: expression);
+
+  const RichMessageBlock.buttonRow(
+    List<MessageButton> buttons, {
+    String horizontalAlignment = 'left',
+  }) : this._(
+         kind: RichMessageBlockKind.buttonRow,
+         buttons: buttons,
+         horizontalAlignment: horizontalAlignment,
+       );
+
+  const RichMessageBlock.map({
+    required MessageLocation? mapLocation,
+    int mapZoom = 16,
+    int mapWidth = 220,
+    int mapHeight = 120,
+    String caption = '',
+    List<MessageTextEntity> captionEntities = const [],
+  }) : this._(
+         kind: RichMessageBlockKind.map,
+         mapLocation: mapLocation,
+         mapZoom: mapZoom,
+         mapWidth: mapWidth,
+         mapHeight: mapHeight,
+         caption: caption,
+         captionEntities: captionEntities,
+       );
+
+  const RichMessageBlock.captionedTable({
+    required List<List<RichMessageTableCell>> tableRows,
+    String caption = '',
+    List<MessageTextEntity> captionEntities = const [],
+    bool isBordered = true,
+    bool isStriped = false,
+  }) : this._(
+         kind: RichMessageBlockKind.table,
+         tableRows: tableRows,
+         caption: caption,
+         captionEntities: captionEntities,
+         isBordered: isBordered,
+         isStriped: isStriped,
+       );
+
+  final RichMessageBlockKind kind;
+  final String text;
+  final List<MessageTextEntity> textEntities;
+  final int size;
+  final String language;
+  final String name;
+  final List<RichMessageBlock> children;
+  final List<RichMessageListItem> listItems;
+  final bool isOpen;
+  final TdFileRef? image;
+  final int? imageWidth;
+  final int? imageHeight;
+  final TdFileRef? video;
+  final int videoDuration;
+  final MessageMusic? music;
+  final MessageVoice? voice;
+  final bool hasSpoiler;
+
+  final List<List<RichMessageTableCell>> tableRows;
+  final String? mathExpression;
+  final MessageLocation? mapLocation;
+  final int mapZoom;
+  final int mapWidth;
+  final int mapHeight;
+  final String caption;
+  final List<MessageTextEntity> captionEntities;
+  final bool isBordered;
+  final bool isStriped;
+  final List<MessageButton> buttons;
+  final String horizontalAlignment;
+
+  bool get isTable => kind == RichMessageBlockKind.table;
+  bool get isMath => kind == RichMessageBlockKind.math;
+  bool get isMap => kind == RichMessageBlockKind.map;
+}
+
+class _ParsedMarkdownText {
+  const _ParsedMarkdownText(this.text, this.entities);
+
+  final String text;
+  final List<MessageTextEntity> entities;
+}
+
+class _RichTextBuilder {
+  final buffer = StringBuffer();
+  final entities = <MessageTextEntity>[];
+
+  int get length => buffer.length;
+  bool get isEmpty => buffer.isEmpty;
+
+  void write(String text) => buffer.write(text);
+
+  void blankLine() {
+    if (buffer.isEmpty) return;
+    final text = buffer.toString();
+    if (text.endsWith('\n\n')) return;
+    if (text.endsWith('\n')) {
+      buffer.write('\n');
+    } else {
+      buffer.write('\n\n');
+    }
+  }
+
+  void lineBreak() {
+    if (buffer.isNotEmpty && !buffer.toString().endsWith('\n')) {
+      buffer.write('\n');
+    }
+  }
+
+  void entity(
+    int start,
+    String type, {
+    String? url,
+    int? userId,
+    int? customEmojiId,
+    String? language,
+    MessageButton? button,
+    Map<String, dynamic> typeData = const {},
+  }) {
+    final length = this.length - start;
+    if (length <= 0) return;
+    entities.add(
+      MessageTextEntity(
+        offset: start,
+        length: length,
+        type: type,
+        url: url,
+        userId: userId,
+        customEmojiId: customEmojiId,
+        language: language,
+        button: button,
+        typeData: typeData,
+      ),
+    );
+  }
+}
+
+/// One reaction bucket on a message (emoji or custom-emoji + count + chosen).
+class MessageReaction {
+  const MessageReaction({
+    this.emoji,
+    this.customEmojiId = 0,
+    required this.count,
+    required this.chosen,
+  });
+  final String? emoji;
+  final int customEmojiId;
+  final int count;
+  final bool chosen;
+
+  /// The TDLib reaction_type for add/removeMessageReaction.
+  Map<String, dynamic> get type => customEmojiId != 0
+      ? {
+          '@type': 'reactionTypeCustomEmoji',
+          'custom_emoji_id': customEmojiId.toString(),
+        }
+      : {'@type': 'reactionTypeEmoji', 'emoji': emoji};
+}
+
+/// A sender's role in a group/channel.
+enum MemberRole { owner, admin, member, channel }
+
+class ChatSummary {
+  ChatSummary({
+    required this.id,
+    required this.title,
+    required this.lastMessage,
+    required this.lastMessageId,
+    required this.date,
+    required this.unreadCount,
+    this.lastReadInboxMessageId = 0,
+    this.unreadMentionCount = 0,
+    this.unreadReactionCount = 0,
+    required this.order,
+    required this.isMuted,
+    this.kind = ChatKind.unknown,
+    this.photo,
+    this.lastSender,
+    this.isPinned = false,
+    this.isVerified = false,
+    this.archiveOrder = 0,
+    this.isMarkedUnread = false,
+    this.draftText = '',
+    this.peerUserId,
+    this.peerIsContact = false,
+    this.peerPhoneNumber,
+    this.peerIsPremium = false,
+    this.peerAccentColorId = -1,
+    this.peerEmojiStatusId = 0,
+    this.isForum = false,
+    this.supportsBotTopics = false,
+    this.lastChatMessage,
+    this.isSavedMessages = false,
+  });
+
+  final int id;
+  String title;
+  String lastMessage;
+  int lastMessageId;
+  int date;
+  int unreadCount;
+  int lastReadInboxMessageId;
+  int unreadMentionCount;
+  int unreadReactionCount;
+  int order;
+  bool isMuted;
+  ChatKind kind;
+  TdFileRef? photo;
+  String? lastSender; // group preview prefix, e.g. "restart:"
+  bool isPinned;
+  bool isVerified;
+  int archiveOrder; // > 0 when the chat is in the Archive list
+  bool isMarkedUnread; // "标为未读" with no unread count
+  String draftText; // unsent draft; shown as "[草稿]" prefix when non-empty
+  int? peerUserId; // private/secret chat peer, used for chat-list identity UI
+  bool peerIsContact;
+  String? peerPhoneNumber;
+  bool peerIsPremium;
+  int peerAccentColorId;
+  int peerEmojiStatusId;
+  bool isForum;
+  bool supportsBotTopics;
+  ChatMessage? lastChatMessage;
+  bool
+  isSavedMessages; // true when this is the Saved Messages chat (private chat with yourself)
+
+  /// Chat folders this chat currently sits in, kept from its TDLib chat-list
+  /// positions. Lets a chat-list row draw its folder tags without asking
+  /// TDLib — or recomputing folder filters — once per row.
+  final Set<int> folderIds = {};
+
+  /// Groups & channels use a rounded-square avatar unless UI preferences
+  /// override them; people use a circle.
+  bool get usesSquareAvatar =>
+      kind == ChatKind.group || kind == ChatKind.channel;
+
+  /// Whether this chat can be browsed and addressed through forum topics.
+  ///
+  /// TDLib's `chat.view_as_topics` only classifies forum supergroups (and
+  /// Saved Messages presentation). Private bot topics are instead advertised
+  /// by `userTypeBot.has_topics`, so keep the two sources explicit.
+  bool get supportsTopics => isForum || supportsBotTopics;
+
+  bool get isBotTopicChat => supportsBotTopics && !isForum;
+
+  bool get showsRedUnreadIndicator =>
+      (unreadCount > 0 && !isMuted) || isMarkedUnread;
+}
+
+@immutable
+class MessageAppearancePreview {
+  const MessageAppearancePreview._({
+    required this.contentType,
+    this.chatBackground,
+    this.chatTheme,
+  });
+
+  factory MessageAppearancePreview.background(
+    Map<String, dynamic> chatBackground,
+  ) => MessageAppearancePreview._(
+    contentType: 'messageChatSetBackground',
+    chatBackground: Map<String, dynamic>.unmodifiable(chatBackground),
+  );
+
+  factory MessageAppearancePreview.theme(Map<String, dynamic>? chatTheme) =>
+      MessageAppearancePreview._(
+        contentType: 'messageChatSetTheme',
+        chatTheme: chatTheme == null
+            ? null
+            : Map<String, dynamic>.unmodifiable(chatTheme),
+      );
+
+  static MessageAppearancePreview? fromContent(Map<String, dynamic>? content) {
+    if (content?.type == 'messageChatSetBackground') {
+      final background = content?.obj('background');
+      return background == null
+          ? null
+          : MessageAppearancePreview.background(background);
+    }
+    if (content?.type == 'messageChatSetTheme') {
+      return MessageAppearancePreview.theme(content?.obj('theme'));
+    }
+    return null;
+  }
+
+  final String contentType;
+  final Map<String, dynamic>? chatBackground;
+  final Map<String, dynamic>? chatTheme;
+}
+
+/// Community identity retained by a chat-added service message.
+///
+/// The Bot API intentionally supplies only an id and name. Native TDLib
+/// sessions can enrich the same model with a cached community photo later.
+class MessageCommunityPreview {
+  MessageCommunityPreview({required this.id, required this.name, this.photo});
+
+  static MessageCommunityPreview? fromContent(Map<String, dynamic>? content) {
+    if (content?.type != 'messageChatAddedToCommunity') return null;
+    final community = content?.obj('community');
+    return MessageCommunityPreview(
+      id: content?.int64('community_id') ?? community?.int64('id') ?? 0,
+      name:
+          content?.str('community_name') ??
+          community?.str('name') ??
+          community?.str('title') ??
+          '',
+    );
+  }
+
+  final int id;
+  String name;
+  TdFileRef? photo;
+}
+
+class ChatMessage {
+  ChatMessage({
+    required this.id,
+    required this.isOutgoing,
+    required this.text,
+    required this.date,
+    this.chatId,
+    this.senderName,
+    this.senderIsChat = false,
+    this.isService = false,
+    this.isCall = false,
+    this.callIsVideo = false,
+    this.callDiscardReason,
+    this.callDuration = 0,
+    this.contentType,
+    this.restrictionReason,
+    this.restrictionReasonCode,
+    this.restrictedContentText,
+    this.restrictedContentTextEntities = const [],
+    this.containsUnreadMention = false,
+    this.hasUnreadReactions = false,
+    this.senderId,
+    this.senderPhoto,
+    this.image,
+    this.imageWidth,
+    this.imageHeight,
+    this.document,
+    this.music,
+    this.senderRole,
+    this.senderTitle,
+    this.senderIsPremium = false,
+    this.senderAccentColorId = -1,
+    this.senderEmojiStatusId = 0,
+    this.mediaAlbumId = 0,
+    this.animatedSticker,
+    this.videoSticker,
+    this.video,
+    this.videoDuration,
+    this.videoFileSize,
+    this.hasSpoiler = false,
+    this.videoNoteTranscription = '',
+    this.videoNoteTranscriptionPending = false,
+    this.videoNoteTranscriptionError,
+    this.diceEmoji,
+    this.diceValue,
+    this.stickerFileId,
+    this.stickerSetId,
+    this.isAnimatedEmoji = false,
+    this.location,
+    this.voice,
+    this.contact,
+    this.poll,
+    this.checklist,
+    this.story,
+    this.suggestedPostInfo,
+    this.summaryCard,
+    this.summaryLanguageCode = '',
+    this.canRecognizeSpeech = false,
+    this.replyToMessageId,
+    this.replyToQuote,
+    this.textQuoteSource,
+    this.textQuoteSourceEntities,
+    this.replyToDate,
+    this.replyToEntities = const [],
+    this.replyToImage,
+    this.replyToImageWidth,
+    this.replyToImageHeight,
+    this.serviceUserIds = const [],
+    this.appearancePreview,
+    this.communityPreview,
+    this.customEmoji = const [],
+    this.textEntities = const [],
+    this.linkPreview,
+    this.translationText,
+    this.translationEntities = const [],
+    this.translationLanguageCode,
+    this.isTranslating = false,
+    this.buttonRows = const [],
+    this.richBlocks = const [],
+    this.richMessageIsFull = true,
+    this.isEdited = false,
+    this.isSending = false,
+    this.isSendAcknowledged = false,
+    this.viewCount = 0,
+    this.forwardCount = 0,
+    this.hasCommentThread = false,
+    this.commentCount = 0,
+    this.lastCommentMessageId,
+    bool? commentThreadMetadataKnown,
+    this.blockedByUser = false,
+  }) : commentThreadMetadataKnown =
+           commentThreadMetadataKnown ??
+           (hasCommentThread ||
+               commentCount > 0 ||
+               lastCommentMessageId != null);
+
+  final int id;
+  final bool isOutgoing;
+  String text;
+  final int date;
+  int? chatId;
+  String? senderName;
+  bool senderIsChat;
+  bool isService;
+  bool isCall; // messageCall — a call log; not reactable
+  bool callIsVideo; // messageCall.is_video
+  // messageCall.discard_reason @type: callDiscardReasonMissed / Declined /
+  // Disconnected / HungUp / Empty. Null until the call ends.
+  String? callDiscardReason;
+  int callDuration; // messageCall.duration, seconds (0 if never connected)
+  /// Raw TDLib content @type (messageText / messagePhoto / messageAudio / …).
+  /// Kept so we can distinguish kinds the lossy media fields can't (e.g. a
+  /// photo vs a video-thumb, or plain text vs an audio/poll placeholder).
+  String? contentType;
+
+  /// TDLib's message-level restriction reason. When present, the original
+  /// content must be replaced by this server-provided explanation.
+  String? restrictionReason;
+  String? restrictionReasonCode;
+  String? restrictedContentText;
+  List<MessageTextEntity> restrictedContentTextEntities;
+  bool containsUnreadMention;
+  bool hasUnreadReactions;
+  int? senderId;
+  TdFileRef? senderPhoto;
+  TdFileRef? image; // photo / sticker / video-thumb / gif
+  int? imageWidth;
+  int? imageHeight;
+  MessageDocument? document;
+  MessageMusic? music;
+  MemberRole? senderRole;
+  String? senderTitle;
+  bool senderIsPremium;
+  int senderAccentColorId;
+  int senderEmojiStatusId;
+  int mediaAlbumId;
+  TdFileRef? animatedSticker; // .tgs (Lottie) sticker file
+  TdFileRef? videoSticker; // .webm video sticker file
+  TdFileRef? video; // playable video file (messageVideo)
+  int? videoDuration; // seconds, for the duration badge
+  int? videoFileSize; // bytes, for the inline autoplay budget
+  /// Cover the media preview until explicitly revealed.
+  bool hasSpoiler;
+
+  /// Non-interactive quote/search previews cannot reveal a media spoiler.
+  TdFileRef? get previewImage => hasSpoiler ? null : image;
+  String videoNoteTranscription;
+  bool videoNoteTranscriptionPending;
+  String? videoNoteTranscriptionError;
+  String? diceEmoji; // messageDice emoji, e.g. 🎲 / 🎯 / 🏀
+  int? diceValue; // messageDice value reported by TDLib
+  int? stickerFileId; // any sticker's file id (for "add to favorites")
+  int? stickerSetId; // the sticker's set id (for 表情详情)
+  bool isAnimatedEmoji; // single-emoji message (messageAnimatedEmoji)
+  MessageLocation? location;
+  MessageVoice? voice;
+  MessageContactCard? contact;
+  MessagePoll? poll;
+  MessageChecklist? checklist;
+  MessageStoryReference? story;
+  MessageSuggestedPostInfo? suggestedPostInfo;
+  MessageSummaryCard? summaryCard;
+
+  /// Server-provided hint that this message can be summarized by Telegram AI.
+  final String summaryLanguageCode;
+  bool canRecognizeSpeech;
+  String? aiSummaryText;
+  List<MessageTextEntity> aiSummaryEntities = const [];
+  bool aiSummaryLoading = false;
+
+  // 引用 / reply: the message this one replies to, resolved lazily for the quote.
+  int? replyToMessageId;
+  MessageTextQuote? replyToQuote;
+  // Rendering can extract tables from the original formatted text. Quotes
+  // must still address the unmodified source text, not that rendered subset.
+  String? textQuoteSource;
+  List<MessageTextEntity>? textQuoteSourceEntities;
+  String get quoteSourceText => textQuoteSource ?? text;
+  List<MessageTextEntity> get quoteSourceEntities =>
+      textQuoteSourceEntities ?? textEntities;
+  String? get replyPreviewText => replyToQuote?.text ?? replyToPreview;
+  List<MessageTextEntity> get replyPreviewEntities =>
+      replyToQuote?.entities ?? replyToEntities;
+  int? replyToDate; // unix timestamp of the quoted message
+  String? replyToSender; // resolved sender name of the quoted message
+  String? replyToPreview; // one-line preview of the quoted message
+  List<MessageTextEntity> replyToEntities;
+  TdFileRef? replyToImage; // thumbnail/photo shown inside the quote block
+  int? replyToImageWidth;
+  int? replyToImageHeight;
+
+  // Service messages such as member joins may carry affected user ids, resolved
+  // by the chat view model once TDLib can provide display names.
+  List<int> serviceUserIds;
+
+  /// The visual payload retained only for Telegram's wallpaper/theme service
+  /// messages. Other service content remains text-only.
+  final MessageAppearancePreview? appearancePreview;
+
+  /// Rich identity for community membership service events.
+  final MessageCommunityPreview? communityPreview;
+
+  // Inline custom (premium) emoji spans within `text`.
+  List<CustomEmojiEntity> customEmoji;
+  List<MessageTextEntity> textEntities;
+  MessageLinkPreview? linkPreview;
+  String? translationText;
+  List<MessageTextEntity> translationEntities;
+  String? translationLanguageCode;
+  bool isTranslating;
+  List<List<MessageButton>> buttonRows;
+  List<RichMessageBlock> richBlocks;
+  bool richMessageIsFull;
+
+  bool isEdited; // shows a "已编辑" tag
+  bool isSending;
+  bool isSendAcknowledged;
+  int viewCount;
+  int forwardCount;
+  bool hasCommentThread;
+
+  /// TDLib `reply_info.reply_count`: channel comments or ordinary group
+  /// replies, depending on the containing chat.
+  int commentCount;
+  int? lastCommentMessageId;
+
+  /// Whether this instance carries an authoritative reply-info snapshot.
+  /// False means a partial/cached message omitted interaction metadata, so a
+  /// same-ID merge must not erase newer thread information already in memory.
+  bool commentThreadMetadataKnown;
+
+  /// When true, this message is from a Telegram-blocked user and the
+  /// "hide blocked user messages" feature is on.
+  bool blockedByUser;
+  List<MessageReaction> reactions = const [];
+  String? forwardOrigin; // name of the original author when forwarded
+  String? forwardAuthorSignature; // signed author within the origin channel
+  int? forwardFromUserId; // origin user, resolved lazily to forwardOrigin
+  int? forwardFromChatId; // origin chat/channel, resolved lazily
+  int? forwardFromMessageId; // original channel message when TDLib exposes it
+
+  /// Whether TDLib supplied enough forwarding metadata to render an
+  /// attribution header, even while the display name is still being resolved.
+  bool get hasForwardAttribution =>
+      (forwardOrigin?.trim().isNotEmpty ?? false) ||
+      (forwardFromUserId != null && forwardFromUserId! > 0) ||
+      (forwardFromChatId != null && forwardFromChatId != 0) ||
+      (forwardFromMessageId != null && forwardFromMessageId! > 0);
+
+  /// Stable text for the header while an asynchronous user/chat lookup is in
+  /// flight or when Telegram intentionally hides the original name.
+  String get forwardDisplayName {
+    final name = forwardOrigin?.trim();
+    final signature = forwardAuthorSignature?.trim();
+    if (name != null && name.isNotEmpty) {
+      if (signature != null && signature.isNotEmpty && signature != name) {
+        return '$name ($signature)';
+      }
+      return name;
+    }
+    if (signature != null && signature.isNotEmpty) return signature;
+    return AppStrings.t(AppStringKeys.groupManagementLogUnknownActor);
+  }
+
+  /// A plain text message (messageText) — not an audio/poll/contact placeholder.
+  bool get isPlainText => contentType == 'messageText';
+
+  /// A real photo (messagePhoto) — not a sticker / GIF / video thumbnail, all
+  /// of which also set [image].
+  bool get isPhoto => contentType == 'messagePhoto';
+
+  bool get isContentRestricted =>
+      restrictionReason != null && restrictionReason!.trim().isNotEmpty;
+
+  bool get hasRestrictedRevealContent {
+    if (!isContentRestricted) return false;
+    final originalText = restrictedContentText?.trim();
+    if (originalText != null &&
+        originalText.isNotEmpty &&
+        originalText != text.trim()) {
+      return true;
+    }
+    return image != null ||
+        document != null ||
+        music != null ||
+        animatedSticker != null ||
+        videoSticker != null ||
+        video != null ||
+        diceEmoji != null ||
+        location != null ||
+        voice != null ||
+        contact != null ||
+        poll != null ||
+        checklist != null ||
+        story != null ||
+        summaryCard != null ||
+        linkPreview != null ||
+        richBlocks.isNotEmpty;
+  }
+
+  /// Visual media that Telegram may place in the same media album.
+  ///
+  /// Stickers, GIFs and video stickers also have thumbnails in [image], but
+  /// they are not part of photo/video album merging.
+  bool get isAlbumVisualMedia =>
+      image != null &&
+      (contentType == 'messagePhoto' || contentType == 'messageVideo');
+
+  bool get hasActualReplies =>
+      commentCount > 0 || (lastCommentMessageId ?? 0) > 0;
+
+  bool get isDice =>
+      contentType == 'messageDice' && (diceEmoji ?? '').isNotEmpty;
+
+  /// Whether the "+1" (复读) quick-repeat may apply to this kind at all: only
+  /// plain text and photos. Audio, voice, location, stickers, polls, files,
+  /// videos, contacts and call logs are excluded.
+  bool get canRepeat => !isContentRestricted && (isPlainText || isPhoto);
+
+  /// Keeps the source files used by an outgoing pending message after TDLib
+  /// replaces it with the server-confirmed message and new file identifiers.
+  void inheritLocalMediaFrom(ChatMessage previous) {
+    image = image?.inheritLocalPathFrom(previous.image) ?? previous.image;
+    if ((imageWidth ?? 0) <= 0 || (imageHeight ?? 0) <= 0) {
+      imageWidth = previous.imageWidth;
+      imageHeight = previous.imageHeight;
+    }
+    if ((videoDuration ?? 0) <= 0) {
+      videoDuration = previous.videoDuration;
+    }
+    if ((videoFileSize ?? 0) <= 0) {
+      videoFileSize = previous.videoFileSize;
+    }
+    video = video?.inheritLocalPathFrom(previous.video) ?? previous.video;
+    animatedSticker =
+        animatedSticker?.inheritLocalPathFrom(previous.animatedSticker) ??
+        previous.animatedSticker;
+    videoSticker =
+        videoSticker?.inheritLocalPathFrom(previous.videoSticker) ??
+        previous.videoSticker;
+
+    final currentDocument = document;
+    final previousDocument = previous.document;
+    if (currentDocument != null && previousDocument != null) {
+      document = MessageDocument(
+        fileName: currentDocument.fileName,
+        size: currentDocument.size,
+        ext: currentDocument.ext,
+        file:
+            currentDocument.file?.inheritLocalPathFrom(previousDocument.file) ??
+            previousDocument.file,
+      );
+    }
+
+    final currentMusic = music;
+    final previousMusic = previous.music;
+    if (currentMusic != null && previousMusic != null) {
+      music = MessageMusic(
+        title: currentMusic.title,
+        performer: currentMusic.performer,
+        cover:
+            currentMusic.cover?.inheritLocalPathFrom(previousMusic.cover) ??
+            previousMusic.cover,
+        file:
+            currentMusic.file?.inheritLocalPathFrom(previousMusic.file) ??
+            previousMusic.file,
+        duration: currentMusic.duration,
+      );
+    }
+
+    final currentVoice = voice;
+    final previousVoice = previous.voice;
+    if (currentVoice != null && previousVoice != null) {
+      voice = MessageVoice(
+        file:
+            currentVoice.file?.inheritLocalPathFrom(previousVoice.file) ??
+            previousVoice.file,
+        duration: currentVoice.duration,
+        waveform: currentVoice.waveform,
+        transcription: currentVoice.transcription,
+        transcriptionPending: currentVoice.transcriptionPending,
+        transcriptionError: currentVoice.transcriptionError,
+      );
+    }
+  }
+}
+
+enum MessageButtonStyle { standard, primary, danger, success }
+
+class MessageButton {
+  const MessageButton({
+    required this.text,
+    required this.type,
+    this.url,
+    this.data,
+    this.userId,
+    this.copyText,
+    this.switchInlineQuery,
+    this.requestId,
+    this.suggestedName,
+    this.suggestedUsername,
+    this.style = MessageButtonStyle.standard,
+    this.iconCustomEmojiId = 0,
+    this.isReplyKeyboard = false,
+  });
+
+  final String text;
+  final String type;
+  final String? url;
+  final String? data;
+  final int? userId;
+  final String? copyText;
+  final String? switchInlineQuery;
+  final int? requestId;
+  final String? suggestedName;
+  final String? suggestedUsername;
+  final MessageButtonStyle style;
+  final int iconCustomEmojiId;
+  final bool isReplyKeyboard;
+
+  bool get isCallback =>
+      type == 'inlineKeyboardButtonTypeCallback' ||
+      type == 'inlineKeyboardButtonTypeCallbackWithPassword' ||
+      type == 'inlineKeyboardButtonTypeCallbackGame' ||
+      type == 'inlineKeyboardButtonTypeBuy';
+
+  bool get isWebApp =>
+      type == 'inlineKeyboardButtonTypeWebApp' ||
+      type == 'keyboardButtonTypeWebApp';
+}
+
+class MessageLinkPreview {
+  const MessageLinkPreview({
+    required this.url,
+    required this.displayUrl,
+    required this.siteName,
+    required this.title,
+    required this.description,
+    this.descriptionEntities = const [],
+    this.image,
+    this.imageWidth,
+    this.imageHeight,
+    this.video,
+    this.videoDuration,
+    this.showLargeMedia = false,
+    this.showMediaAboveDescription = false,
+    this.showAboveText = false,
+    this.type = '',
+  });
+
+  final String url;
+  final String displayUrl;
+  final String siteName;
+  final String title;
+  final String description;
+  final List<MessageTextEntity> descriptionEntities;
+  final TdFileRef? image;
+  final int? imageWidth;
+  final int? imageHeight;
+  final TdFileRef? video;
+  final int? videoDuration;
+  final bool showLargeMedia;
+  final bool showMediaAboveDescription;
+  final bool showAboveText;
+  final String type;
+
+  bool get hasText =>
+      siteName.isNotEmpty ||
+      title.isNotEmpty ||
+      description.isNotEmpty ||
+      displayUrl.isNotEmpty;
+
+  bool get hasMedia => image != null || video != null;
+}
+
+class MessageDocument {
+  MessageDocument({
+    required this.fileName,
+    required this.size,
+    required this.ext,
+    required this.file,
+  });
+  final String fileName;
+  final int size;
+  final String ext;
+  final TdFileRef? file;
+}
+
+class MessageMusic {
+  MessageMusic({
+    required this.title,
+    this.performer,
+    this.cover,
+    this.file,
+    this.duration = 0,
+  });
+  final String title;
+  final String? performer;
+  final TdFileRef? cover;
+  final TdFileRef? file;
+  final int duration;
+}
+
+class MessageLocation {
+  MessageLocation({
+    required this.latitude,
+    required this.longitude,
+    this.title,
+    this.address,
+  });
+  final double latitude;
+  final double longitude;
+  String? title;
+  String? address;
+}
+
+class MessageVoice {
+  MessageVoice({
+    required this.file,
+    required this.duration,
+    this.waveform = '',
+    this.transcription = '',
+    this.transcriptionPending = false,
+    this.transcriptionError,
+  });
+  final TdFileRef? file;
+  final int duration;
+  final String waveform;
+  final String transcription;
+  final bool transcriptionPending;
+  final String? transcriptionError;
+}
+
+class MessageContactCard {
+  const MessageContactCard({
+    required this.phoneNumber,
+    required this.firstName,
+    required this.lastName,
+    required this.vcard,
+    required this.userId,
+  });
+
+  final String phoneNumber;
+  final String firstName;
+  final String lastName;
+  final String vcard;
+  final int userId;
+
+  String get displayName {
+    final value = '$firstName $lastName'.trim();
+    return value.isEmpty ? phoneNumber : value;
+  }
+}
+
+class MessagePollOption {
+  const MessagePollOption({
+    required this.index,
+    required this.id,
+    required this.text,
+    required this.voterCount,
+    required this.votePercentage,
+    required this.isChosen,
+    required this.isBeingChosen,
+  });
+
+  final int index;
+  final String id;
+  final String text;
+  final int voterCount;
+  final int votePercentage;
+  final bool isChosen;
+  final bool isBeingChosen;
+}
+
+class MessagePoll {
+  const MessagePoll({
+    required this.id,
+    required this.question,
+    required this.description,
+    required this.options,
+    required this.totalVoterCount,
+    required this.canGetVoters,
+    required this.canSeeResults,
+    required this.isAnonymous,
+    required this.allowsMultipleAnswers,
+    required this.allowsRevoting,
+    required this.isQuiz,
+    required this.isClosed,
+    required this.canAddOption,
+    this.correctOptionId = -1,
+    this.explanation = '',
+    this.media,
+  });
+
+  final int id;
+  final String question;
+  final String description;
+  final List<MessagePollOption> options;
+  final int totalVoterCount;
+  final bool canGetVoters;
+  final bool canSeeResults;
+  final bool isAnonymous;
+  final bool allowsMultipleAnswers;
+  final bool allowsRevoting;
+  final bool isQuiz;
+  final bool isClosed;
+  final bool canAddOption;
+  final int correctOptionId;
+  final String explanation;
+  final TdFileRef? media;
+
+  List<int> get chosenOptionIndexes => [
+    for (final option in options)
+      if (option.isChosen) option.index,
+  ];
+}
+
+class MessageChecklistTask {
+  const MessageChecklistTask({
+    required this.id,
+    required this.text,
+    required this.isCompleted,
+    this.completedByUserId,
+    this.completedByChatId,
+    this.completionDate = 0,
+  });
+
+  final int id;
+  final String text;
+  final bool isCompleted;
+  final int? completedByUserId;
+  final int? completedByChatId;
+  final int completionDate;
+}
+
+class MessageChecklist {
+  const MessageChecklist({
+    required this.title,
+    required this.tasks,
+    required this.othersCanAddTasks,
+    required this.canAddTasks,
+    required this.othersCanMarkTasksAsDone,
+    required this.canMarkTasksAsDone,
+  });
+
+  final String title;
+  final List<MessageChecklistTask> tasks;
+  final bool othersCanAddTasks;
+  final bool canAddTasks;
+  final bool othersCanMarkTasksAsDone;
+  final bool canMarkTasksAsDone;
+}
+
+class MessageStoryReference {
+  const MessageStoryReference({
+    required this.posterChatId,
+    required this.storyId,
+    required this.viaMention,
+  });
+
+  final int posterChatId;
+  final int storyId;
+  final bool viaMention;
+}
+
+enum SuggestedPostPriceKind { stars, ton }
+
+class SuggestedPostPrice {
+  const SuggestedPostPrice({required this.kind, required this.amount});
+
+  final SuggestedPostPriceKind kind;
+
+  /// Telegram Stars for [SuggestedPostPriceKind.stars], or hundredths of one
+  /// TON for [SuggestedPostPriceKind.ton], matching TDLib's gram_cent_count.
+  final int amount;
+
+  Map<String, dynamic> toTdJson() => switch (kind) {
+    SuggestedPostPriceKind.stars => {
+      '@type': 'suggestedPostPriceStar',
+      'star_count': amount,
+    },
+    SuggestedPostPriceKind.ton => {
+      '@type': 'suggestedPostPriceGram',
+      'gram_cent_count': amount,
+    },
+  };
+}
+
+enum SuggestedPostState { pending, approved, declined, unknown }
+
+class MessageSuggestedPostInfo {
+  const MessageSuggestedPostInfo({
+    required this.state,
+    required this.canBeApproved,
+    required this.canBeDeclined,
+    this.price,
+    this.sendDate = 0,
+  });
+
+  final SuggestedPostPrice? price;
+  final int sendDate;
+  final SuggestedPostState state;
+  final bool canBeApproved;
+  final bool canBeDeclined;
+}
+
+enum MessageSummaryKind {
+  game,
+  invoice,
+  giveaway,
+  paidMedia,
+  gift,
+  suggestedPost,
+}
+
+class MessageSummaryCard {
+  const MessageSummaryCard({
+    required this.kind,
+    required this.title,
+    this.subtitle = '',
+    this.detail = '',
+    this.image,
+    this.video,
+  });
+
+  final MessageSummaryKind kind;
+  final String title;
+  final String subtitle;
+  final String detail;
+  final TdFileRef? image;
+  final TdFileRef? video;
+}
+
+class Contact {
+  Contact({
+    required this.id,
+    required this.name,
+    required this.username,
+    this.usernames = const [],
+    required this.statusText,
+    this.photo,
+    this.isOnline = false,
+  });
+  final int id;
+  final String name;
+  final String? username;
+  final List<String> usernames;
+  final String statusText;
+  TdFileRef? photo;
+  bool isOnline;
+}
+
+class CurrentUser {
+  CurrentUser({
+    required this.id,
+    required this.name,
+    required this.phoneNumber,
+    this.username,
+    this.photo,
+    this.emojiStatusId = 0,
+    this.isPremium = false,
+  });
+  int id;
+  String name;
+  String phoneNumber;
+  String? username;
+  TdFileRef? photo;
+  int emojiStatusId; // custom_emoji_id of the Telegram emoji status, 0 = none
+  bool isPremium; // Telegram Premium subscriber
+}
+
+// MARK: - Parsing
+
+abstract final class TDParse {
+  static bool isBotUser(Map<String, dynamic> user) {
+    final type = user.obj('type');
+    return type?.type == 'userTypeBot' ||
+        type?.type == 'userTypeRegularBot' ||
+        user.boolean('is_bot') == true;
+  }
+
+  static bool botUserHasTopics(Map<String, dynamic> user) =>
+      isBotUser(user) && (user.obj('type')?.boolean('has_topics') ?? false);
+
+  static ChatKind chatKind(Map<String, dynamic> chat) {
+    final t = chat.obj('type');
+    switch (t?.type) {
+      case 'chatTypePrivate':
+        return ChatKind.privateChat;
+      case 'chatTypeSecret':
+        return ChatKind.secret;
+      case 'chatTypeBasicGroup':
+        return ChatKind.group;
+      case 'chatTypeSupergroup':
+        return (t?.boolean('is_channel') ?? false)
+            ? ChatKind.channel
+            : ChatKind.group;
+      default:
+        return ChatKind.unknown;
+    }
+  }
+
+  static ChatSummary? chat(Map<String, dynamic> chat) {
+    final id = chat.int64('id');
+    if (id == null) return null;
+    final title = chat.str('title') ?? '—';
+    final unread = chat.integer('unread_count') ?? 0;
+
+    var lastText = '';
+    var lastMessageId = 0;
+    var date = 0;
+    ChatMessage? lastChatMessage;
+    final last = chat.obj('last_message');
+    if (last != null) {
+      lastMessageId = last.int64('id') ?? 0;
+      date = last.integer('date') ?? 0;
+      lastChatMessage = message(last);
+      final content = last.obj('content');
+      if (content != null) lastText = messageText(content);
+    }
+
+    int order = 0, archiveOrder = 0;
+    bool pinned = false;
+    final positions = chat.objects('positions');
+    if (positions != null) {
+      for (final pos in positions) {
+        switch (pos.obj('list')?.type) {
+          case 'chatListMain':
+            order = pos.int64('order') ?? 0;
+            pinned = pos.boolean('is_pinned') ?? false;
+          case 'chatListArchive':
+            archiveOrder = pos.int64('order') ?? 0;
+        }
+      }
+    }
+
+    final muted = ScopeNotificationSettings.shared.isMuted(chat);
+
+    final type = chat.obj('type');
+    return ChatSummary(
+      id: id,
+      title: title,
+      lastMessage: lastText,
+      lastMessageId: lastMessageId,
+      date: date,
+      unreadCount: unread,
+      lastReadInboxMessageId: chat.int64('last_read_inbox_message_id') ?? 0,
+      unreadMentionCount: chat.integer('unread_mention_count') ?? 0,
+      unreadReactionCount: chat.integer('unread_reaction_count') ?? 0,
+      order: order,
+      isMuted: muted,
+      kind: chatKind(chat),
+      photo: smallPhoto(chat.obj('photo')),
+      isPinned: pinned,
+      archiveOrder: archiveOrder,
+      isMarkedUnread: chat.boolean('is_marked_as_unread') ?? false,
+      draftText: draftText(chat.obj('draft_message')),
+      peerUserId: switch (type?.type) {
+        'chatTypePrivate' || 'chatTypeSecret' => type?.int64('user_id'),
+        _ => null,
+      },
+      isForum: chat.boolean('view_as_topics') ?? false,
+      lastChatMessage: lastChatMessage,
+    );
+  }
+
+  /// Text of a chat's unsent draft, or '' if none.
+  static String draftText(Map<String, dynamic>? draft) {
+    if (draft == null) return '';
+    final content = draft.obj('content');
+    if (content?.type == 'draftMessageContentText') {
+      return content?.obj('text')?.str('text') ?? '';
+    }
+    // Keep old cached fixtures readable during an in-place upgrade. Current
+    // TDLib responses always use draftMessageContentText above.
+    final legacy = draft.obj('input_message_text');
+    if (legacy?.type != 'inputMessageText') return '';
+    return legacy?.obj('text')?.str('text') ?? '';
+  }
+
+  static ChatMessage? message(Map<String, dynamic> message) {
+    final id = message.int64('id');
+    if (id == null) return null;
+    final chatId = message.int64('chat_id');
+    final outgoing = message.boolean('is_outgoing') ?? false;
+    final date = message.integer('date') ?? 0;
+    final content = message.obj('content');
+    final restrictionReason = restrictionReasonFor(message);
+    final restrictionReasonCode = restrictionReasonCodeFor(message);
+    final isContentRestricted = restrictionReason != null;
+    final rawService = isServiceContent(content?.type);
+    final service = !isContentRestricted && rawService;
+    final isCall = !isContentRestricted && content?.type == 'messageCall';
+    final callIsVideo = isCall && (content?.boolean('is_video') ?? false);
+    final callDuration = isCall ? (content?.integer('duration') ?? 0) : 0;
+    final callDiscardReason = isCall
+        ? content?.obj('discard_reason')?.type
+        : null;
+    final contentText = rawService
+        ? serviceText(content)
+        : (content != null
+              ? messageContentText(content)
+              : AppStrings.t(AppStringKeys.chatSearchMessageResultLabel));
+    final text = restrictionReason ?? contentText;
+
+    int? senderId;
+    final sender = message.obj('sender_id');
+    switch (sender?.type) {
+      case 'messageSenderUser':
+        senderId = sender?.int64('user_id');
+      case 'messageSenderChat':
+        senderId = sender?.int64('chat_id');
+    }
+
+    final media = mediaAttachment(content);
+
+    // 转发: forward_info.origin identifies the original author.
+    final forwardInfo = message.obj('forward_info');
+    final origin = forwardInfo?.obj('origin');
+    final forwardSource = forwardInfo?.obj('source');
+    String? fwdName, fwdAuthorSignature;
+    int? fwdUserId, fwdChatId, fwdMessageId;
+    switch (origin?.type) {
+      case 'messageOriginUser':
+        fwdUserId = origin?.int64('sender_user_id');
+      case 'messageOriginChat':
+        fwdChatId = origin?.int64('sender_chat_id');
+        fwdAuthorSignature = origin?.str('author_signature');
+      case 'messageOriginChannel':
+        fwdChatId = origin?.int64('chat_id');
+        fwdMessageId = origin?.int64('message_id');
+        fwdAuthorSignature = origin?.str('author_signature');
+      case 'messageOriginHiddenUser':
+        fwdName = origin?.str('sender_name');
+    }
+    // A few TDLib versions put the navigable source in forward_info.source
+    // instead of repeating it in messageOriginChannel. Keep both forms so a
+    // forwarded channel post remains actionable across cached message shapes.
+    fwdChatId ??=
+        forwardSource?.int64('chat_id') ??
+        forwardSource?.int64('sender_chat_id');
+    fwdMessageId ??= forwardSource?.int64('message_id');
+    if (fwdMessageId != null && fwdMessageId <= 0) fwdMessageId = null;
+
+    // 引用: reply_to is messageReplyToMessage { chat_id, message_id, … }.
+    final replyTo = message.obj('reply_to');
+    final replyToMessageId = replyTo?.type == 'messageReplyToMessage'
+        ? replyTo?.int64('message_id')
+        : null;
+
+    final parsedEntities = messageTextEntities(content);
+    final interactionInfo = message.obj('interaction_info');
+    final replyInfo = interactionInfo?.obj('reply_info');
+    var contentDisplayText = contentText;
+    var contentDisplayEntities = parsedEntities;
+    final contentRichBlocks = <RichMessageBlock>[...richMessageBlocks(content)];
+    if (content?.type == 'messageRichMessage' && contentRichBlocks.isNotEmpty) {
+      contentDisplayText = '';
+      contentDisplayEntities = const [];
+    }
+    if (content?.type != 'messageRichMessage') {
+      final extracted = _extractMarkdownTables(
+        contentDisplayText,
+        contentDisplayEntities,
+      );
+      contentDisplayText = extracted.text;
+      contentDisplayEntities = extracted.entities;
+      contentRichBlocks.addAll(extracted.blocks);
+    }
+    final displayText = isContentRestricted ? text : contentDisplayText;
+    final displayEntities = isContentRestricted
+        ? const <MessageTextEntity>[]
+        : contentDisplayEntities;
+    final richBlocks = contentRichBlocks;
+
+    return ChatMessage(
+        id: id,
+        isOutgoing: outgoing,
+        text: displayText,
+        date: date,
+        chatId: chatId,
+        isService: service,
+        isCall: isCall,
+        callIsVideo: callIsVideo,
+        callDiscardReason: callDiscardReason,
+        callDuration: callDuration,
+        contentType: isContentRestricted ? 'messageText' : content?.type,
+        restrictionReason: restrictionReason,
+        restrictionReasonCode: restrictionReasonCode,
+        restrictedContentText: isContentRestricted ? contentDisplayText : null,
+        restrictedContentTextEntities: isContentRestricted
+            ? contentDisplayEntities
+            : const [],
+        containsUnreadMention:
+            message.boolean('contains_unread_mention') ?? false,
+        hasUnreadReactions:
+            (message.objects('unread_reactions') ?? const []).isNotEmpty,
+        senderId: senderId,
+        senderIsChat: sender?.type == 'messageSenderChat',
+        senderTitle:
+            _cleanString(message.str('sender_tag')) ??
+            _cleanString(message.str('author_signature')),
+        mediaAlbumId: message.int64('media_album_id') ?? 0,
+        image: media.image,
+        imageWidth: media.width,
+        imageHeight: media.height,
+        document: media.document,
+        music: media.music,
+        animatedSticker: media.animated,
+        videoSticker: media.videoSticker,
+        video: media.video,
+        videoDuration: media.videoDuration,
+        videoFileSize: media.videoFileSize,
+        hasSpoiler:
+            !isContentRestricted && (content?.boolean('has_spoiler') ?? false),
+        videoNoteTranscription: videoNoteSpeech(content).$1,
+        videoNoteTranscriptionPending: videoNoteSpeech(content).$2,
+        videoNoteTranscriptionError: videoNoteSpeech(content).$3,
+        diceEmoji: content?.type == 'messageDice'
+            ? content?.str('emoji')
+            : null,
+        diceValue: content?.type == 'messageDice'
+            ? content?.integer('value')
+            : null,
+        stickerFileId: media.stickerFileId,
+        stickerSetId: media.stickerSetId,
+        isAnimatedEmoji: media.isAnimatedEmoji,
+        location: locationAttachment(content),
+        voice: voiceAttachment(content),
+        contact: contactAttachment(content),
+        poll: pollAttachment(content),
+        checklist: checklistAttachment(content),
+        story: storyAttachment(content),
+        suggestedPostInfo: suggestedPostInfo(
+          message.obj('suggested_post_info'),
+        ),
+        summaryCard: summaryCard(message, content),
+        summaryLanguageCode: message.str('summary_language_code') ?? '',
+        replyToMessageId: isContentRestricted ? null : replyToMessageId,
+        replyToQuote: isContentRestricted
+            ? null
+            : textQuote(replyTo?.obj('quote')),
+        textQuoteSource: isContentRestricted
+            ? null
+            : formattedTextForContent(content)?.str('text'),
+        textQuoteSourceEntities: isContentRestricted ? null : parsedEntities,
+        serviceUserIds: isContentRestricted
+            ? const []
+            : serviceUserIds(content, senderId),
+        appearancePreview: isContentRestricted
+            ? null
+            : MessageAppearancePreview.fromContent(content),
+        communityPreview: isContentRestricted
+            ? null
+            : MessageCommunityPreview.fromContent(content),
+        customEmoji: isContentRestricted
+            ? const []
+            : customEmojiEntitiesFrom(parsedEntities),
+        textEntities: displayEntities,
+        linkPreview: linkPreview(content?.obj('link_preview')),
+        buttonRows: isContentRestricted
+            ? const []
+            : messageButtonRows(message.obj('reply_markup')),
+        richBlocks: richBlocks,
+        richMessageIsFull:
+            isContentRestricted ||
+            content?.type != 'messageRichMessage' ||
+            (content?.obj('message')?.boolean('is_full') ?? false),
+        isEdited: (message.integer('edit_date') ?? 0) > 0,
+        isSending: message.obj('sending_state') != null,
+        viewCount: interactionInfo?.integer('view_count') ?? 0,
+        forwardCount: interactionInfo?.integer('forward_count') ?? 0,
+        hasCommentThread: !isContentRestricted && replyInfo != null,
+        commentCount: isContentRestricted
+            ? 0
+            : (replyInfo?.integer('reply_count') ??
+                  replyInfo?.integer('comment_count') ??
+                  0),
+        lastCommentMessageId: isContentRestricted
+            ? null
+            : replyInfo?.int64('last_message_id'),
+        commentThreadMetadataKnown: interactionInfo != null,
+      )
+      ..reactions = reactionsFrom(message)
+      ..forwardOrigin = isContentRestricted ? null : fwdName
+      ..forwardAuthorSignature = isContentRestricted ? null : fwdAuthorSignature
+      ..forwardFromUserId = isContentRestricted ? null : fwdUserId
+      ..forwardFromChatId = isContentRestricted ? null : fwdChatId
+      ..forwardFromMessageId = isContentRestricted ? null : fwdMessageId;
+  }
+
+  /// Returns the server-provided reason that makes a chat or message
+  /// unavailable on this client platform.
+  static String? restrictionReasonFor(Map<String, dynamic>? object) =>
+      _cleanString(
+        object?.obj('restriction_info')?.str('restriction_reason'),
+      ) ??
+      _cleanString(object?.obj('restriction_info')?.str('text'));
+
+  /// Returns the machine-readable restriction reason such as `porno` or
+  /// `terms` when TDLib includes it.
+  static String? restrictionReasonCodeFor(Map<String, dynamic>? object) {
+    final restrictionInfo = object?.obj('restriction_info');
+    return _cleanString(
+      restrictionInfo?.str('reason') ??
+          restrictionInfo?.str('restriction_reason_code'),
+    )?.toLowerCase();
+  }
+
+  static bool hasSensitiveRestriction(Map<String, dynamic>? object) =>
+      object?.obj('restriction_info')?.boolean('has_sensitive_content') ??
+      false;
+
+  static bool isBlockingRestriction(Map<String, dynamic>? object) =>
+      restrictionReasonFor(object) != null;
+
+  static bool isPornographicRestriction(Map<String, dynamic>? object) {
+    final code = restrictionReasonCodeFor(object);
+    final text = restrictionReasonFor(object);
+    return isPornographicRestrictionText(code) ||
+        isPornographicRestrictionText(text);
+  }
+
+  static bool isTermsRestriction(Map<String, dynamic>? object) {
+    final code = restrictionReasonCodeFor(object);
+    final text = restrictionReasonFor(object);
+    if (hasSensitiveRestriction(object) ||
+        isPornographicRestrictionText(code) ||
+        isPornographicRestrictionText(text)) {
+      return false;
+    }
+    return code == 'terms' || isTelegramTermsRestrictionText(text);
+  }
+
+  static bool isPornographicRestrictionText(String? value) {
+    final normalized = _normalizedRestrictionText(value);
+    return normalized.contains('porn') ||
+        normalized.contains('pornographic material');
+  }
+
+  static bool isTelegramTermsRestrictionText(String? value) {
+    final normalized = _normalizedRestrictionText(value);
+    final cannotDisplay =
+        normalized.contains("can't be displayed") ||
+        normalized.contains("couldn't be displayed") ||
+        normalized.contains('cannot be displayed') ||
+        normalized.contains('could not be displayed');
+    final telegramTerms =
+        normalized.contains('terms of service') ||
+        normalized.contains('violated telegram');
+    return cannotDisplay && telegramTerms;
+  }
+
+  static String _normalizedRestrictionText(String? value) =>
+      (value ?? '').toLowerCase().replaceAll('’', "'");
+
+  static String? _cleanString(String? value) {
+    final text = value?.trim();
+    return text == null || text.isEmpty ? null : text;
+  }
+
+  static MessageLinkPreview? linkPreview(Map<String, dynamic>? preview) {
+    if (preview == null) return null;
+    final type = preview.obj('type');
+    final media = linkPreviewMedia(type);
+    final description = preview.obj('description');
+    final link = MessageLinkPreview(
+      url: preview.str('url') ?? '',
+      displayUrl: preview.str('display_url') ?? '',
+      siteName: preview.str('site_name') ?? '',
+      title: preview.str('title') ?? '',
+      description: description?.str('text') ?? '',
+      descriptionEntities: textEntities(description),
+      image: media.image,
+      imageWidth: media.width,
+      imageHeight: media.height,
+      video: media.video,
+      videoDuration: media.videoDuration,
+      showLargeMedia: preview.boolean('show_large_media') ?? false,
+      showMediaAboveDescription:
+          preview.boolean('show_media_above_description') ?? false,
+      showAboveText: preview.boolean('show_above_text') ?? false,
+      type: type?.type ?? '',
+    );
+    return link.hasText || link.hasMedia ? link : null;
+  }
+
+  static MediaAttachment linkPreviewMedia(Map<String, dynamic>? type) {
+    if (type == null) return const MediaAttachment();
+    switch (type.type) {
+      case 'linkPreviewTypeArticle':
+      case 'linkPreviewTypePhoto':
+      case 'linkPreviewTypeBackground':
+      case 'linkPreviewTypeTheme':
+        return photoAttachment(type.obj('photo'));
+      case 'linkPreviewTypeVideo':
+      case 'linkPreviewTypeEmbeddedVideoPlayer':
+      case 'linkPreviewTypeExternalVideo':
+        return videoAttachment(type.obj('video'), type);
+      case 'linkPreviewTypeAnimation':
+      case 'linkPreviewTypeEmbeddedAnimationPlayer':
+        return animationAttachment(type.obj('animation'), type);
+      case 'linkPreviewTypeAlbum':
+        final media = type['media'];
+        if (media is List) {
+          for (final item in media.whereType<Map<String, dynamic>>()) {
+            final attachment = switch (item.type) {
+              'linkPreviewAlbumMediaPhoto' => photoAttachment(
+                item.obj('photo'),
+              ),
+              'linkPreviewAlbumMediaVideo' => videoAttachment(
+                item.obj('video'),
+                item,
+              ),
+              _ => const MediaAttachment(),
+            };
+            if (attachment.image != null || attachment.video != null) {
+              return attachment;
+            }
+          }
+        }
+      case 'linkPreviewTypeDocument':
+        final document = type.obj('document');
+        return MediaAttachment(
+          image: fileRef(document?.obj('thumbnail')?.obj('file')),
+        );
+      case 'linkPreviewTypeAudio':
+      case 'linkPreviewTypeEmbeddedAudioPlayer':
+      case 'linkPreviewTypeExternalAudio':
+        final audio = type.obj('audio');
+        return MediaAttachment(
+          image: fileRef(audio?.obj('album_cover_thumbnail')?.obj('file')),
+        );
+    }
+    return const MediaAttachment();
+  }
+
+  static MediaAttachment photoAttachment(Map<String, dynamic>? photo) {
+    if (photo == null) return const MediaAttachment();
+    final mini = decodeMiniThumb(photo.obj('minithumbnail'));
+    final sizes = photo.objects('sizes');
+    if (sizes == null || sizes.isEmpty) return const MediaAttachment();
+    final best = bestPhotoSize(sizes);
+    final thumbnail = photoThumbnailSize(sizes, best);
+    return MediaAttachment(
+      image: fileRef(
+        best.obj('photo'),
+        miniThumb: mini,
+        thumbnail: fileRef(thumbnail?.obj('photo'), miniThumb: mini),
+      ),
+      width: best.integer('width'),
+      height: best.integer('height'),
+    );
+  }
+
+  static MediaAttachment videoAttachment(
+    Map<String, dynamic>? video, [
+    Map<String, dynamic>? fallback,
+  ]) {
+    if (video == null) {
+      return MediaAttachment(
+        width: fallback?.integer('width'),
+        height: fallback?.integer('height'),
+        videoDuration: fallback?.integer('duration'),
+      );
+    }
+    final mini = decodeMiniThumb(video.obj('minithumbnail'));
+    return MediaAttachment(
+      image: fileRef(video.obj('thumbnail')?.obj('file'), miniThumb: mini),
+      video: fileRef(
+        video.obj('video'),
+        fileName: video.str('file_name'),
+        mimeType: video.str('mime_type'),
+      ),
+      videoDuration: video.integer('duration') ?? fallback?.integer('duration'),
+      width: video.integer('width') ?? fallback?.integer('width'),
+      height: video.integer('height') ?? fallback?.integer('height'),
+    );
+  }
+
+  static MediaAttachment animationAttachment(
+    Map<String, dynamic>? animation, [
+    Map<String, dynamic>? fallback,
+  ]) {
+    if (animation == null) {
+      return MediaAttachment(
+        width: fallback?.integer('width'),
+        height: fallback?.integer('height'),
+        videoDuration: fallback?.integer('duration'),
+      );
+    }
+    final mini = decodeMiniThumb(animation.obj('minithumbnail'));
+    final thumb =
+        fileRef(animation.obj('thumbnail')?.obj('file'), miniThumb: mini) ??
+        fileRef(animation.obj('animation'), miniThumb: mini);
+    return MediaAttachment(
+      image: thumb,
+      video: fileRef(animation.obj('animation'), miniThumb: mini),
+      videoDuration:
+          animation.integer('duration') ?? fallback?.integer('duration'),
+      width: animation.integer('width') ?? fallback?.integer('width'),
+      height: animation.integer('height') ?? fallback?.integer('height'),
+    );
+  }
+
+  /// Parses message.interaction_info.reactions into reaction buckets.
+  static List<MessageReaction> reactionsFrom(Map<String, dynamic> message) {
+    final list = message
+        .obj('interaction_info')
+        ?.obj('reactions')
+        ?.objects('reactions');
+    if (list == null) return const [];
+    return list.map((r) {
+      final type = r.obj('type');
+      return MessageReaction(
+        emoji: type?.type == 'reactionTypeEmoji' ? type?.str('emoji') : null,
+        customEmojiId: type?.type == 'reactionTypeCustomEmoji'
+            ? (type?.int64('custom_emoji_id') ?? 0)
+            : 0,
+        count: r.integer('total_count') ?? 0,
+        chosen: r.boolean('is_chosen') ?? false,
+      );
+    }).toList();
+  }
+
+  static List<List<MessageButton>> messageButtonRows(
+    Map<String, dynamic>? replyMarkup,
+  ) {
+    if (replyMarkup == null) return const [];
+    final type = replyMarkup.type;
+    if (type != 'replyMarkupInlineKeyboard' &&
+        type != 'replyMarkupShowKeyboard') {
+      return const [];
+    }
+    final rows = replyMarkup['rows'];
+    if (rows is! List) return const [];
+    final out = <List<MessageButton>>[];
+    for (final row in rows) {
+      if (row is! List) continue;
+      final buttons = row
+          .whereType<Map<String, dynamic>>()
+          .map(
+            (button) => _messageButton(
+              button,
+              isReplyKeyboard: type == 'replyMarkupShowKeyboard',
+            ),
+          )
+          .whereType<MessageButton>()
+          .toList();
+      if (buttons.isNotEmpty) out.add(buttons);
+    }
+    return out;
+  }
+
+  static MessageButton? _messageButton(
+    Map<String, dynamic> button, {
+    required bool isReplyKeyboard,
+  }) {
+    final text = (button.str('text') ?? '').trim();
+    if (text.isEmpty) return null;
+    final type = button.obj('type');
+    final typeName = type?.type ?? '';
+    final loginUrl = type?.obj('url');
+    final webApp = type?.obj('web_app');
+    final copyText = type?.obj('copy_text')?.str('text');
+    return MessageButton(
+      text: text,
+      type: typeName,
+      url: type?.str('url') ?? loginUrl?.str('url') ?? webApp?.str('url'),
+      data: type?.str('data'),
+      userId: type?.int64('user_id'),
+      copyText: type?.str('text') ?? copyText,
+      switchInlineQuery: type?.str('query'),
+      requestId: type?.integer('id'),
+      suggestedName: type?.str('suggested_name'),
+      suggestedUsername: type?.str('suggested_username'),
+      style: _richButtonStyle(button['style']),
+      iconCustomEmojiId: button.int64('icon_custom_emoji_id') ?? 0,
+      isReplyKeyboard: isReplyKeyboard,
+    );
+  }
+
+  /// Extracts textEntityTypeCustomEmoji spans from a formattedText object.
+  static List<CustomEmojiEntity> customEmojiEntities(Map<String, dynamic>? ft) {
+    return customEmojiEntitiesFrom(textEntities(ft));
+  }
+
+  static List<CustomEmojiEntity> customEmojiEntitiesFrom(
+    List<MessageTextEntity> entities,
+  ) {
+    return entities
+        .where((e) => e.customEmojiId != null)
+        .map((e) => CustomEmojiEntity(e.offset, e.length, e.customEmojiId!))
+        .toList();
+  }
+
+  static List<CustomEmojiEntity> customEmojiEntitiesForContent(
+    Map<String, dynamic>? content,
+  ) {
+    return customEmojiEntitiesFrom(messageTextEntities(content));
+  }
+
+  static Map<String, dynamic>? formattedTextForContent(
+    Map<String, dynamic>? content,
+  ) {
+    if (content == null) return null;
+    if (content.type == 'messageText') return content.obj('text');
+
+    // TDLib uses the same formattedText `caption` field for every captionable
+    // attachment. Read it structurally instead of maintaining a media-type
+    // allowlist, so a newly introduced attachment type cannot regress into
+    // rendering its preview label as a caption.
+    return content.obj('caption');
+  }
+
+  static List<MessageTextEntity> messageTextEntities(
+    Map<String, dynamic>? content,
+  ) {
+    if (content == null) return const [];
+    if (content.type == 'messageRichMessage') {
+      return _richMessageText(content.obj('message'))?.entities ?? const [];
+    }
+    return textEntities(formattedTextForContent(content));
+  }
+
+  static MessageTextQuote? textQuote(Map<String, dynamic>? quote) {
+    final formatted = quote?.obj('text');
+    final text = formatted?.str('text');
+    if (text == null || text.isEmpty) return null;
+    return MessageTextQuote(
+      text: text,
+      position: quote?.integer('position') ?? 0,
+      entities: textEntities(formatted),
+      isManual: quote?.boolean('is_manual') ?? true,
+    );
+  }
+
+  static List<MessageTextEntity> textEntities(Map<String, dynamic>? ft) {
+    final raw = ft?.objects('entities');
+    if (raw == null) return const [];
+    final out = <MessageTextEntity>[];
+    for (final e in raw) {
+      final type = e.obj('type');
+      final typeName = type?.type;
+      final offset = e.integer('offset');
+      final length = e.integer('length');
+      if (typeName == null || offset == null || length == null || length <= 0) {
+        continue;
+      }
+      out.add(
+        MessageTextEntity(
+          offset: offset,
+          length: length,
+          type: typeName,
+          url: type?.str('url'),
+          userId: type?.int64('user_id'),
+          customEmojiId: type?.int64('custom_emoji_id'),
+          language: type?.str('language'),
+          typeData: Map<String, dynamic>.of(type ?? const {}),
+        ),
+      );
+    }
+    return out;
+  }
+
+  static String richTextText(Map<String, dynamic>? value) {
+    return _richText(value).text;
+  }
+
+  static List<MessageTextEntity> richTextEntities(Map<String, dynamic>? value) {
+    return _richText(value).entities;
+  }
+
+  static List<RichMessageBlock> richMessageBlocks(
+    Map<String, dynamic>? content,
+  ) {
+    if (content?.type != 'messageRichMessage') return const [];
+    final blocks = content?.obj('message')?.objects('blocks');
+    if (blocks == null || blocks.isEmpty) return const [];
+    final out = <RichMessageBlock>[];
+    for (final block in blocks) {
+      _appendRichBlocks(out, block);
+    }
+    return out;
+  }
+
+  static void _appendRichBlocks(
+    List<RichMessageBlock> out,
+    Map<String, dynamic> block,
+  ) {
+    final parsed = _parseRichBlock(block);
+    if (parsed != null) out.add(parsed);
+  }
+
+  static String? _richBlockType(Map<String, dynamic> block) {
+    final tdType = block.type;
+    if (tdType != null && tdType.isNotEmpty) return tdType;
+    final rawType = block['type'];
+    if (rawType is! String) return null;
+    return switch (rawType) {
+      'paragraph' => 'pageBlockParagraph',
+      'heading' || 'section_heading' => 'pageBlockSectionHeading',
+      'pre' || 'preformatted' => 'pageBlockPreformatted',
+      'footer' => 'pageBlockFooter',
+      'thinking' => 'pageBlockThinking',
+      'divider' => 'pageBlockDivider',
+      'anchor' => 'pageBlockAnchor',
+      'button_row' => 'pageBlockButtonRow',
+      'list' => 'pageBlockList',
+      'blockquote' || 'block_quote' => 'pageBlockBlockQuote',
+      'pullquote' || 'pull_quote' => 'pageBlockPullQuote',
+      'table' => 'pageBlockTable',
+      'mathematical_expression' => 'pageBlockMathematicalExpression',
+      'photo' => 'pageBlockPhoto',
+      'video' => 'pageBlockVideo',
+      'animation' => 'pageBlockAnimation',
+      'audio' => 'pageBlockAudio',
+      'voice_note' => 'pageBlockVoiceNote',
+      'map' => 'pageBlockMap',
+      'collage' => 'pageBlockCollage',
+      'slideshow' => 'pageBlockSlideshow',
+      'details' => 'pageBlockDetails',
+      'cover' => 'pageBlockCover',
+      _ => rawType,
+    };
+  }
+
+  static MessageButton? _richMessageButton(Map<String, dynamic> source) {
+    final nested = source.obj('button');
+    final button = nested ?? source;
+    final label = _richText(button['text']).text.trim();
+    if (label.isEmpty) return null;
+
+    final rawAction = button['type'];
+    final action = rawAction is Map<String, dynamic>
+        ? rawAction
+        : const <String, dynamic>{};
+    final webApp = button.obj('web_app') ?? action.obj('web_app');
+    final copyText = button.obj('copy_text') ?? action.obj('copy_text');
+    final actionType =
+        action.type ??
+        switch (button) {
+          {'url': final Object? url} when '$url'.isNotEmpty =>
+            'inlineKeyboardButtonTypeUrl',
+          {'web_app': final Object? webApp} when webApp != null =>
+            'inlineKeyboardButtonTypeWebApp',
+          {'callback_data': final Object? data} when data != null =>
+            'inlineKeyboardButtonTypeCallback',
+          {'copy_text': final Object? copy} when copy != null =>
+            'inlineKeyboardButtonTypeCopyText',
+          {'switch_inline_query_current_chat': final Object? query}
+              when query != null =>
+            'inlineKeyboardButtonTypeSwitchInline',
+          {'switch_inline_query': final Object? query} when query != null =>
+            'inlineKeyboardButtonTypeSwitchInline',
+          _ => '',
+        };
+    return MessageButton(
+      text: label,
+      type: actionType,
+      url: action.str('url') ?? button.str('url') ?? webApp?.str('url'),
+      data: action.str('data') ?? button.str('callback_data'),
+      userId: action.int64('user_id'),
+      copyText:
+          action.str('text') ??
+          copyText?.str('text') ??
+          button.str('copy_text'),
+      switchInlineQuery:
+          action.str('query') ??
+          button.str('switch_inline_query_current_chat') ??
+          button.str('switch_inline_query'),
+      style: _richButtonStyle(button['style']),
+      iconCustomEmojiId: button.int64('icon_custom_emoji_id') ?? 0,
+    );
+  }
+
+  static MessageButtonStyle _richButtonStyle(Object? value) {
+    final type = value is Map<String, dynamic> ? value.type : value;
+    return switch (type) {
+      'buttonStylePrimary' || 'primary' => MessageButtonStyle.primary,
+      'buttonStyleDanger' || 'danger' => MessageButtonStyle.danger,
+      'buttonStyleSuccess' || 'success' => MessageButtonStyle.success,
+      _ => MessageButtonStyle.standard,
+    };
+  }
+
+  static String _richHorizontalAlignment(Object? value) {
+    final type = value is Map<String, dynamic> ? value.type : value;
+    if (type == 'center' || '$type'.toLowerCase().contains('center')) {
+      return 'center';
+    }
+    if (type == 'right' || '$type'.toLowerCase().contains('right')) {
+      return 'right';
+    }
+    return 'left';
+  }
+
+  static RichMessageBlock? _parseRichBlock(Map<String, dynamic> block) {
+    switch (_richBlockType(block)) {
+      case 'pageBlockParagraph':
+      case 'RichBlockParagraph':
+        final text = _richBlockText(block['text']);
+        return RichMessageBlock.text(
+          kind: RichMessageBlockKind.paragraph,
+          text: text.text,
+          entities: text.entities,
+        );
+      case 'pageBlockSectionHeading':
+      case 'RichBlockSectionHeading':
+        final text = _richBlockText(block['text']);
+        return RichMessageBlock.text(
+          kind: RichMessageBlockKind.heading,
+          text: text.text,
+          entities: text.entities,
+          size: (block.integer('size') ?? 1).clamp(1, 6),
+        );
+      case 'pageBlockPreformatted':
+      case 'RichBlockPreformatted':
+        final text = _richBlockText(block['text']);
+        return RichMessageBlock.text(
+          kind: RichMessageBlockKind.preformatted,
+          text: text.text,
+          entities: text.entities,
+          language: block.str('language') ?? '',
+        );
+      case 'pageBlockFooter':
+      case 'RichBlockFooter':
+        final text = _richBlockText(block['footer'] ?? block['text']);
+        return RichMessageBlock.text(
+          kind: RichMessageBlockKind.footer,
+          text: text.text,
+          entities: text.entities,
+        );
+      case 'pageBlockThinking':
+      case 'RichBlockThinking':
+        final text = _richBlockText(block['text']);
+        return RichMessageBlock.text(
+          kind: RichMessageBlockKind.thinking,
+          text: text.text,
+          entities: text.entities,
+        );
+      case 'pageBlockDivider':
+      case 'RichBlockDivider':
+        return const RichMessageBlock.container(
+          kind: RichMessageBlockKind.divider,
+        );
+      case 'pageBlockAnchor':
+      case 'RichBlockAnchor':
+        return RichMessageBlock.container(
+          kind: RichMessageBlockKind.anchor,
+          name: block.str('name') ?? '',
+        );
+      case 'pageBlockButtonRow':
+      case 'RichBlockButtonRow':
+        final buttons = (block.objects('buttons') ?? const [])
+            .map(_richMessageButton)
+            .whereType<MessageButton>()
+            .toList(growable: false);
+        if (buttons.isEmpty) return null;
+        return RichMessageBlock.buttonRow(
+          buttons,
+          horizontalAlignment: _richHorizontalAlignment(block['align']),
+        );
+      case 'pageBlockList':
+      case 'RichBlockList':
+        final items = <RichMessageListItem>[];
+        for (final item
+            in block.objects('items') ?? const <Map<String, dynamic>>[]) {
+          items.add(
+            RichMessageListItem(
+              blocks: _parseRichChildren(item.objects('blocks')),
+              label: item.str('label') ?? '',
+              hasCheckbox: item.boolean('has_checkbox') ?? false,
+              isChecked: item.boolean('is_checked') ?? false,
+              value: item.integer('value') ?? 0,
+              numberingType: item.str('type') ?? '',
+            ),
+          );
+        }
+        return RichMessageBlock.container(
+          kind: RichMessageBlockKind.list,
+          listItems: items,
+        );
+      case 'pageBlockBlockQuote':
+      case 'RichBlockBlockQuotation':
+        final credit = _richBlockText(block['credit']);
+        return RichMessageBlock.container(
+          kind: RichMessageBlockKind.blockQuote,
+          children: _parseRichChildren(block.objects('blocks')),
+          caption: credit.text,
+          captionEntities: credit.entities,
+        );
+      case 'pageBlockPullQuote':
+      case 'RichBlockPullQuotation':
+        final text = _richBlockText(block['text']);
+        final credit = _richBlockText(block['credit']);
+        return RichMessageBlock.container(
+          kind: RichMessageBlockKind.pullQuote,
+          text: text.text,
+          textEntities: text.entities,
+          caption: credit.text,
+          captionEntities: credit.entities,
+        );
+      case 'pageBlockTable':
+      case 'RichBlockTable':
+        final rows = _richTableRows(block['cells'] ?? block['rows']);
+        if (rows.isEmpty) return null;
+        final caption = _richBlockCaption(block['caption']);
+        return RichMessageBlock.captionedTable(
+          tableRows: rows,
+          caption: caption.text,
+          captionEntities: caption.entities,
+          isBordered:
+              block.boolean('is_bordered') ??
+              block.boolean('isBordered') ??
+              block.boolean('bordered') ??
+              false,
+          isStriped:
+              block.boolean('is_striped') ??
+              block.boolean('isStriped') ??
+              block.boolean('striped') ??
+              false,
+        );
+      case 'pageBlockMathematicalExpression':
+      case 'RichBlockMathematicalExpression':
+        final expression =
+            block.str('expression') ??
+            block.str('formula') ??
+            block.str('source') ??
+            '';
+        return expression.trim().isEmpty
+            ? null
+            : RichMessageBlock.math(expression);
+      case 'pageBlockPhoto':
+      case 'RichBlockPhoto':
+        return _richMediaBlock(block, RichMessageBlockKind.photo, {
+          '@type': 'messagePhoto',
+          'photo': block['photo'],
+        });
+      case 'pageBlockVideo':
+      case 'RichBlockVideo':
+        return _richMediaBlock(block, RichMessageBlockKind.video, {
+          '@type': 'messageVideo',
+          'video': block['video'],
+        });
+      case 'pageBlockAnimation':
+      case 'RichBlockAnimation':
+        return _richMediaBlock(block, RichMessageBlockKind.animation, {
+          '@type': 'messageAnimation',
+          'animation': block['animation'],
+        });
+      case 'pageBlockAudio':
+      case 'RichBlockAudio':
+        return _richMediaBlock(block, RichMessageBlockKind.audio, {
+          '@type': 'messageAudio',
+          'audio': block['audio'],
+        });
+      case 'pageBlockVoiceNote':
+      case 'RichBlockVoiceNote':
+        final caption = _richBlockCaption(block['caption']);
+        final voice = voiceAttachment({
+          '@type': 'messageVoiceNote',
+          'voice_note': block['voice_note'] ?? block['voice'],
+        });
+        return RichMessageBlock.media(
+          kind: RichMessageBlockKind.voiceNote,
+          voice: voice,
+          caption: caption.text,
+          captionEntities: caption.entities,
+        );
+      case 'pageBlockMap':
+      case 'richBlockMap':
+      case 'RichBlockMap':
+      case 'map':
+        final location = block.obj('location');
+        final latitude =
+            location?.dbl('latitude') ??
+            location?.dbl('lat') ??
+            block.dbl('latitude') ??
+            block.dbl('lat');
+        final longitude =
+            location?.dbl('longitude') ??
+            location?.dbl('long') ??
+            location?.dbl('lon') ??
+            block.dbl('longitude') ??
+            block.dbl('long') ??
+            block.dbl('lon');
+        if (latitude == null || longitude == null) return null;
+        final caption = _richBlockCaption(block['caption']);
+        return RichMessageBlock.map(
+          mapLocation: MessageLocation(
+            latitude: latitude,
+            longitude: longitude,
+            title: caption.text.isEmpty ? null : caption.text,
+          ),
+          mapZoom: (block.integer('zoom') ?? 16).clamp(0, 24),
+          mapWidth: (block.integer('width') ?? 220).clamp(1, 10000),
+          mapHeight: (block.integer('height') ?? 120).clamp(1, 10000),
+          caption: caption.text,
+          captionEntities: caption.entities,
+        );
+      case 'pageBlockCollage':
+      case 'RichBlockCollage':
+        final caption = _richBlockCaption(block['caption']);
+        return RichMessageBlock.container(
+          kind: RichMessageBlockKind.collage,
+          children: _parseRichChildren(block.objects('blocks')),
+          caption: caption.text,
+          captionEntities: caption.entities,
+        );
+      case 'pageBlockSlideshow':
+      case 'RichBlockSlideshow':
+        final caption = _richBlockCaption(block['caption']);
+        return RichMessageBlock.container(
+          kind: RichMessageBlockKind.slideshow,
+          children: _parseRichChildren(block.objects('blocks')),
+          caption: caption.text,
+          captionEntities: caption.entities,
+        );
+      case 'pageBlockDetails':
+      case 'RichBlockDetails':
+        final header = _richBlockText(block['header'] ?? block['summary']);
+        return RichMessageBlock.container(
+          kind: RichMessageBlockKind.details,
+          text: header.text,
+          textEntities: header.entities,
+          children: _parseRichChildren(block.objects('blocks')),
+          isOpen: block.boolean('is_open') ?? block.boolean('isOpen') ?? false,
+        );
+      case 'pageBlockCover':
+      case 'RichBlockCover':
+        final cover = block.obj('cover');
+        return cover == null ? null : _parseRichBlock(cover);
+    }
+    return null;
+  }
+
+  static List<RichMessageBlock> _parseRichChildren(
+    List<Map<String, dynamic>>? blocks,
+  ) {
+    if (blocks == null) return const [];
+    return blocks.map(_parseRichBlock).whereType<RichMessageBlock>().toList();
+  }
+
+  static _ParsedMarkdownText _richBlockText(Object? value) {
+    if (value == null) return const _ParsedMarkdownText('', []);
+    return _richText(value);
+  }
+
+  static RichMessageBlock _richMediaBlock(
+    Map<String, dynamic> block,
+    RichMessageBlockKind kind,
+    Map<String, dynamic> content,
+  ) {
+    final media = mediaAttachment(content);
+    final caption = _richBlockCaption(block['caption']);
+    return RichMessageBlock.media(
+      kind: kind,
+      image: media.image,
+      imageWidth: media.width,
+      imageHeight: media.height,
+      video: media.video,
+      videoDuration: media.videoDuration ?? 0,
+      music: media.music,
+      hasSpoiler: block.boolean('has_spoiler') ?? false,
+      caption: caption.text,
+      captionEntities: caption.entities,
+    );
+  }
+
+  static _ParsedMarkdownText _richBlockCaption(Object? caption) {
+    if (caption == null) return const _ParsedMarkdownText('', []);
+    if (caption is! Map<String, dynamic>) return _richText(caption);
+    final builder = _RichTextBuilder();
+    _appendRichText(builder, caption.obj('text') ?? caption);
+    _appendCredit(builder, caption.obj('credit'));
+    final text = builder.buffer.toString();
+    if (text.trim().isEmpty) return const _ParsedMarkdownText('', []);
+    return _ParsedMarkdownText(text, builder.entities);
+  }
+
+  static List<List<RichMessageTableCell>> _richTableRows(Object? rows) {
+    if (rows is! List) return const [];
+    final out = <List<RichMessageTableCell>>[];
+    for (final rawRow in rows) {
+      final rawCells = rawRow is Map<String, dynamic>
+          ? (rawRow['cells'] as Object?)
+          : rawRow;
+      if (rawCells is! List) continue;
+      final row = <RichMessageTableCell>[];
+      for (final rawCell in rawCells) {
+        if (rawCell is! Map<String, dynamic>) continue;
+        final parsed = _richText(rawCell['text'] ?? rawCell['content']);
+        row.add(
+          RichMessageTableCell(
+            text: parsed.text,
+            entities: parsed.entities,
+            isHeader:
+                rawCell.boolean('is_header') ??
+                rawCell.boolean('isHeader') ??
+                false,
+            horizontalAlignment: _richTableHorizontalAlignment(rawCell),
+            verticalAlignment: _richTableVerticalAlignment(rawCell),
+          ),
+        );
+      }
+      if (row.isNotEmpty) out.add(row);
+    }
+    return out;
+  }
+
+  static String _richTableHorizontalAlignment(Map<String, dynamic> cell) {
+    final raw = cell['align'];
+    if (raw is String && const {'left', 'center', 'right'}.contains(raw)) {
+      return raw;
+    }
+    final type = raw is Map<String, dynamic> ? (raw.type ?? '') : '';
+    if (type.toLowerCase().contains('center')) return 'center';
+    if (type.toLowerCase().contains('right')) return 'right';
+    return 'left';
+  }
+
+  static String _richTableVerticalAlignment(Map<String, dynamic> cell) {
+    final raw = cell['valign'];
+    if (raw is String && const {'top', 'middle', 'bottom'}.contains(raw)) {
+      return raw;
+    }
+    final type = raw is Map<String, dynamic> ? (raw.type ?? '') : '';
+    if (type.toLowerCase().contains('middle')) return 'middle';
+    if (type.toLowerCase().contains('bottom')) return 'bottom';
+    return 'top';
+  }
+
+  static ({
+    String text,
+    List<MessageTextEntity> entities,
+    List<RichMessageBlock> blocks,
+  })
+  _extractMarkdownTables(String text, List<MessageTextEntity> entities) {
+    final lines = text.split('\n');
+    final starts = <int>[];
+    var offset = 0;
+    for (final line in lines) {
+      starts.add(offset);
+      offset += line.length + 1;
+    }
+    final removals = <({int start, int end})>[];
+    final blocks = <RichMessageBlock>[];
+    var i = 0;
+    while (i < lines.length - 1) {
+      if (!_looksLikeMarkdownTableRow(lines[i]) ||
+          !_looksLikeMarkdownSeparatorRow(lines[i + 1])) {
+        i++;
+        continue;
+      }
+      final rows = <List<RichMessageTableCell>>[
+        _markdownTableCells(lines[i], isHeader: true),
+      ];
+      var endLine = i + 2;
+      while (endLine < lines.length &&
+          _looksLikeMarkdownTableRow(lines[endLine])) {
+        rows.add(_markdownTableCells(lines[endLine]));
+        endLine++;
+      }
+      if (rows.length > 1) {
+        blocks.add(RichMessageBlock.table(rows));
+        if (endLine < lines.length && lines[endLine].trim().isEmpty) {
+          endLine++;
+        }
+        final start = starts[i];
+        final end = endLine >= lines.length ? text.length : starts[endLine];
+        removals.add((start: start, end: end));
+        i = endLine;
+      } else {
+        i++;
+      }
+    }
+    if (removals.isEmpty) {
+      return (text: text, entities: entities, blocks: const []);
+    }
+    final buffer = StringBuffer();
+    var cursor = 0;
+    for (final removal in removals) {
+      buffer.write(text.substring(cursor, removal.start));
+      cursor = removal.end;
+    }
+    buffer.write(text.substring(cursor));
+    final stripped = buffer.toString().trimRight();
+    final adjusted = <MessageTextEntity>[];
+    for (final entity in entities) {
+      var removedBefore = 0;
+      var overlaps = false;
+      for (final removal in removals) {
+        if (entity.end <= removal.start) continue;
+        if (entity.offset >= removal.end) {
+          removedBefore += removal.end - removal.start;
+          continue;
+        }
+        overlaps = true;
+        break;
+      }
+      if (overlaps) continue;
+      adjusted.add(
+        MessageTextEntity(
+          offset: entity.offset - removedBefore,
+          length: entity.length,
+          type: entity.type,
+          url: entity.url,
+          userId: entity.userId,
+          customEmojiId: entity.customEmojiId,
+          language: entity.language,
+          button: entity.button,
+          typeData: entity.typeData,
+        ),
+      );
+    }
+    return (text: stripped, entities: adjusted, blocks: blocks);
+  }
+
+  static bool _looksLikeMarkdownTableRow(String line) {
+    final trimmed = line.trim();
+    return trimmed.startsWith('|') &&
+        trimmed.endsWith('|') &&
+        _splitMarkdownTableRow(trimmed).length >= 2;
+  }
+
+  static bool _looksLikeMarkdownSeparatorRow(String line) {
+    final cells = _splitMarkdownTableRow(line);
+    if (cells.length < 2) return false;
+    return cells.every((cell) => RegExp(r'^:?-{3,}:?$').hasMatch(cell.trim()));
+  }
+
+  static List<RichMessageTableCell> _markdownTableCells(
+    String line, {
+    bool isHeader = false,
+  }) {
+    return _splitMarkdownTableRow(line)
+        .map(
+          (cell) => RichMessageTableCell(
+            text: cell.replaceAll(r'\|', '|').trim(),
+            isHeader: isHeader,
+          ),
+        )
+        .toList();
+  }
+
+  static List<String> _splitMarkdownTableRow(String line) {
+    final trimmed = line.trim();
+    final start = trimmed.startsWith('|') ? 1 : 0;
+    final end = trimmed.endsWith('|') ? trimmed.length - 1 : trimmed.length;
+    if (end <= start) return const [];
+    final content = trimmed.substring(start, end);
+    final cells = <String>[];
+    final buffer = StringBuffer();
+    var escaped = false;
+    for (final codeUnit in content.codeUnits) {
+      final char = String.fromCharCode(codeUnit);
+      if (escaped) {
+        buffer.write(char);
+        escaped = false;
+      } else if (char == '\\') {
+        buffer.write(char);
+        escaped = true;
+      } else if (char == '|') {
+        cells.add(buffer.toString());
+        buffer.clear();
+      } else {
+        buffer.write(char);
+      }
+    }
+    cells.add(buffer.toString());
+    return cells;
+  }
+
+  static _ParsedMarkdownText _richText(Object? value) {
+    final builder = _RichTextBuilder();
+    _appendRichText(builder, value);
+    return _ParsedMarkdownText(builder.buffer.toString(), builder.entities);
+  }
+
+  static void _appendRichText(_RichTextBuilder builder, Object? value) {
+    if (value == null) return;
+    if (value is String) {
+      builder.write(value);
+      return;
+    }
+    if (value is List) {
+      for (final item in value) {
+        _appendRichText(builder, item);
+      }
+      return;
+    }
+    if (value is! Map<String, dynamic>) return;
+
+    final type = _richTextType(value);
+    final normalizedType = _normalizedRichTextType(type);
+    switch (type) {
+      case 'textEmpty':
+      case 'richTextAnchor':
+      case 'RichTextAnchor':
+      case 'textAnchor':
+        return;
+      case 'richTextPlain':
+      case 'RichTextPlain':
+      case 'textPlain':
+        builder.write(value.str('text') ?? '');
+        return;
+      case 'richTexts':
+      case 'RichTexts':
+      case 'RichText':
+      case 'textConcat':
+        for (final item
+            in value.objects('texts') ?? const <Map<String, dynamic>>[]) {
+          _appendRichText(builder, item);
+        }
+        return;
+      case 'richTextCustomEmoji':
+      case 'RichTextCustomEmoji':
+        final alt =
+            value.str('alternative_text') ??
+            value.str('text') ??
+            value.str('emoji') ??
+            '';
+        if (alt.isEmpty) return;
+        final start = builder.length;
+        builder.write(alt);
+        builder.entity(
+          start,
+          'textEntityTypeCustomEmoji',
+          customEmojiId: value.int64('custom_emoji_id'),
+        );
+        return;
+      case 'richTextIcon':
+      case 'RichTextIcon':
+      case 'textImage':
+        builder.write(AppStrings.t(AppStringKeys.composerImagePreview));
+        return;
+      case 'richTextMathematicalExpression':
+      case 'RichTextMathematicalExpression':
+        final expression =
+            value.str('expression') ??
+            value.str('formula') ??
+            value.str('source') ??
+            '';
+        final start = builder.length;
+        builder.write(expression);
+        builder.entity(start, 'textEntityTypeMathematicalExpression');
+        return;
+      case 'richTextButton':
+      case 'RichTextButton':
+        final buttonSource = value.obj('button') ?? value;
+        final button = _richMessageButton(buttonSource);
+        if (button == null) return;
+        final start = builder.length;
+        builder.write('\uFFFC');
+        builder.entity(start, 'textEntityTypeButton', button: button);
+        return;
+    }
+
+    final child = value['text'];
+    final start = builder.length;
+    if (child != null) {
+      _appendRichText(builder, child);
+    } else {
+      builder.write(_richTextFallbackText(normalizedType, value));
+    }
+    final entityType = _richTextEntityType(type);
+    if (entityType == null) return;
+    builder.entity(
+      start,
+      entityType,
+      url: _richTextEntityUrl(type, value),
+      userId: _richTextUserId(value),
+      typeData: _richTextEntityTypeData(entityType, value),
+    );
+  }
+
+  static String? _richTextType(Map<String, dynamic> value) {
+    final tdType = value.type;
+    if (tdType != null && tdType.isNotEmpty) return tdType;
+    final rawType = value['type'];
+    if (rawType is! String) return null;
+    return switch (rawType) {
+      'empty' => 'textEmpty',
+      'plain' => 'richTextPlain',
+      'concat' => 'richTexts',
+      'bold' => 'richTextBold',
+      'italic' => 'richTextItalic',
+      'underline' => 'richTextUnderline',
+      'strikethrough' => 'richTextStrikethrough',
+      'spoiler' => 'richTextSpoiler',
+      'date_time' => 'richTextDateTime',
+      'text_mention' => 'richTextMentionName',
+      'code' => 'richTextFixed',
+      'url' => 'richTextUrl',
+      'email_address' => 'richTextEmailAddress',
+      'phone_number' => 'richTextPhoneNumber',
+      'bank_card_number' => 'richTextBankCardNumber',
+      'mention' => 'richTextMention',
+      'hashtag' => 'richTextHashtag',
+      'cashtag' => 'richTextCashtag',
+      'bot_command' => 'richTextBotCommand',
+      'marked' => 'richTextMarked',
+      'subscript' => 'richTextSubscript',
+      'superscript' => 'richTextSuperscript',
+      'anchor' => 'richTextAnchor',
+      'anchor_link' => 'richTextAnchorLink',
+      'reference' => 'richTextReference',
+      'reference_link' => 'richTextReferenceLink',
+      'custom_emoji' => 'richTextCustomEmoji',
+      'mathematical_expression' => 'richTextMathematicalExpression',
+      'button' => 'richTextButton',
+      _ => rawType,
+    };
+  }
+
+  static Map<String, dynamic> _richTextEntityTypeData(
+    String entityType,
+    Map<String, dynamic> value,
+  ) {
+    if (entityType != 'textEntityTypeDateTime') return const {};
+    final unixTime = value.integer('unix_time');
+    final formattingType = value.obj('formatting_type');
+    final copiedFormattingType = formattingType == null
+        ? null
+        : Map<String, dynamic>.of(formattingType);
+    return {'unix_time': ?unixTime, 'formatting_type': ?copiedFormattingType};
+  }
+
+  static String _normalizedRichTextType(String? type) {
+    if (type == null || type.isEmpty) return '';
+    if (type.startsWith('RichText')) {
+      return 'richText${type.substring('RichText'.length)}';
+    }
+    return type;
+  }
+
+  static String _richTextFallbackText(
+    String normalizedType,
+    Map<String, dynamic> value,
+  ) {
+    final direct = value.str('text') ?? value.str('alternative_text');
+    if (direct != null) return direct;
+    switch (normalizedType) {
+      case 'richTextDateTime':
+        return value.str('time_text') ??
+            value.str('datetime') ??
+            value.str('format') ??
+            '';
+      case 'richTextEmailAddress':
+        return value.str('email_address') ?? '';
+      case 'richTextPhoneNumber':
+        return value.str('phone_number') ?? '';
+      case 'richTextBankCardNumber':
+        return value.str('bank_card_number') ?? value.str('number') ?? '';
+      case 'richTextMention':
+        final username = value.str('username');
+        return username == null || username.isEmpty ? '' : '@$username';
+      case 'richTextHashtag':
+        final hashtag = value.str('hashtag');
+        return hashtag == null || hashtag.isEmpty ? '' : '#$hashtag';
+      case 'richTextCashtag':
+        final cashtag = value.str('cashtag');
+        return cashtag == null || cashtag.isEmpty ? '' : '\$$cashtag';
+      case 'richTextBotCommand':
+        final command = value.str('bot_command') ?? value.str('command');
+        return command == null || command.isEmpty ? '' : '/$command';
+      case 'richTextAnchorLink':
+      case 'richTextReferenceLink':
+        return value.str('name') ?? value.str('url') ?? '';
+      case 'richTextReference':
+        return value.str('name') ?? '';
+      default:
+        return '';
+    }
+  }
+
+  static int? _richTextUserId(Map<String, dynamic> value) {
+    return value.int64('user_id') ??
+        value.obj('user')?.int64('id') ??
+        value.obj('text_mention')?.int64('user_id') ??
+        value.obj('text_mention')?.obj('user')?.int64('id');
+  }
+
+  static String? _richTextEntityType(String? type) {
+    switch (_normalizedRichTextType(type)) {
+      case 'richTextBold':
+      case 'textBold':
+        return 'textEntityTypeBold';
+      case 'richTextItalic':
+      case 'textItalic':
+        return 'textEntityTypeItalic';
+      case 'richTextUnderline':
+      case 'textUnderline':
+        return 'textEntityTypeUnderline';
+      case 'richTextStrikethrough':
+      case 'textStrike':
+        return 'textEntityTypeStrikethrough';
+      case 'richTextSpoiler':
+        return 'textEntityTypeSpoiler';
+      case 'richTextCode':
+      case 'richTextFixed':
+      case 'textFixed':
+        return 'textEntityTypeCode';
+      case 'richTextTextMention':
+      case 'richTextMentionName':
+        return 'textEntityTypeMentionName';
+      case 'richTextUrl':
+      case 'textUrl':
+      case 'richTextReferenceLink':
+      case 'richTextAnchorLink':
+        return 'textEntityTypeTextUrl';
+      case 'richTextMention':
+        return 'textEntityTypeTextUrl';
+      case 'richTextEmailAddress':
+      case 'textEmail':
+        return 'textEntityTypeEmailAddress';
+      case 'richTextPhoneNumber':
+      case 'textPhone':
+        return 'textEntityTypePhoneNumber';
+      case 'richTextHashtag':
+        return 'textEntityTypeHashtag';
+      case 'richTextCashtag':
+        return 'textEntityTypeCashtag';
+      case 'richTextBotCommand':
+        return 'textEntityTypeBotCommand';
+      case 'richTextBankCardNumber':
+        return 'textEntityTypeBankCardNumber';
+      case 'richTextMarked':
+      case 'textMarked':
+        return 'textEntityTypeMarked';
+      case 'richTextSubscript':
+      case 'textSubscript':
+        return 'textEntityTypeSubscript';
+      case 'richTextSuperscript':
+      case 'textSuperscript':
+        return 'textEntityTypeSuperscript';
+      case 'richTextDateTime':
+        return 'textEntityTypeDateTime';
+      default:
+        return null;
+    }
+  }
+
+  static String? _richTextEntityUrl(String? type, Map<String, dynamic> value) {
+    switch (_normalizedRichTextType(type)) {
+      case 'richTextUrl':
+      case 'textUrl':
+      case 'richTextReferenceLink':
+      case 'richTextAnchorLink':
+        final url = value.str('url') ?? value.str('href');
+        if (url != null && url.isNotEmpty) return url;
+        final name =
+            value.str('anchor_name') ??
+            value.str('reference_name') ??
+            value.str('name');
+        return name == null || name.isEmpty ? null : '#$name';
+      case 'richTextMention':
+        final username = value.str('username');
+        return username == null || username.isEmpty
+            ? null
+            : 'https://t.me/$username';
+      default:
+        return null;
+    }
+  }
+
+  static _ParsedMarkdownText? _richMessageText(Map<String, dynamic>? message) {
+    final blocks = message?.objects('blocks');
+    if (blocks == null || blocks.isEmpty) return null;
+    final builder = _RichTextBuilder();
+    for (final block in blocks) {
+      final before = builder.length;
+      _appendPageBlock(builder, block);
+      if (builder.length > before) builder.blankLine();
+    }
+    final text = builder.buffer.toString().trimRight();
+    if (text.isEmpty) return null;
+    final entities = builder.entities
+        .where((entity) => entity.offset < text.length)
+        .map(
+          (entity) => MessageTextEntity(
+            offset: entity.offset,
+            length:
+                entity.end.clamp(entity.offset, text.length) - entity.offset,
+            type: entity.type,
+            url: entity.url,
+            userId: entity.userId,
+            customEmojiId: entity.customEmojiId,
+            language: entity.language,
+            button: entity.button,
+            typeData: entity.typeData,
+          ),
+        )
+        .where((entity) => entity.length > 0)
+        .toList();
+    return _ParsedMarkdownText(text, entities);
+  }
+
+  static void _appendPageBlock(
+    _RichTextBuilder builder,
+    Map<String, dynamic> block,
+  ) {
+    final start = builder.length;
+    switch (_richBlockType(block)) {
+      case 'pageBlockTitle':
+        _appendRichText(builder, block.obj('title'));
+      case 'pageBlockSubtitle':
+        _appendRichText(builder, block.obj('subtitle'));
+      case 'pageBlockAuthorDate':
+        _appendRichText(builder, block.obj('author'));
+      case 'pageBlockHeader':
+        _appendRichText(builder, block.obj('header'));
+      case 'pageBlockSubheader':
+        _appendRichText(builder, block.obj('subheader'));
+      case 'pageBlockSectionHeading':
+      case 'pageBlockParagraph':
+      case 'pageBlockThinking':
+        _appendRichText(builder, block['text']);
+      case 'pageBlockKicker':
+        _appendRichText(builder, block.obj('kicker'));
+      case 'pageBlockFooter':
+        _appendRichText(builder, block['footer']);
+      case 'pageBlockPreformatted':
+        _appendRichText(builder, block['text']);
+        builder.entity(
+          start,
+          'textEntityTypePreCode',
+          language: block.str('language'),
+        );
+      case 'pageBlockMathematicalExpression':
+        return;
+      case 'pageBlockList':
+        _appendPageBlockList(builder, block.objects('items'));
+      case 'pageBlockBlockQuote':
+        _appendPageBlocks(builder, block.objects('blocks'));
+        _appendCredit(builder, block.obj('credit'));
+        builder.entity(start, 'textEntityTypeBlockQuote');
+      case 'pageBlockPullQuote':
+        _appendRichText(builder, block['text']);
+        _appendCredit(builder, block.obj('credit'));
+        builder.entity(start, 'textEntityTypeBlockQuote');
+      case 'pageBlockAnimation':
+      case 'pageBlockAudio':
+      case 'pageBlockPhoto':
+      case 'pageBlockVideo':
+      case 'pageBlockVoiceNote':
+      case 'pageBlockEmbedded':
+        _appendCaption(builder, block.obj('caption'));
+      case 'pageBlockMap':
+      case 'richBlockMap':
+      case 'RichBlockMap':
+      case 'map':
+        return;
+      case 'pageBlockCover':
+        final cover = block.obj('cover');
+        if (cover != null) _appendPageBlock(builder, cover);
+      case 'pageBlockEmbeddedPost':
+      case 'pageBlockCollage':
+      case 'pageBlockSlideshow':
+        _appendPageBlocks(builder, block.objects('blocks'));
+        _appendCaption(builder, block.obj('caption'));
+      case 'pageBlockTable':
+      case 'pageBlockButtonRow':
+        return;
+      case 'pageBlockDetails':
+        _appendRichText(builder, block['header'] ?? block['summary']);
+        builder.lineBreak();
+        _appendPageBlocks(builder, block.objects('blocks'));
+      case 'pageBlockRelatedArticles':
+        _appendRichText(builder, block.obj('header'));
+        _appendRelatedArticles(builder, block.objects('articles'));
+      case 'pageBlockChatLink':
+        builder.write(block.str('title') ?? '');
+      case 'pageBlockDivider':
+      case 'pageBlockAnchor':
+        return;
+    }
+  }
+
+  static void _appendPageBlocks(
+    _RichTextBuilder builder,
+    List<Map<String, dynamic>>? blocks,
+  ) {
+    if (blocks == null) return;
+    for (final block in blocks) {
+      final before = builder.length;
+      _appendPageBlock(builder, block);
+      if (builder.length > before) builder.lineBreak();
+    }
+  }
+
+  static void _appendPageBlockList(
+    _RichTextBuilder builder,
+    List<Map<String, dynamic>>? items,
+  ) {
+    if (items == null) return;
+    for (final item in items) {
+      final label = item.str('label');
+      final checked = item.boolean('is_checked') ?? false;
+      if (item.boolean('has_checkbox') ?? false) {
+        builder.write(checked ? '[x] ' : '[ ] ');
+      } else if (label != null && label.isNotEmpty) {
+        builder.write('$label ');
+      } else {
+        builder.write('- ');
+      }
+      _appendPageBlocks(builder, item.objects('blocks'));
+    }
+  }
+
+  static void _appendCaption(
+    _RichTextBuilder builder,
+    Map<String, dynamic>? caption,
+  ) {
+    if (caption == null) return;
+    _appendRichText(builder, caption.obj('text'));
+    _appendCredit(builder, caption.obj('credit'));
+  }
+
+  static void _appendCredit(
+    _RichTextBuilder builder,
+    Map<String, dynamic>? credit,
+  ) {
+    if (credit == null) return;
+    if (richTextText(credit).trim().isEmpty) return;
+    builder.lineBreak();
+    _appendRichText(builder, credit);
+  }
+
+  static void _appendRelatedArticles(
+    _RichTextBuilder builder,
+    List<Map<String, dynamic>>? articles,
+  ) {
+    if (articles == null) return;
+    for (final article in articles) {
+      builder.lineBreak();
+      final title = article.str('title') ?? article.str('url') ?? '';
+      if (title.isNotEmpty) builder.write('- $title');
+    }
+  }
+
+  static MessageLocation? locationAttachment(Map<String, dynamic>? content) {
+    if (content == null) return null;
+    switch (content.type) {
+      case 'messageLocation':
+        final l = content.obj('location');
+        final lat = l?.dbl('latitude'), lon = l?.dbl('longitude');
+        if (lat != null && lon != null) {
+          return MessageLocation(latitude: lat, longitude: lon);
+        }
+      case 'messageVenue':
+        final v = content.obj('venue');
+        final l = v?.obj('location');
+        final lat = l?.dbl('latitude'), lon = l?.dbl('longitude');
+        if (lat != null && lon != null) {
+          return MessageLocation(
+            latitude: lat,
+            longitude: lon,
+            title: v?.str('title'),
+            address: v?.str('address'),
+          );
+        }
+    }
+    return null;
+  }
+
+  static MessageVoice? voiceAttachment(Map<String, dynamic>? content) {
+    if (content == null || content.type != 'messageVoiceNote') return null;
+    final note = content.obj('voice_note');
+    if (note == null) return null;
+    final speech = note.obj('speech_recognition_result');
+    return MessageVoice(
+      file: fileRef(note.obj('voice')),
+      duration: note.integer('duration') ?? 0,
+      waveform: note.str('waveform') ?? '',
+      transcription: speech?.type == 'speechRecognitionResultText'
+          ? speech?.str('text') ?? ''
+          : speech?.type == 'speechRecognitionResultPending'
+          ? speech?.str('partial_text') ?? ''
+          : '',
+      transcriptionPending: speech?.type == 'speechRecognitionResultPending',
+      transcriptionError: speech?.type == 'speechRecognitionResultError'
+          ? speech?.obj('error')?.str('message')
+          : null,
+    );
+  }
+
+  static (String, bool, String?) videoNoteSpeech(
+    Map<String, dynamic>? content,
+  ) {
+    if (content?.type != 'messageVideoNote') return ('', false, null);
+    final speech = content?.obj('video_note')?.obj('speech_recognition_result');
+    return (
+      speech?.type == 'speechRecognitionResultText'
+          ? speech?.str('text') ?? ''
+          : speech?.type == 'speechRecognitionResultPending'
+          ? speech?.str('partial_text') ?? ''
+          : '',
+      speech?.type == 'speechRecognitionResultPending',
+      speech?.type == 'speechRecognitionResultError'
+          ? speech?.obj('error')?.str('message')
+          : null,
+    );
+  }
+
+  static MessageContactCard? contactAttachment(Map<String, dynamic>? content) {
+    if (content?.type != 'messageContact') return null;
+    final contact = content?.obj('contact');
+    if (contact == null) return null;
+    return MessageContactCard(
+      phoneNumber: contact.str('phone_number') ?? '',
+      firstName: contact.str('first_name') ?? '',
+      lastName: contact.str('last_name') ?? '',
+      vcard: contact.str('vcard') ?? '',
+      userId: contact.int64('user_id') ?? 0,
+    );
+  }
+
+  static MessagePoll? pollAttachment(Map<String, dynamic>? content) {
+    if (content?.type != 'messagePoll') return null;
+    final poll = content?.obj('poll');
+    if (poll == null) return null;
+    final type = poll.obj('type');
+    final options = <MessagePollOption>[];
+    final rawOptions =
+        poll.objects('options') ?? const <Map<String, dynamic>>[];
+    for (var index = 0; index < rawOptions.length; index++) {
+      final option = rawOptions[index];
+      options.add(
+        MessagePollOption(
+          index: index,
+          id: option.str('id') ?? '$index',
+          text: option.obj('text')?.str('text') ?? '',
+          voterCount: option.integer('voter_count') ?? 0,
+          votePercentage: option.integer('vote_percentage') ?? 0,
+          isChosen: option.boolean('is_chosen') ?? false,
+          isBeingChosen: option.boolean('is_being_chosen') ?? false,
+        ),
+      );
+    }
+    final media = _pollMediaAttachment(content?.obj('media'));
+    return MessagePoll(
+      id: poll.int64('id') ?? 0,
+      question: poll.obj('question')?.str('text') ?? '',
+      description: content?.obj('description')?.str('text') ?? '',
+      options: options,
+      totalVoterCount: poll.integer('total_voter_count') ?? 0,
+      canGetVoters: poll.boolean('can_get_voters') ?? false,
+      canSeeResults: poll.boolean('can_see_results') ?? false,
+      isAnonymous: poll.boolean('is_anonymous') ?? false,
+      allowsMultipleAnswers: poll.boolean('allows_multiple_answers') ?? false,
+      allowsRevoting: poll.boolean('allows_revoting') ?? false,
+      isQuiz: type?.type == 'pollTypeQuiz',
+      isClosed: poll.boolean('is_closed') ?? false,
+      canAddOption: content?.boolean('can_add_option') ?? false,
+      correctOptionId:
+          type?.int64Array('correct_option_ids')?.firstOrNull ?? -1,
+      explanation: type?.obj('explanation')?.str('text') ?? '',
+      media: media.image,
+    );
+  }
+
+  static MediaAttachment _pollMediaAttachment(Map<String, dynamic>? media) {
+    if (media == null) return const MediaAttachment();
+    return switch (media.type) {
+      'pollMediaPhoto' => photoAttachment(media.obj('photo')),
+      'pollMediaVideo' => videoAttachment(media.obj('video'), media),
+      'pollMediaAnimation' => animationAttachment(media.obj('animation')),
+      'pollMediaDocument' => MediaAttachment(
+        image: fileRef(media.obj('document')?.obj('thumbnail')?.obj('file')),
+      ),
+      'pollMediaSticker' => _stickerMedia(media.obj('sticker')),
+      _ => const MediaAttachment(),
+    };
+  }
+
+  static MessageChecklist? checklistAttachment(Map<String, dynamic>? content) {
+    if (content?.type != 'messageChecklist') return null;
+    final checklist = content?.obj('list');
+    if (checklist == null) return null;
+    final tasks = <MessageChecklistTask>[];
+    for (final task
+        in checklist.objects('tasks') ?? const <Map<String, dynamic>>[]) {
+      final completedBy = task.obj('completed_by');
+      tasks.add(
+        MessageChecklistTask(
+          id: task.integer('id') ?? 0,
+          text: task.obj('text')?.str('text') ?? '',
+          isCompleted: completedBy != null,
+          completedByUserId: completedBy?.type == 'messageSenderUser'
+              ? completedBy?.int64('user_id')
+              : null,
+          completedByChatId: completedBy?.type == 'messageSenderChat'
+              ? completedBy?.int64('chat_id')
+              : null,
+          completionDate: task.integer('completion_date') ?? 0,
+        ),
+      );
+    }
+    return MessageChecklist(
+      title: checklist.obj('title')?.str('text') ?? '',
+      tasks: tasks,
+      othersCanAddTasks: checklist.boolean('others_can_add_tasks') ?? false,
+      canAddTasks: checklist.boolean('can_add_tasks') ?? false,
+      othersCanMarkTasksAsDone:
+          checklist.boolean('others_can_mark_tasks_as_done') ?? false,
+      canMarkTasksAsDone: checklist.boolean('can_mark_tasks_as_done') ?? false,
+    );
+  }
+
+  static MessageStoryReference? storyAttachment(Map<String, dynamic>? content) {
+    if (content?.type != 'messageStory') return null;
+    final posterChatId = content?.int64('story_poster_chat_id');
+    final storyId = content?.integer('story_id');
+    if (posterChatId == null || storyId == null) return null;
+    return MessageStoryReference(
+      posterChatId: posterChatId,
+      storyId: storyId,
+      viaMention: content?.boolean('via_mention') ?? false,
+    );
+  }
+
+  static SuggestedPostPrice? suggestedPostPrice(Map<String, dynamic>? price) {
+    if (price == null) return null;
+    return switch (price.type) {
+      'suggestedPostPriceStar' => SuggestedPostPrice(
+        kind: SuggestedPostPriceKind.stars,
+        amount: price.int64('star_count') ?? 0,
+      ),
+      'suggestedPostPriceGram' => SuggestedPostPrice(
+        kind: SuggestedPostPriceKind.ton,
+        amount: price.int64('gram_cent_count') ?? 0,
+      ),
+      _ => null,
+    };
+  }
+
+  static MessageSuggestedPostInfo? suggestedPostInfo(
+    Map<String, dynamic>? info,
+  ) {
+    if (info == null) return null;
+    final state = switch (info.obj('state')?.type) {
+      'suggestedPostStatePending' => SuggestedPostState.pending,
+      'suggestedPostStateApproved' => SuggestedPostState.approved,
+      'suggestedPostStateDeclined' => SuggestedPostState.declined,
+      _ => SuggestedPostState.unknown,
+    };
+    return MessageSuggestedPostInfo(
+      price: suggestedPostPrice(info.obj('price')),
+      sendDate: info.integer('send_date') ?? 0,
+      state: state,
+      canBeApproved: info.boolean('can_be_approved') ?? false,
+      canBeDeclined: info.boolean('can_be_declined') ?? false,
+    );
+  }
+
+  static MessageSummaryCard? summaryCard(
+    Map<String, dynamic> message,
+    Map<String, dynamic>? content,
+  ) {
+    if (content == null) return null;
+    switch (content.type) {
+      case 'messageGame':
+        final game = content.obj('game');
+        if (game == null) return null;
+        final animation = animationAttachment(game.obj('animation'));
+        final photo = photoAttachment(game.obj('photo'));
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.game,
+          title: game.str('title') ?? AppStrings.t(AppStringKeys.tdMessageGame),
+          subtitle:
+              game.str('description') ?? game.obj('text')?.str('text') ?? '',
+          detail: game.str('short_name') ?? '',
+          image: animation.image ?? photo.image,
+          video: animation.video,
+        );
+      case 'messageInvoice':
+        final product = content.obj('product_info');
+        final amount = content.int64('total_amount') ?? 0;
+        final currency = content.str('currency') ?? '';
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.invoice,
+          title:
+              product?.str('title') ??
+              AppStrings.t(AppStringKeys.tdMessageProduct),
+          subtitle: product?.obj('description')?.str('text') ?? '',
+          detail: currency.isEmpty ? '' : '$currency $amount',
+          image: photoAttachment(product?.obj('photo')).image,
+        );
+      case 'messageGiveaway':
+        final prize = content.obj('prize');
+        final parameters = content.obj('parameters');
+        final prizeLabel = switch (prize?.type) {
+          'giveawayPrizePremium' =>
+            '${prize?.integer('month_count') ?? 0} months Premium',
+          'giveawayPrizeStars' =>
+            '${prize?.int64('star_count') ?? 0} Telegram Stars',
+          _ => parameters?.str('prize_description') ?? '',
+        };
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.giveaway,
+          title: AppStrings.t(AppStringKeys.tdMessageGiveaway),
+          subtitle: prizeLabel,
+          detail: '${content.integer('winner_count') ?? 0} winners',
+          image: _stickerMedia(content.obj('sticker')).image,
+        );
+      case 'messageGiveawayWinners':
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.giveaway,
+          title: AppStrings.t(AppStringKeys.tdMessageGiveaway),
+          subtitle: content.str('prize_description') ?? '',
+          detail: '${content.integer('winner_count') ?? 0} winners',
+        );
+      case 'messageGiveawayCompleted':
+      case 'messageGiveawayCreated':
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.giveaway,
+          title: AppStrings.t(AppStringKeys.tdMessageGiveaway),
+          detail: content.type == 'messageGiveawayCreated'
+              ? '${content.int64('star_count') ?? 0} Telegram Stars'
+              : '${content.integer('winner_count') ?? 0} winners',
+        );
+      case 'messagePaidMedia':
+        final media = content['media'];
+        MediaAttachment preview = const MediaAttachment();
+        var mediaCount = 0;
+        if (media is List) {
+          mediaCount = media.length;
+          if (media.isNotEmpty && media.first is Map<String, dynamic>) {
+            preview = _paidMediaAttachment(media.first as Map<String, dynamic>);
+          }
+        }
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.paidMedia,
+          title: AppStrings.t(AppStringKeys.tdMessagePaidContent),
+          subtitle: content.obj('caption')?.str('text') ?? '',
+          detail:
+              '${content.int64('star_count') ?? 0} Stars · $mediaCount media',
+          image: preview.image,
+          video: preview.video,
+        );
+      case 'messageGift':
+        final gift = content.obj('gift');
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.gift,
+          title: AppStrings.t(AppStringKeys.tdMessageGift),
+          subtitle: content.obj('text')?.str('text') ?? '',
+          detail: '${gift?.int64('star_count') ?? 0} Telegram Stars',
+          image: _stickerMedia(gift?.obj('sticker')).image,
+        );
+      case 'messageGiftedPremium':
+      case 'messagePremiumGiftCode':
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.gift,
+          title: AppStrings.t(AppStringKeys.tdMessageGift),
+          subtitle: content.obj('text')?.str('text') ?? '',
+          detail: '${content.integer('month_count') ?? 0} months Premium',
+          image: _stickerMedia(content.obj('sticker')).image,
+        );
+      case 'messageGiftedStars':
+      case 'messageGiveawayPrizeStars':
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.gift,
+          title: AppStrings.t(AppStringKeys.tdMessageGift),
+          detail: '${content.int64('star_count') ?? 0} Telegram Stars',
+          image: _stickerMedia(content.obj('sticker')).image,
+        );
+      case 'messageGiftedTon':
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.gift,
+          title: AppStrings.t(AppStringKeys.tdMessageGift),
+          detail: '${content.int64('gram_amount') ?? 0} nanoton',
+          image: _stickerMedia(content.obj('sticker')).image,
+        );
+      case 'messageUpgradedGift':
+      case 'messageRefundedUpgradedGift':
+      case 'messageUpgradedGiftPurchaseOffer':
+      case 'messageUpgradedGiftPurchaseOfferRejected':
+        final gift = content.obj('gift');
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.gift,
+          title:
+              gift?.str('title') ?? AppStrings.t(AppStringKeys.tdMessageGift),
+          subtitle: gift?.str('name') ?? '',
+          detail: gift?.integer('number') == null
+              ? ''
+              : '#${gift?.integer('number')}',
+          image: _stickerMedia(gift?.obj('model')?.obj('sticker')).image,
+        );
+      case 'messageSuggestedPostApproved':
+      case 'messageSuggestedPostApprovalFailed':
+      case 'messageSuggestedPostDeclined':
+      case 'messageSuggestedPostPaid':
+      case 'messageSuggestedPostRefunded':
+        final eventLabel = switch (content.type) {
+          'messageSuggestedPostApproved' => AppStrings.t(
+            AppStringKeys.suggestedPostApproved,
+          ),
+          'messageSuggestedPostApprovalFailed' => AppStrings.t(
+            AppStringKeys.suggestedPostApprovalFailed,
+          ),
+          'messageSuggestedPostDeclined' => AppStrings.t(
+            AppStringKeys.suggestedPostDeclined,
+          ),
+          'messageSuggestedPostPaid' => AppStrings.t(
+            AppStringKeys.suggestedPostPaid,
+          ),
+          'messageSuggestedPostRefunded' => AppStrings.t(
+            AppStringKeys.suggestedPostRefunded,
+          ),
+          _ => '',
+        };
+        final price = suggestedPostPrice(content.obj('price'));
+        final detail = switch (content.type) {
+          'messageSuggestedPostDeclined' => content.str('comment') ?? '',
+          'messageSuggestedPostRefunded' =>
+            content.obj('reason')?.type ==
+                    'suggestedPostRefundReasonPostDeleted'
+                ? AppStrings.t(AppStringKeys.suggestedPostRefundDeleted)
+                : AppStrings.t(AppStringKeys.suggestedPostRefundPayment),
+          'messageSuggestedPostPaid' =>
+            (content.obj('star_amount')?.int64('star_count') ?? 0) != 0
+                ? '${content.obj('star_amount')?.int64('star_count') ?? 0} Stars'
+                : '${(content.int64('gram_amount') ?? 0) / 1000000000} TON',
+          _ => price == null ? '' : suggestedPostPriceLabel(price),
+        };
+        return MessageSummaryCard(
+          kind: MessageSummaryKind.suggestedPost,
+          title: AppStrings.t(AppStringKeys.tdMessageSubmission),
+          subtitle: eventLabel,
+          detail: detail,
+        );
+    }
+    return null;
+  }
+
+  static String suggestedPostPriceLabel(SuggestedPostPrice price) =>
+      switch (price.kind) {
+        SuggestedPostPriceKind.stars => '${price.amount} Stars',
+        SuggestedPostPriceKind.ton =>
+          '${(price.amount / 100).toStringAsFixed(2)} TON',
+      };
+
+  static MediaAttachment _stickerMedia(Map<String, dynamic>? sticker) {
+    if (sticker == null) return const MediaAttachment();
+    final mini = decodeMiniThumb(sticker.obj('minithumbnail'));
+    return MediaAttachment(
+      image:
+          fileRef(sticker.obj('thumbnail')?.obj('file'), miniThumb: mini) ??
+          fileRef(sticker.obj('sticker'), miniThumb: mini),
+    );
+  }
+
+  static MediaAttachment _paidMediaAttachment(Map<String, dynamic> media) {
+    return switch (media.type) {
+      'paidMediaPhoto' => photoAttachment(media.obj('photo')),
+      'paidMediaVideo' => videoAttachment(media.obj('video')),
+      _ => const MediaAttachment(),
+    };
+  }
+
+  static MediaAttachment mediaAttachment(Map<String, dynamic>? content) {
+    if (content == null) return const MediaAttachment();
+    switch (content.type) {
+      case 'messagePhoto':
+        final photo = content.obj('photo');
+        if (photo != null) {
+          final mini = decodeMiniThumb(photo.obj('minithumbnail'));
+          final sizes = photo.objects('sizes');
+          if (sizes != null && sizes.isNotEmpty) {
+            final best = bestPhotoSize(sizes);
+            final thumbnail = photoThumbnailSize(sizes, best);
+            return MediaAttachment(
+              image: fileRef(
+                best.obj('photo'),
+                miniThumb: mini,
+                thumbnail: fileRef(thumbnail?.obj('photo'), miniThumb: mini),
+              ),
+              width: best.integer('width'),
+              height: best.integer('height'),
+            );
+          }
+        }
+      case 'messageSticker':
+        final sticker = content.obj('sticker');
+        if (sticker != null) {
+          final thumb = fileRef(sticker.obj('thumbnail')?.obj('file'));
+          final stickerFile = fileRef(sticker.obj('sticker'));
+          final w = sticker.integer('width'), h = sticker.integer('height');
+          final fmt = sticker.obj('format')?.type;
+          final isTgs = fmt == 'stickerFormatTgs';
+          final isWebm = fmt == 'stickerFormatWebm';
+          return MediaAttachment(
+            // Static (.webp) stickers are shown directly via `image`, so point at
+            // the full sticker file — the thumbnail is low-res and looks blurry
+            // scaled up. Animated (.tgs) / video (.webm) keep the thumb only as a
+            // placeholder behind the rendered animation.
+            image: (isTgs || isWebm) ? thumb : (stickerFile ?? thumb),
+            width: w,
+            height: h,
+            animated: isTgs ? stickerFile : null,
+            videoSticker: isWebm ? stickerFile : null,
+            stickerFileId: stickerFile?.id,
+            stickerSetId: sticker.int64('set_id'),
+          );
+        }
+      case 'messageAnimatedEmoji':
+        // A lone emoji → TDLib sends its animated sticker (usually .tgs); render
+        // it like a sticker so single emoji animate instead of "[动画表情]" text.
+        final sticker = content.obj('animated_emoji')?.obj('sticker');
+        if (sticker != null) {
+          final thumb = fileRef(sticker.obj('thumbnail')?.obj('file'));
+          final stickerFile = fileRef(sticker.obj('sticker'));
+          final w = sticker.integer('width'), h = sticker.integer('height');
+          final fmt = sticker.obj('format')?.type;
+          final isTgs = fmt == 'stickerFormatTgs';
+          final isWebm = fmt == 'stickerFormatWebm';
+          return MediaAttachment(
+            image: (isTgs || isWebm) ? thumb : (stickerFile ?? thumb),
+            width: w,
+            height: h,
+            animated: isTgs ? stickerFile : null,
+            videoSticker: isWebm ? stickerFile : null,
+            stickerFileId: stickerFile?.id,
+            stickerSetId: sticker.int64('set_id'),
+            isAnimatedEmoji: true,
+          );
+        }
+      case 'messageAnimation':
+        final anim = content.obj('animation');
+        if (anim != null) {
+          final mini = decodeMiniThumb(anim.obj('minithumbnail'));
+          final thumb =
+              fileRef(anim.obj('thumbnail')?.obj('file'), miniThumb: mini) ??
+              fileRef(anim.obj('animation'), miniThumb: mini);
+          final animation = fileRef(
+            anim.obj('animation'),
+            fileName: anim.str('file_name'),
+            mimeType: anim.str('mime_type'),
+            miniThumb: mini,
+          );
+          return MediaAttachment(
+            image: thumb,
+            video: animation,
+            videoDuration: anim.integer('duration'),
+            videoFileSize: _fileSize(anim.obj('animation')),
+            width: anim.integer('width'),
+            height: anim.integer('height'),
+          );
+        }
+      case 'messageVideo':
+        final video = content.obj('video');
+        if (video != null) {
+          final mini = decodeMiniThumb(video.obj('minithumbnail'));
+          return MediaAttachment(
+            image: fileRef(
+              video.obj('thumbnail')?.obj('file'),
+              miniThumb: mini,
+            ),
+            video: fileRef(
+              video.obj('video'),
+              fileName: video.str('file_name'),
+              mimeType: video.str('mime_type'),
+            ),
+            videoDuration: video.integer('duration'),
+            videoFileSize: _fileSize(video.obj('video')),
+            width: video.integer('width'),
+            height: video.integer('height'),
+          );
+        }
+      case 'messageVideoNote':
+        final note = content.obj('video_note');
+        if (note != null) {
+          final mini = decodeMiniThumb(note.obj('minithumbnail'));
+          final length = note.integer('length') ?? 240;
+          return MediaAttachment(
+            image: fileRef(note.obj('thumbnail')?.obj('file'), miniThumb: mini),
+            video: fileRef(note.obj('video')),
+            videoDuration: note.integer('duration'),
+            videoFileSize: _fileSize(note.obj('video')),
+            width: length,
+            height: length,
+          );
+        }
+      case 'messageAudio':
+        final audio = content.obj('audio');
+        if (audio != null) {
+          final mini = decodeMiniThumb(audio.obj('album_cover_minithumbnail'));
+          final title = _cleanString(audio.str('title'));
+          final fileName = _cleanString(audio.str('file_name'));
+          final performer = _cleanString(audio.str('performer'));
+          return MediaAttachment(
+            music: MessageMusic(
+              title:
+                  title ??
+                  fileName ??
+                  AppStrings.t(AppStringKeys.profileDetailMusic),
+              performer: performer,
+              cover: fileRef(
+                audio.obj('album_cover_thumbnail')?.obj('file'),
+                miniThumb: mini,
+              ),
+              file: fileRef(audio.obj('audio')),
+              duration: audio.integer('duration') ?? 0,
+            ),
+          );
+        }
+      case 'messageDocument':
+        final doc = content.obj('document');
+        if (doc != null) {
+          final f = doc.obj('document');
+          final name =
+              doc.str('file_name') ??
+              AppStrings.t(AppStringKeys.topicPostContentFile);
+          final dot = name.lastIndexOf('.');
+          final ext = dot >= 0 ? name.substring(dot + 1).toUpperCase() : '';
+          return MediaAttachment(
+            document: MessageDocument(
+              fileName: name,
+              size: f?.int64('size') ?? 0,
+              ext: ext,
+              file: fileRef(f),
+            ),
+          );
+        }
+    }
+    return const MediaAttachment();
+  }
+
+  static String messageText(Map<String, dynamic> content) {
+    if (isServiceContent(content.type)) return serviceText(content);
+    switch (content.type) {
+      case 'messageText':
+        return content.obj('text')?.str('text') ?? '';
+      case 'messageRichMessage':
+        return _richMessageText(content.obj('message'))?.text ??
+            AppStrings.t(AppStringKeys.chatSearchMessageResultLabel);
+      case 'messagePhoto':
+        final caption = content.obj('caption')?.str('text') ?? '';
+        return caption.isEmpty
+            ? AppStrings.t(AppStringKeys.composerImagePreview)
+            : caption;
+      case 'messageVideo':
+        final caption = content.obj('caption')?.str('text') ?? '';
+        return caption.isEmpty
+            ? AppStrings.t(AppStringKeys.chatVideoPlaceholder)
+            : caption;
+      case 'messageVideoNote':
+        return AppStrings.t(AppStringKeys.tdMessageVideoMessage);
+      case 'messageVoiceNote':
+        return AppStrings.t(AppStringKeys.composerVoicePreview);
+      case 'messageAudio':
+        final caption = content.obj('caption')?.str('text') ?? '';
+        return caption.isEmpty
+            ? AppStrings.t(AppStringKeys.tdMessageMusic)
+            : caption;
+      case 'messageDocument':
+        final caption = content.obj('caption')?.str('text') ?? '';
+        if (caption.isNotEmpty) return caption;
+        final name = content.obj('document')?.str('file_name');
+        return name != null
+            ? AppStrings.t(AppStringKeys.tdMessageFileWithName, {
+                'value1': name,
+              })
+            : AppStrings.t(AppStringKeys.channelsFileAttachment);
+      case 'messageSticker':
+        final emoji = content.obj('sticker')?.str('emoji') ?? '';
+        return emoji.isEmpty
+            ? AppStrings.t(AppStringKeys.tdMessageStickerPreview)
+            : AppStrings.t(AppStringKeys.tdMessageStickerWithEmoji, {
+                'value1': emoji,
+              });
+      case 'messageAnimation':
+        final caption = content.obj('caption')?.str('text') ?? '';
+        return caption.isEmpty
+            ? AppStrings.t(AppStringKeys.tdMessageGif)
+            : caption;
+      case 'messageAnimatedEmoji':
+        return content.obj('animated_emoji')?.str('emoji') ??
+            AppStrings.t(AppStringKeys.composerAnimatedEmojiPreview);
+      case 'messageLocation':
+        return AppStrings.t(AppStringKeys.composerLocationPreview);
+      case 'messageVenue':
+        return AppStrings.t(AppStringKeys.composerLocationPreview);
+      case 'messageContact':
+        return AppStrings.t(AppStringKeys.tdMessageContactCard);
+      case 'messagePoll':
+        return AppStrings.t(AppStringKeys.tdMessagePoll);
+      case 'messageChecklist':
+        final title = content.obj('list')?.obj('title')?.str('text') ?? '';
+        return title.isEmpty
+            ? AppStrings.t(AppStringKeys.tdMessageChecklist)
+            : title;
+      case 'messageCall':
+        return (content.boolean('is_video') ?? false)
+            ? AppStrings.t(AppStringKeys.tdMessageVideoCall)
+            : AppStrings.t(AppStringKeys.tdMessageVoiceCall);
+      case 'messageDice':
+        return content.str('emoji') ??
+            AppStrings.t(AppStringKeys.tdMessageDice);
+      case 'messageGame':
+        return AppStrings.t(AppStringKeys.tdMessageGame);
+      case 'messageInvoice':
+        return AppStrings.t(AppStringKeys.tdMessageProduct);
+      case 'messageStory':
+        return AppStrings.t(AppStringKeys.tdMessageForwardedStory);
+      case 'messageGiveaway':
+      case 'messageGiveawayWinners':
+      case 'messageGiveawayCompleted':
+        return AppStrings.t(AppStringKeys.tdMessageGiveaway);
+      case 'messagePaidMedia':
+        return AppStrings.t(AppStringKeys.tdMessagePaidContent);
+      case 'messagePaidMessagePriceChanged':
+      case 'messageDirectMessagePriceChanged':
+        return AppStrings.t(AppStringKeys.tdMessagePaidMessageSettingsChanged);
+      case 'messageGift':
+      case 'messagePremiumGiftCode':
+      case 'messageGiftedPremium':
+      case 'messageGiftedStars':
+      case 'messageGiftedTon':
+      case 'messageUpgradedGift':
+      case 'messageRefundedUpgradedGift':
+        return AppStrings.t(AppStringKeys.tdMessageGift);
+      case 'messageSuggestedPostInfo':
+      case 'messageSuggestedPostApproved':
+      case 'messageSuggestedPostApprovalFailed':
+      case 'messageSuggestedPostDeclined':
+      case 'messageSuggestedPostPaid':
+      case 'messageSuggestedPostRefunded':
+        return AppStrings.t(AppStringKeys.tdMessageSubmission);
+      case 'messageExpiredPhoto':
+        return AppStrings.t(AppStringKeys.tdMessageExpiredPhoto);
+      case 'messageExpiredVideo':
+        return AppStrings.t(AppStringKeys.tdMessageExpiredVideo);
+      case 'messageUnsupported':
+        return AppStrings.t(AppStringKeys.tdMessageUnsupportedCurrentVersion);
+      default:
+        final fallback = _nestedFormattedText(content);
+        if (fallback.isNotEmpty) return fallback;
+        if (kDebugMode) {
+          debugPrint('Unsupported TDLib message content: ${content.type}');
+        }
+        return AppStrings.t(AppStringKeys.chatSearchMessageResultLabel);
+    }
+  }
+
+  /// User-authored text carried by a message, excluding localized preview
+  /// labels such as "Video", "Music", "GIF", or a generated file name.
+  ///
+  /// [messageText] intentionally retains those labels for chat-list/search
+  /// previews. Transcript messages must use this value so an absent caption is
+  /// represented as an empty string and can never be rendered as real text.
+  static String messageContentText(Map<String, dynamic> content) {
+    final formatted = formattedTextForContent(content);
+    if (formatted != null) return formatted.str('text') ?? '';
+    return messageText(content);
+  }
+
+  static String richMessageDisplayText(Map<String, dynamic> content) {
+    final text = messageText(content);
+    if (content.type == 'messageRichMessage' &&
+        richMessageBlocks(content).isNotEmpty &&
+        text == AppStrings.t(AppStringKeys.chatSearchMessageResultLabel)) {
+      return '';
+    }
+    return text;
+  }
+
+  static String _nestedFormattedText(Object? value) {
+    if (value is Map<String, dynamic>) {
+      if (value.type == 'formattedText') {
+        final text = value.str('text')?.trim() ?? '';
+        if (text.isNotEmpty) return text;
+      }
+      if (_isRichTextType(value.type)) {
+        final text = richTextText(value).trim();
+        if (text.isNotEmpty) return text;
+      }
+      if (value.type == 'richMessage') {
+        final text = _richMessageText(value)?.text.trim() ?? '';
+        if (text.isNotEmpty) return text;
+      }
+      for (final key in const ['text', 'caption', 'title', 'description']) {
+        final obj = value.obj(key);
+        final nested = _nestedFormattedText(obj ?? value[key]);
+        if (nested.isNotEmpty) return nested;
+      }
+      for (final entry in value.entries) {
+        if (entry.key == '@type') continue;
+        final nested = _nestedFormattedText(entry.value);
+        if (nested.isNotEmpty) return nested;
+      }
+    } else if (value is List) {
+      for (final item in value) {
+        final nested = _nestedFormattedText(item);
+        if (nested.isNotEmpty) return nested;
+      }
+    } else if (value is String) {
+      final text = value.trim();
+      if (text.isNotEmpty && !text.startsWith('message')) return text;
+    }
+    return '';
+  }
+
+  static bool _isRichTextType(String? type) {
+    return type == 'textEmpty' ||
+        type == 'textPlain' ||
+        type == 'textBold' ||
+        type == 'textItalic' ||
+        type == 'textUnderline' ||
+        type == 'textStrike' ||
+        type == 'textFixed' ||
+        type == 'textUrl' ||
+        type == 'textEmail' ||
+        type == 'textConcat' ||
+        type == 'textSubscript' ||
+        type == 'textSuperscript' ||
+        type == 'textMarked' ||
+        type == 'textPhone' ||
+        type == 'textImage' ||
+        type == 'textAnchor' ||
+        (type?.startsWith('richText') ?? false) ||
+        type == 'richTexts';
+  }
+
+  static const _serviceTypes = {
+    'messageBasicGroupChatCreate',
+    'messageSupergroupChatCreate',
+    'messageChatChangeTitle',
+    'messageChatChangePhoto',
+    'messageChatDeletePhoto',
+    'messageChatAddMembers',
+    'messageChatJoinByLink',
+    'messageChatJoinByRequest',
+    'messageChatDeleteMember',
+    'messageChatUpgradeTo',
+    'messageChatUpgradeFrom',
+    'messagePinMessage',
+    'messagePaidMessagePriceChanged',
+    'messageDirectMessagePriceChanged',
+    'messageContactRegistered',
+    'messageChatSetBackground',
+    'messageChatSetTheme',
+    'messageChatHasProtectedContentToggled',
+    'messageCustomServiceAction',
+    'messageChatSetMessageAutoDeleteTime',
+    'messageVideoChatStarted',
+    'messageVideoChatEnded',
+    'messageForumTopicCreated',
+    'messageForumTopicEdited',
+    'messageForumTopicIsClosedToggled',
+    'messageChatBoost',
+    'messageChatAddedToCommunity',
+    'messageChatRemovedFromCommunity',
+  };
+
+  static bool isServiceContent(String? type) =>
+      type != null && _serviceTypes.contains(type);
+
+  static String serviceText(Map<String, dynamic>? content) {
+    switch (content?.type) {
+      case 'messageContactRegistered':
+        return AppStrings.t(AppStringKeys.tdMessageUserJoinedTelegram);
+      case 'messageChatChangeTitle':
+        return AppStrings.t(AppStringKeys.tdMessageGroupNameChanged, {
+          'value1': content?.str('title') ?? '',
+        });
+      case 'messageChatChangePhoto':
+        return AppStrings.t(AppStringKeys.tdMessageGroupPhotoUpdated);
+      case 'messageChatDeletePhoto':
+        return AppStrings.t(AppStringKeys.tdMessageGroupPhotoDeleted);
+      case 'messageChatAddMembers':
+        return AppStrings.t(AppStringKeys.tdMessageNewMemberJoinedGroup);
+      case 'messageChatJoinByLink':
+        return AppStrings.t(AppStringKeys.tdMessageJoinedGroupByLink);
+      case 'messageChatJoinByRequest':
+        return AppStrings.t(AppStringKeys.groupManagementLogJoinedGroup);
+      case 'messageChatDeleteMember':
+        return AppStrings.t(AppStringKeys.tdMessageMemberLeftGroup);
+      case 'messagePinMessage':
+        return AppStrings.t(AppStringKeys.tdMessageMessagePinned);
+      case 'messageCustomServiceAction':
+        return _cleanString(content?.str('text')) ??
+            AppStrings.t(AppStringKeys.tdMessageSystemMessage);
+      case 'messagePaidMessagePriceChanged':
+      case 'messageDirectMessagePriceChanged':
+        final stars =
+            content?.integer('paid_message_star_count') ??
+            content?.integer('star_count') ??
+            content?.integer('price') ??
+            0;
+        return stars > 0
+            ? AppStrings.t(AppStringKeys.tdMessagePaidMessagePriceChanged, {
+                'value1': stars,
+              })
+            : AppStrings.t(AppStringKeys.tdMessagePaidMessagesDisabled);
+      case 'messageChatSetMessageAutoDeleteTime':
+        final seconds =
+            content?.obj('message_auto_delete_time')?.integer('time') ??
+            content?.integer('message_auto_delete_time') ??
+            content?.integer('time') ??
+            content?.integer('auto_delete_time') ??
+            0;
+        return seconds > 0
+            ? AppStrings.t(AppStringKeys.tdMessageAutoDeleteTimerChanged, {
+                'value1': formatDuration(seconds),
+              })
+            : AppStrings.t(AppStringKeys.tdMessageAutoDeleteTimerDisabled);
+      case 'messageBasicGroupChatCreate':
+      case 'messageSupergroupChatCreate':
+        return AppStrings.t(AppStringKeys.tdMessageGroupCreated);
+      case 'messageVideoChatStarted':
+        return AppStrings.t(AppStringKeys.tdMessageGroupVideoChatStarted);
+      case 'messageVideoChatEnded':
+        return AppStrings.t(AppStringKeys.tdMessageGroupVideoChatEnded);
+      case 'messageForumTopicCreated':
+        return AppStrings.t(AppStringKeys.groupManagementLogCreatedTopic);
+      case 'messageForumTopicEdited':
+        return AppStrings.t(AppStringKeys.groupManagementLogEditedTopic);
+      case 'messageForumTopicIsClosedToggled':
+        return content?.boolean('is_closed') == true
+            ? AppStrings.t(AppStringKeys.groupManagementLogClosedTopic)
+            : AppStrings.t(AppStringKeys.groupManagementLogReopenedTopic);
+      case 'messageChatBoost':
+        return AppStrings.t(AppStringKeys.tdMessageBoostedGroup);
+      case 'messageChatAddedToCommunity':
+        return AppStrings.t(AppStringKeys.communityChatAddedService);
+      case 'messageChatRemovedFromCommunity':
+        return AppStrings.t(AppStringKeys.communityChatRemovedService);
+      case 'messageChatSetBackground':
+        return AppStrings.t(AppStringKeys.chatWallpaperChanged);
+      case 'messageChatSetTheme':
+        return AppStrings.t(AppStringKeys.chatThemeChanged);
+      default:
+        return AppStrings.t(AppStringKeys.tdMessageSystemMessage);
+    }
+  }
+
+  static List<int> serviceUserIds(
+    Map<String, dynamic>? content,
+    int? senderId,
+  ) {
+    switch (content?.type) {
+      case 'messageChatAddMembers':
+        return content?.int64Array('member_user_ids') ??
+            content?.int64Array('user_ids') ??
+            const <int>[];
+      case 'messageChatJoinByLink':
+      case 'messageChatJoinByRequest':
+      case 'messageChatBoost':
+      case 'messageChatAddedToCommunity':
+      case 'messageChatRemovedFromCommunity':
+        return senderId != null && senderId > 0 ? [senderId] : const <int>[];
+      case 'messageChatDeleteMember':
+        final userId = content?.int64('user_id');
+        return userId != null && userId > 0 ? [userId] : const <int>[];
+      default:
+        return const <int>[];
+    }
+  }
+
+  static String formatDuration(int seconds) {
+    if (seconds <= 0) {
+      return AppStrings.t(AppStringKeys.chatInfoAutoDeleteOff);
+    }
+    if (seconds % 86400 == 0) {
+      final days = seconds ~/ 86400;
+      return days == 1
+          ? AppStrings.t(AppStringKeys.chatInfoAutoDeleteOneDay)
+          : AppStrings.t(AppStringKeys.tdMessageDaysDuration, {'value1': days});
+    }
+    if (seconds % 3600 == 0) {
+      final hours = seconds ~/ 3600;
+      return AppStrings.t(AppStringKeys.tdMessageHoursDuration, {
+        'value1': hours,
+      });
+    }
+    if (seconds % 60 == 0) {
+      final minutes = seconds ~/ 60;
+      return AppStrings.t(AppStringKeys.tdMessageMinutesDuration, {
+        'value1': minutes,
+      });
+    }
+    return AppStrings.t(AppStringKeys.tdMessageSecondsDuration, {
+      'value1': seconds,
+    });
+  }
+
+  // MARK: Files
+
+  static TdFileRef? smallPhoto(Map<String, dynamic>? photoInfo) {
+    if (photoInfo == null) return null;
+    final thumb = decodeMiniThumb(photoInfo.obj('minithumbnail'));
+    final small = photoInfo.obj('small');
+    final id = small?.integer('id');
+    if (small == null || id == null) return null;
+    final ref = fileRef(small, miniThumb: thumb);
+    if (ref == null) return null;
+    return TdFileRef(
+      id: ref.id,
+      localPath: ref.localPath,
+      miniThumb: ref.miniThumb,
+      thumbnail: ref.thumbnail,
+      hasAnimation: photoInfo.boolean('has_animation') ?? false,
+      photoId: photoInfo.int64('id'),
+    );
+  }
+
+  static TdFileRef? fileRef(
+    Map<String, dynamic>? file, {
+    String? fileName,
+    String? mimeType,
+    Uint8List? miniThumb,
+    TdFileRef? thumbnail,
+  }) {
+    final id = file?.integer('id');
+    if (file == null || id == null) return null;
+    final normalizedThumbnail = thumbnail?.id == id ? null : thumbnail;
+    final local = file.obj('local');
+    // TDLib exposes `local.path` as soon as any prefix/range exists. That path
+    // is not a decodable whole file until the completion bit is set; treating
+    // it as an outgoing/local source bypasses TdFileCenter's download waiter
+    // and can leave message media displaying a permanently partial image.
+    final completedLocalPath =
+        local?.boolean('is_downloading_completed') == true
+        ? local?.str('path')
+        : null;
+    return TdFileRef(
+      id: id,
+      localPath: completedLocalPath,
+      fileName: fileName,
+      mimeType: mimeType,
+      miniThumb: miniThumb,
+      thumbnail: normalizedThumbnail,
+    );
+  }
+
+  /// The byte size TDLib knows for a file: `size` once the real value is known,
+  /// otherwise the server's estimate.
+  static int? _fileSize(Map<String, dynamic>? file) {
+    final size = file?.integer('size') ?? 0;
+    if (size > 0) return size;
+    final expected = file?.integer('expected_size') ?? 0;
+    return expected > 0 ? expected : null;
+  }
+
+  static Map<String, dynamic> bestPhotoSize(List<Map<String, dynamic>> sizes) {
+    return sizes.reduce((a, b) => _photoArea(a) >= _photoArea(b) ? a : b);
+  }
+
+  static Map<String, dynamic>? photoThumbnailSize(
+    List<Map<String, dynamic>> sizes,
+    Map<String, dynamic> best,
+  ) {
+    final candidates =
+        sizes
+            .where((size) => size.obj('photo')?.integer('id') != null)
+            .where(
+              (size) =>
+                  size.obj('photo')?.integer('id') !=
+                  best.obj('photo')?.integer('id'),
+            )
+            .toList()
+          ..sort((a, b) => _photoArea(a).compareTo(_photoArea(b)));
+    if (candidates.isEmpty) return null;
+
+    Map<String, dynamic>? preferred;
+    for (final candidate in candidates) {
+      final longestSide = [
+        candidate.integer('width') ?? 0,
+        candidate.integer('height') ?? 0,
+      ].reduce((a, b) => a > b ? a : b);
+      if (longestSide <= 640) preferred = candidate;
+    }
+    return preferred ?? candidates.first;
+  }
+
+  static int _photoArea(Map<String, dynamic> size) {
+    final width = size.integer('width') ?? 0;
+    final height = size.integer('height') ?? 0;
+    return width * height;
+  }
+
+  /// MemoryImage's cache key is the byte list's identity, so a fresh decode per
+  /// parse re-decodes the same thumbnail and burns an ImageCache slot that then
+  /// evicts a genuinely expensive photo. Same base64 in, same instance out.
+  static final Map<String, Uint8List> _miniThumbs = {};
+  static const _maxMiniThumbs = 128;
+
+  static Uint8List? decodeMiniThumb(Map<String, dynamic>? mini) {
+    final b64 = mini?.str('data');
+    if (b64 == null) return null;
+    final interned = _miniThumbs[b64];
+    if (interned != null) return interned;
+    try {
+      final bytes = base64Decode(b64);
+      if (_miniThumbs.length >= _maxMiniThumbs) {
+        _miniThumbs.remove(_miniThumbs.keys.first);
+      }
+      _miniThumbs[b64] = bytes;
+      return bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // MARK: Users
+
+  static String userName(Map<String, dynamic> user) {
+    final first = user.str('first_name') ?? '';
+    final last = user.str('last_name') ?? '';
+    final full = [first, last].where((s) => s.isNotEmpty).join(' ');
+    if (full.isNotEmpty) return full;
+    final usernames = activeUsernames(user);
+    if (usernames.isNotEmpty) return '@${usernames.first}';
+    return AppStrings.t(AppStringKeys.chatUserFallbackName, {
+      'value1': user.int64('id') ?? 0,
+    });
+  }
+
+  /// Enabled usernames in TDLib's display-priority order.
+  ///
+  /// `active_usernames` includes enabled collectible usernames and defines the
+  /// primary username as its first entry. Older/incomplete payloads may omit
+  /// that array, so only then do we fall back to `editable_username`.
+  static List<String> activeUsernames(Map<String, dynamic> user) {
+    final usernames = user.obj('usernames');
+    if (usernames == null) return const [];
+
+    final active = usernames['active_usernames'];
+    final candidates = active is List
+        ? active.whereType<String>()
+        : <String>[
+            if ((usernames.str('editable_username') ?? '').isNotEmpty)
+              usernames.str('editable_username')!,
+          ];
+    final result = <String>[];
+    final seen = <String>{};
+    for (final candidate in candidates) {
+      final normalized = candidate.trim().replaceFirst(RegExp(r'^@+'), '');
+      if (normalized.isEmpty || !seen.add(normalized.toLowerCase())) continue;
+      result.add(normalized);
+    }
+    return List.unmodifiable(result);
+  }
+
+  /// The custom emoji that represents a TDLib `emojiStatus` in compact UI.
+  ///
+  /// Regular statuses expose `custom_emoji_id`, while upgraded gifts expose
+  /// their display model through `model_custom_emoji_id`.
+  static int emojiStatusCustomEmojiId(Map<String, dynamic>? emojiStatus) {
+    final type = emojiStatus?.obj('type');
+    return type?.int64('custom_emoji_id') ??
+        type?.int64('model_custom_emoji_id') ??
+        emojiStatus?.int64('custom_emoji_id') ??
+        emojiStatus?.int64('model_custom_emoji_id') ??
+        0;
+  }
+
+  static final _nonDigitsRegExp = RegExp(r'\D');
+
+  /// Formats a raw TDLib phone number (digits, no +) to international form via
+  /// libphonenumber metadata (e.g. `+61 412 345 678`). Falls back to `+<digits>`.
+  static String formatPhone(String? raw) {
+    final d = (raw ?? '').replaceAll(_nonDigitsRegExp, '');
+    if (d.isEmpty) return '';
+    try {
+      final util = PhoneNumberUtil.instance;
+      final number = util.parse('+$d', null);
+      return util.format(number, PhoneNumberFormat.international);
+    } catch (_) {
+      return '+$d';
+    }
+  }
+
+  static String userStatus(Map<String, dynamic> user) {
+    switch (user.obj('status')?.type) {
+      case 'userStatusOnline':
+        return AppStrings.t(AppStringKeys.presenceOnline);
+      case 'userStatusRecently':
+        return AppStrings.t(AppStringKeys.presenceLastSeenRecently);
+      case 'userStatusOffline':
+        return _lastOnlineText(user.obj('status')?.integer('was_online') ?? 0);
+      case 'userStatusLastWeek':
+        return AppStrings.t(AppStringKeys.presenceLastSeenWithinWeek);
+      case 'userStatusLastMonth':
+        return AppStrings.t(AppStringKeys.presenceLastSeenWithinMonth);
+      default:
+        return '';
+    }
+  }
+
+  static bool isUserOnline(Map<String, dynamic> user) =>
+      user.obj('status')?.type == 'userStatusOnline';
+
+  static String _lastOnlineText(int unixSeconds) {
+    if (unixSeconds <= 0) {
+      return AppStrings.t(AppStringKeys.tdMessageLastSeenUnknown);
+    }
+    final time = DateTime.fromMillisecondsSinceEpoch(
+      unixSeconds * 1000,
+    ).toLocal();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(time.year, time.month, time.day);
+    final hh = time.hour.toString().padLeft(2, '0');
+    final mm = time.minute.toString().padLeft(2, '0');
+    if (day == today) {
+      return AppStrings.t(AppStringKeys.tdMessageLastSeenTodayTime, {
+        'value1': hh,
+        'value2': mm,
+      });
+    }
+    if (day == today.subtract(const Duration(days: 1))) {
+      return AppStrings.t(AppStringKeys.tdMessageLastSeenYesterdayTime, {
+        'value1': hh,
+        'value2': mm,
+      });
+    }
+    if (time.year == now.year) {
+      return AppStrings.t(AppStringKeys.tdMessageLastSeenMonthDay, {
+        'value1': time.month,
+        'value2': time.day,
+      });
+    }
+    return AppStrings.t(AppStringKeys.tdMessageLastSeenYearMonthDay, {
+      'value1': time.year,
+      'value2': time.month,
+      'value3': time.day,
+    });
+  }
+}
+
+/// Tuple-equivalent for [TDParse.mediaAttachment].
+class MediaAttachment {
+  const MediaAttachment({
+    this.image,
+    this.width,
+    this.height,
+    this.document,
+    this.music,
+    this.animated,
+    this.videoSticker,
+    this.video,
+    this.videoDuration,
+    this.videoFileSize,
+    this.stickerFileId,
+    this.stickerSetId,
+    this.isAnimatedEmoji = false,
+  });
+  final TdFileRef? image;
+  final int? width;
+  final int? height;
+  final MessageDocument? document;
+  final MessageMusic? music;
+  final TdFileRef? animated; // .tgs Lottie sticker
+  final TdFileRef? videoSticker; // .webm video sticker
+  final TdFileRef? video; // playable video file (messageVideo)
+  final int? videoDuration; // seconds
+  final int? videoFileSize; // bytes, for the inline autoplay budget
+  final int? stickerFileId; // any sticker's file id (for "add to favorites")
+  final int? stickerSetId; // the sticker's set id (for 表情详情)
+  final bool isAnimatedEmoji; // single-emoji message (messageAnimatedEmoji)
+}

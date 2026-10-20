@@ -1,0 +1,6747 @@
+//
+//  chat_view_model.dart
+//
+//  Conversation view model. Opens a chat, loads history, and keeps the message
+//  list live by folding TDLib updates. For groups/channels it resolves each
+//  incoming message's sender name + photo + role through a small cache so
+//  bubbles can show "who said what". Port of the Swift `ChatViewModel`.
+//
+
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
+import 'package:handy/l10n/app_localizations.dart';
+import 'package:handy/notifications/scope_notification_settings.dart';
+
+import '../notifications/notification_settings_payload.dart';
+import '../settings/blocked_user_service.dart';
+import '../settings/hidden_sender_store.dart';
+import '../settings/keyword_blocker.dart';
+import '../tdlib/json_helpers.dart';
+import '../tdlib/td_client.dart';
+import '../tdlib/td_models.dart';
+import '../tdlib/td_requests.dart';
+import '../tdlib/td_user_index.dart';
+import 'chat_auto_scroll_policy.dart';
+import 'chat_first_contact_info.dart';
+import 'chat_message_merge.dart';
+import 'chat_open_performance.dart';
+import 'chat_send_failure.dart';
+import 'chat_unread_progress.dart';
+import 'checklist_composer_view.dart';
+import 'checklist_service.dart';
+import 'forum_topic_transcript.dart';
+import 'forward_options.dart';
+import 'gif_item.dart';
+import 'message_reaction_availability.dart';
+import 'message_send_options.dart';
+import 'message_text_quote.dart';
+import 'outgoing_attachment.dart';
+import 'poll_composer_view.dart';
+import 'quick_reaction_choice.dart';
+import 'secret_chat_service.dart';
+import 'sponsored_messages_cache.dart';
+import 'sticker_item.dart';
+import 'telegram_ai_service.dart';
+
+typedef MessageTranslationResult = ({
+  String text,
+  List<MessageTextEntity> entities,
+  String languageCode,
+});
+
+@visibleForTesting
+String resolvedCommunityServiceText({
+  required String contentType,
+  required String actorName,
+  String communityName = '',
+}) {
+  if (contentType == 'messageChatAddedToCommunity' &&
+      actorName.isNotEmpty &&
+      communityName.isNotEmpty) {
+    return AppStrings.t(AppStringKeys.communityChatAddedByService, {
+      'value1': actorName,
+      'value2': communityName,
+    });
+  }
+  if (contentType == 'messageChatRemovedFromCommunity' &&
+      actorName.isNotEmpty) {
+    return AppStrings.t(AppStringKeys.communityChatRemovedByService, {
+      'value1': actorName,
+    });
+  }
+  return AppStrings.t(
+    contentType == 'messageChatRemovedFromCommunity'
+        ? AppStringKeys.communityChatRemovedService
+        : AppStringKeys.communityChatAddedService,
+  );
+}
+
+class _SenderInfo {
+  _SenderInfo(
+    this.name,
+    this.photo,
+    this.role,
+    this.title, {
+    this.isPremium = false,
+    this.accentColorId = -1,
+    this.emojiStatusId = 0,
+  });
+  final String name;
+  final TdFileRef? photo;
+  final MemberRole role;
+  final String? title;
+  final bool isPremium;
+  final int accentColorId;
+  final int emojiStatusId;
+}
+
+@visibleForTesting
+int unreadMentionCountAfterReading(int currentCount, int readCount) =>
+    math.max(0, currentCount - math.max(0, readCount));
+
+@visibleForTesting
+int unreadReactionCountAfterReading(int currentCount, int readCount) =>
+    math.max(0, currentCount - math.max(0, readCount));
+
+@visibleForTesting
+int? messageSendUpdateChatId(Map<String, dynamic> update) =>
+    update.int64('chat_id') ?? update.obj('message')?.int64('chat_id');
+
+/// Message contents whose attachment a live update can replace outright.
+const _mediaContentTypes = {
+  'messagePhoto',
+  'messageVideo',
+  'messageAnimation',
+  'messageVideoNote',
+  'messageVoiceNote',
+  'messageAudio',
+  'messageDocument',
+  'messageSticker',
+};
+
+/// Whether a live content update has to re-read the message from TDLib.
+///
+/// Editing a message can swap its media for a different kind entirely, and the
+/// in-place merge only ever hydrated an outgoing video — an edited message kept
+/// whatever attachment it had before, including a thumbnail path whose file
+/// TDLib had already deleted. A message that is still uploading keeps that
+/// merge instead, because only the local copy knows where its source file is.
+@visibleForTesting
+bool mediaContentUpdateNeedsRefresh({
+  required String? contentType,
+  required bool isSending,
+}) {
+  if (contentType == null || !_mediaContentTypes.contains(contentType)) {
+    return false;
+  }
+  return !(isSending && contentType == 'messageVideo');
+}
+
+class _MessageSendResult {
+  const _MessageSendResult.success() : error = null;
+  const _MessageSendResult.failure(this.error);
+
+  final TdError? error;
+}
+
+bool _isVoiceMessageRestrictionError(Object error) {
+  final normalized = error.toString().toUpperCase();
+  return normalized.contains('VOICE_MESSAGES_FORBIDDEN') ||
+      normalized.contains('CHAT_SEND_VOICES_FORBIDDEN');
+}
+
+class _ChatActionInfo {
+  const _ChatActionInfo(this.name, this.actionType);
+
+  final String name;
+  final String actionType;
+}
+
+class MessageSenderOption {
+  const MessageSenderOption({
+    required this.sender,
+    required this.id,
+    required this.title,
+    this.photo,
+    this.needsPremium = false,
+  });
+
+  final Map<String, dynamic> sender;
+  final int id;
+  final String title;
+  final TdFileRef? photo;
+  final bool needsPremium;
+
+  bool sameSender(Map<String, dynamic>? other) {
+    if (other == null || other.type != sender.type) return false;
+    return switch (sender.type) {
+      'messageSenderUser' => other.int64('user_id') == id,
+      'messageSenderChat' => other.int64('chat_id') == id,
+      _ => false,
+    };
+  }
+}
+
+@visibleForTesting
+MessageSenderOption? preferredMessageSenderOption(
+  List<MessageSenderOption> options, {
+  Map<String, dynamic>? preferredSender,
+  MessageSenderOption? current,
+}) {
+  if (current != null &&
+      options.any((option) => option.sameSender(current.sender))) {
+    return options.firstWhere((option) => option.sameSender(current.sender));
+  }
+  if (preferredSender != null) {
+    for (final option in options) {
+      if (option.sameSender(preferredSender)) return option;
+    }
+  }
+  return options.isEmpty ? null : options.first;
+}
+
+class MentionCandidate {
+  const MentionCandidate({
+    required this.userId,
+    required this.name,
+    this.username = '',
+    this.photo,
+  });
+
+  final int userId;
+  final String name;
+  final String username;
+  final TdFileRef? photo;
+}
+
+class MessageReactionUser {
+  const MessageReactionUser({
+    required this.senderId,
+    required this.title,
+    this.photo,
+    this.date = 0,
+  });
+
+  final int senderId;
+  final String title;
+  final TdFileRef? photo;
+  final int date;
+}
+
+class BotCommandOption {
+  const BotCommandOption({
+    required this.command,
+    required this.description,
+    this.botUserId = 0,
+    this.botName = '',
+    this.botUsername = '',
+    this.botPhoto,
+  });
+
+  final String command;
+  final String description;
+  final int botUserId;
+  final String botName;
+  final String botUsername;
+  final TdFileRef? botPhoto;
+
+  String get normalizedCommand =>
+      command.trim().replaceFirst(RegExp(r'^/+'), '');
+
+  String get displayCommand => '/$normalizedCommand';
+
+  String get targetedCommand {
+    final username = botUsername.trim().replaceFirst(RegExp(r'^@+'), '');
+    return username.isEmpty ? displayCommand : '$displayCommand@$username';
+  }
+}
+
+typedef BotCommandUserLoader =
+    Future<Map<String, dynamic>?> Function(int userId);
+
+@visibleForTesting
+Future<List<BotCommandOption>> resolveGroupBotCommandOptions(
+  Map<String, dynamic> fullInfo,
+  BotCommandUserLoader loadUser,
+) async {
+  final groups =
+      fullInfo.objects('bot_commands') ?? const <Map<String, dynamic>>[];
+  final resolved = await Future.wait(
+    groups.map((group) async {
+      final botUserId = group.int64('bot_user_id');
+      if (botUserId == null || botUserId <= 0) {
+        return const <BotCommandOption>[];
+      }
+
+      final user = await loadUser(botUserId);
+      final username = _primaryBotUsername(user);
+      final parsedName = user == null ? '' : TDParse.userName(user).trim();
+      final botName = parsedName.isNotEmpty
+          ? parsedName
+          : username.isNotEmpty
+          ? username
+          : 'Bot';
+      final photo = user == null
+          ? null
+          : TDParse.smallPhoto(user.obj('profile_photo'));
+
+      return (group.objects('commands') ?? const <Map<String, dynamic>>[])
+          .map(
+            (command) => BotCommandOption(
+              command: command.str('command') ?? '',
+              description: command.str('description') ?? '',
+              botUserId: botUserId,
+              botName: botName,
+              botUsername: username,
+              botPhoto: photo,
+            ),
+          )
+          .where((command) => command.normalizedCommand.isNotEmpty)
+          .toList(growable: false);
+    }),
+  );
+  return List.unmodifiable(resolved.expand((commands) => commands));
+}
+
+String _primaryBotUsername(Map<String, dynamic>? user) {
+  if (user == null) return '';
+  final usernames = user.obj('usernames');
+  final active = usernames?['active_usernames'];
+  if (active is List) {
+    for (final username in active.whereType<String>()) {
+      final normalized = username.trim().replaceFirst(RegExp(r'^@+'), '');
+      if (normalized.isNotEmpty) return normalized;
+    }
+  }
+  return (usernames?.str('editable_username') ?? '').trim().replaceFirst(
+    RegExp(r'^@+'),
+    '',
+  );
+}
+
+class BotMenuInfo {
+  const BotMenuInfo({required this.type, this.text = '', this.url = ''});
+
+  final String type;
+  final String text;
+  final String url;
+
+  bool get isWebApp => type == 'botMenuButton' && url.isNotEmpty;
+  bool get isLegacyMenuUrl => url.startsWith('menu://');
+  String get webAppUrl => isLegacyMenuUrl ? '' : url;
+  String get actionTitle => text.trim().isEmpty ? 'Open' : text.trim();
+  bool get opensCommands =>
+      type == 'botMenuButtonCommands' || type == 'botMenuButtonDefault';
+}
+
+class ForumTopicOption {
+  const ForumTopicOption({
+    required this.id,
+    required this.name,
+    this.iconCustomEmojiId = 0,
+    this.iconColor = 0,
+  });
+
+  final int id;
+  final String name;
+  final int iconCustomEmojiId;
+  final int iconColor;
+}
+
+class _DraftMention {
+  const _DraftMention({required this.text, required this.userId});
+
+  final String text;
+  final int userId;
+}
+
+class ChatViewModel extends ChangeNotifier {
+
+  ChatViewModel({
+    required this.chatId,
+    required String title,
+    required this.markReadOnOpen,
+    this.initialMessageId,
+    this.sessionAnchorMessageId,
+    this.sessionFallbackOpenAtLatest,
+    List<ChatMessage>? sessionMessages,
+    bool sessionAnchoredHistory = false,
+    ChatFirstContactInfo? sessionFirstContactInfo,
+    ChatMessage? seedMessage,
+    this.forumTopicId,
+  }) : _accountClientId = TdClient.shared.activeClientId,
+       _accountSlot = TdClient.shared.activeSlot,
+       peerTitle = title {
+    _historyAnchorMessageId = initialMessageId ?? sessionAnchorMessageId;
+    if (sessionMessages != null && sessionMessages.isNotEmpty) {
+      _allMessages = List<ChatMessage>.from(sessionMessages);
+      messages = List<ChatMessage>.from(sessionMessages);
+      _knownLatestMessageId = latestServerMessageId(sessionMessages);
+      anchoredHistory = sessionAnchoredHistory;
+      firstContactInfo = sessionFirstContactInfo;
+      initialLoaded = true;
+      _restoredFromSession = true;
+    } else if (seedMessage != null) {
+      _allMessages = [seedMessage];
+      messages = [seedMessage];
+    }
+  }
+
+  final int chatId;
+
+  /// When set, this transcript shows a single forum topic as an ordinary
+  /// chat: history, search, drafts, sends and live updates are scoped to it.
+  final int? forumTopicId;
+  bool get isForumTopicTranscript => (forumTopicId ?? 0) != 0;
+
+  Map<String, dynamic>? get _forumTopicRef => isForumTopicTranscript
+      ? {'@type': 'messageTopicForum', 'forum_topic_id': forumTopicId}
+      : null;
+
+  /// Whether [raw] (a TDLib `message`) belongs to this transcript.
+  bool _belongsToTranscript(Map<String, dynamic> raw) =>
+      !isForumTopicTranscript ||
+      rawMessageBelongsToForumTopic(raw, forumTopicId!);
+
+  /// Rewrites a chat-wide history request into its topic-scoped equivalent.
+  Map<String, dynamic> _scopedHistoryRequest(Map<String, dynamic> request) =>
+      isForumTopicTranscript
+      ? forumTopicHistoryRequest(request, forumTopicId!)
+      : request;
+
+  /// The topic's display name once loaded; empty for ordinary transcripts.
+  String forumTopicName = '';
+
+  Future<Map<String, dynamic>> _queryHistory(
+    Map<String, dynamic> request,
+  ) async {
+    final scoped = _scopedHistoryRequest(request);
+    if (scoped.type != 'getForumTopicHistory') return _client.query(scoped);
+    try {
+      return await _client.query(scoped);
+    } catch (_) {
+      return _client.query(forumTopicThreadHistoryRequest(scoped));
+    }
+  }
+
+  Future<Map<String, dynamic>?> _loadForumTopic() async {
+    try {
+      final topic = await _client.query({
+        '@type': 'getForumTopic',
+        'chat_id': chatId,
+        'forum_topic_id': forumTopicId,
+      });
+      forumTopicName = topic.obj('info')?.str('name') ?? forumTopicName;
+      return topic;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  final int? initialMessageId;
+  final int? sessionAnchorMessageId;
+  final bool? sessionFallbackOpenAtLatest;
+  final bool markReadOnOpen;
+  int? _historyAnchorMessageId;
+  int? get historyAnchorMessageId => _historyAnchorMessageId;
+
+  List<ChatMessage> messages = [];
+  List<ChatMessage> _allMessages = [];
+  // Lookup indexes over the two transcript lists, filled by the single pass in
+  // _applyKeywordFilter. Folding one update used to linear-scan the whole
+  // transcript several times (id lookups, sender patches); at a few thousand
+  // loaded messages that scanning dominated the incoming-update path.
+  final Map<int, ChatMessage> _messagesById = {};
+  final Map<int, ChatMessage> _allMessagesById = {};
+  final Map<int, List<ChatMessage>> _messagesBySenderId = {};
+  final Map<int, ValueNotifier<int>> _messageRevisionNotifiers = {};
+  final ValueNotifier<int> _headerRevisionNotifier = ValueNotifier<int>(0);
+  int _transcriptScanVisitsForTesting = 0;
+  bool _messageIndexesDirty = true;
+  // A pending send makes compareChatMessagesChronologically non-total, so the
+  // order-preserving shortcuts below only run while there are none.
+  int _pendingMessageCount = 0;
+  String peerTitle;
+  TdFileRef? peerPhoto;
+  ChatFirstContactInfo? firstContactInfo;
+  ChatKind? chatKind;
+  bool isGroup = false;
+  int memberCount = 0;
+  int? peerUserId; // private chat → call target
+  int? peerBasicGroupId;
+  int? peerSupergroupId;
+  String meName = AppStrings.t(AppStringKeys.chatMeLabel);
+  int? meId;
+  Set<String> meUsernames = const <String>{};
+  TdFileRef? mePhoto;
+  String draft = '';
+  String _draftFormattedText = '';
+  List<Map<String, dynamic>> _draftFormattedEntities = const [];
+  final List<_DraftMention> _draftMentions = [];
+  ChatMessage? _replyTo;
+  MessageTextQuote? _replyQuote;
+  ChatMessage? get replyTo => _replyTo;
+  set replyTo(ChatMessage? message) {
+    _replyTo = message;
+    _replyQuote = null;
+  }
+
+  MessageTextQuote? get replyQuote => _replyQuote;
+
+  /// The forum-topic destination for inline-bot and gif sends when this
+  /// transcript is scoped to one topic.
+  Map<String, dynamic>? get forumTopicSendRef => _forumTopicRef;
+
+  Map<String, dynamic>? get replyToInput => replyTo == null
+      ? null
+      : {
+          '@type': 'inputMessageReplyToMessage',
+          'message_id': replyTo!.id,
+          if (!isSecretChat && _replyQuote != null)
+            'quote': _replyQuote!.toInputJson(),
+        };
+  ChatMessage? editingMessage;
+  String? _draftBeforeEditing;
+  String _formattedDraftBeforeEditing = '';
+  List<Map<String, dynamic>> _entitiesBeforeEditing = const [];
+  List<_DraftMention> _mentionsBeforeEditing = const [];
+  ChatMessage? _replyBeforeEditing;
+  MessageTextQuote? _replyQuoteBeforeEditing;
+  List<MessageSenderOption> availableMessageSenders = const [];
+  MessageSenderOption? selectedMessageSender;
+  Map<String, dynamic>? _messageSenderFromChat;
+
+  // Live header state.
+  bool peerOnline = false;
+  String peerStatusText = '';
+  int lastReadOutboxId = 0; // outgoing messages with id <= this are read
+  int lastReadInboxId = 0; // incoming messages with id <= this are read
+  int unreadCount = 0; // unread incoming messages on entry (for the divider)
+  bool _didCaptureUnreadSummaryRange = false;
+  int unreadMentionCount = 0;
+  int unreadReactionCount = 0;
+  bool isMarkedUnread = false; // manual unread marker on the chat row
+  bool initialLoaded = false; // first history page (+ unread boundary) is in
+  bool anchoredHistory = false; // transcript is centered on an arbitrary target
+
+  // 群公告 / pinned message shown in a bar below the header.
+  ChatMessage? pinnedMessage;
+  List<ChatMessage> pinnedMessages = const [];
+  int pinnedMessageIndex = 0;
+  bool pinnedDismissed = false;
+
+  // Membership / send permission. Defaults assume a normal, joined, sendable
+  // chat; refined in _loadChatHeader once the chat type + member status load.
+  bool canSendMessages = true; // composer enabled
+  bool canSendVoiceNotes = true;
+  bool isMember = true; // gates 退出; false → join affordance
+  bool canJoin = false; // not a member but joinable (public super/channel/left)
+  bool joinByRequest = false; // joining needs approval → "申请加入"
+  bool joinRequested = false; // a join request was sent (awaiting approval)
+  bool isChannel = false; // broadcast channel (members can't post)
+  bool hasLinkedDiscussion = false;
+  bool isDirectMessagesGroup = false;
+  bool isAdministeredDirectMessagesGroup = false;
+  bool isMuted =
+      false; // notifications muted (channel subscribers get a toggle)
+  bool canDeleteMessagesBySender = false;
+  String sendDisabledReason = ''; // shown in the disabled composer bar
+  bool isPeerRestricted = false;
+  bool isPeerPornographicRestricted = false;
+  String peerRestrictionText = '';
+  bool hasProtectedContent = false;
+  bool _chatCanSend = true; // chat-wide default can_send_basic_messages
+  bool peerIsBot = false;
+  bool isSecretChat = false;
+  int businessBotUserId = 0;
+  String businessBotManageUrl = '';
+  bool businessBotPaused = false;
+  bool businessBotCanReply = false;
+  int? _secretChatId;
+  bool botStartSent = false;
+  BotMenuInfo? botMenu;
+  List<BotCommandOption> botCommands = const [];
+  bool isForum = false;
+  bool hasForumTabs = false;
+  bool supportsBotTopics = false;
+  bool get supportsTopics => isForum || supportsBotTopics;
+  bool forumTopicsLoading = false;
+  List<ForumTopicOption> forumTopics = const [];
+  int messageAutoDeleteTime = 0;
+  int paidMessageStarCount = 0;
+  bool peerRequiresPremiumOrContact = false;
+  bool peerIsUnavailable = false;
+
+  /// Loaded for channels and bot chats, but not yet rendered in the transcript.
+  SponsoredMessagesSnapshot? sponsoredMessages;
+
+  final TdClient _client = TdClient.shared;
+  final int _accountClientId;
+  final int _accountSlot;
+  int _groupBotCommandsGeneration = 0;
+  late final TelegramAiService telegramAi = TelegramAiService(client: _client);
+  TelegramAiCapabilities? aiCapabilities;
+  static final SponsoredMessagesCache _sponsoredMessagesCache =
+      SponsoredMessagesCache();
+  StreamSubscription? _sub;
+  final ChatLiveMessageBuffer _liveIncomingMessages = ChatLiveMessageBuffer();
+  bool _isLoadingOlder = false;
+  bool _isLoadingNewer = false;
+  final Set<int> _newerHistoryDeletedMessageIds = {};
+  bool _hasOlderHistory = true;
+  int? _pendingScrollToId;
+  int? _lastForcedReadMessageId;
+  bool _markReadInFlight = false;
+  bool _restoredFromSession = false;
+  bool _chatReadStateLoaded = false;
+  bool get chatReadStateLoaded => _chatReadStateLoaded;
+  int _chatReadStateRevision = 0;
+  int get chatReadStateRevision => _chatReadStateRevision;
+  int _chatReadInboxRevision = 0;
+  bool _historyReachesLatest = false;
+  bool get historyReachesLatest => _historyReachesLatest;
+  int _knownLatestMessageId = 0;
+  int get knownLatestMessageId => _knownLatestMessageId;
+  bool _latestHistoryLoadInFlight = false;
+  final Map<int, ChatMessage> _latestHistoryLiveArrivals = {};
+  final Set<int> _latestHistoryDeletedMessageIds = {};
+  bool _latestHistoryLoadInvalidated = false;
+  int _historyWindowGeneration = 0;
+  int _historyWindowRevision = 0;
+  int get historyWindowRevision => _historyWindowRevision;
+  int _historyWindowInvalidationRevision = 0;
+  int get historyWindowInvalidationRevision =>
+      _historyWindowInvalidationRevision;
+  final Set<int> _blockedReadIds = {};
+  final Set<int> _messagePropertiesLoading = {};
+  final Map<int, bool> _speechRecognitionEligibility = {};
+  final Set<int> _locallyViewedMentionIds = {};
+  final Set<int> _locallyViewedReactionIds = {};
+  final Set<int> _blockedSenderIds = {};
+  final Set<int> _discardedPendingMessageIds = {};
+  final Set<int> _settledPendingMessageIds = {};
+  final Set<int> _acknowledgedPendingMessageIds = {};
+  final Map<int, Completer<void>> _messageSendWaiters = {};
+  final Map<int, _MessageSendResult> _recentMessageSendResults = {};
+  ChatSendFailure? _pendingSendFailure;
+  String? _lastSendFailureKey;
+  int _lastSendFailureAtMilliseconds = 0;
+  Future<void>? _privateMessageInfoLoad;
+  int? _privateMessageInfoUserId;
+  bool _privateMessageInfoLoaded = false;
+
+  // Transient chat actions: sender ids currently acting, auto-cleared shortly.
+  final Map<int, _ChatActionInfo> _chatActions = {};
+  Timer? _typingTimer;
+  Timer? _draftSaveTimer;
+  Timer? _coalescedNotifyTimer;
+  String? _lastSavedDraftText;
+
+  /// Header title: profile shows the member count in parentheses after a group name.
+  String get headerTitle =>
+      (isGroup && memberCount > 0) ? '$peerTitle($memberCount)' : peerTitle;
+
+  /// Subtitle under the title: online/last-seen plus transient chat actions.
+  /// Group member count lives in the title, not here.
+  String get subtitle {
+    final base = isGroup
+        ? ''
+        : (peerOnline
+              ? AppStrings.t(AppStringKeys.presenceOnline)
+              : peerStatusText);
+    final action = _chatActionSubtitle;
+    if (base.isEmpty) return action;
+    if (action.isEmpty) return base;
+    return '$base · $action';
+  }
+
+  /// The header title for this transcript: the topic's name when a forum topic
+  /// is shown as an ordinary chat, otherwise the peer title.
+  String get displayTitle =>
+      forumTopicName.trim().isNotEmpty ? forumTopicName.trim() : peerTitle;
+
+  bool get hasActiveChatAction => _chatActions.isNotEmpty;
+
+  bool isRead(ChatMessage m) => isOutgoingServerMessageRead(
+    message: m,
+    lastReadOutboxId: lastReadOutboxId,
+  );
+  bool get canChooseMessageSender => availableMessageSenders.length > 1;
+  bool get canForwardContent => !hasProtectedContent;
+  bool get canLoadOlder =>
+      !_isLoadingOlder &&
+      !_latestHistoryLoadInFlight &&
+      _allMessages.isNotEmpty &&
+      _hasOlderHistory;
+  bool get isLoadingOlder => _isLoadingOlder;
+  bool get canLoadNewer =>
+      !_chatOpenWorkIsStale &&
+      !_isLoadingNewer &&
+      !_latestHistoryLoadInFlight &&
+      !_historyReachesLatest &&
+      latestServerMessageId(_allMessages) > 0;
+  bool get isLoadingLatest => _latestHistoryLoadInFlight;
+  bool get hasOlderHistory => _hasOlderHistory;
+  int get _oldestServerMessageId {
+    for (final message in _allMessages) {
+      if (!isPendingChatMessage(message) && message.id > 0) return message.id;
+    }
+    return 0;
+  }
+
+  bool get requiresPaidMessage => paidMessageStarCount > 0;
+  bool get canUseAiComposition =>
+      aiCapabilities?.compositionSupported == true && !isSecretChat;
+  bool get canUseAiSummary => aiCapabilities?.summarySupported == true;
+  bool get canUseSpeechRecognition =>
+      aiCapabilities?.transcriptionSupported == true;
+  bool get canSendWhenOnline => !isGroup && !peerIsBot;
+  List<AvailableMessageEffect> availableMessageEffects = const [];
+  MessageSendConfiguration? _nextSendConfiguration;
+  String get inputPlaceholder =>
+      AppStrings.t(AppStringKeys.chatMessageInputPlaceholder);
+
+  final Map<int, _SenderInfo> _senderCache = {};
+  final Set<int> _resolvingSenders = {};
+  final Set<int> _resolvedSenderDetails = {};
+  bool _isDisposed = false;
+
+  bool get _chatOpenWorkIsStale => chatOpenWorkIsStale(
+    disposed: _isDisposed,
+    openingClientId: _accountClientId,
+    openingAccountSlot: _accountSlot,
+    activeClientId: _client.activeClientId,
+    activeAccountSlot: _client.activeSlot,
+  );
+
+  int _composerRevision = 0;
+  int _fullViewRevision = 0;
+
+  /// Bumped by every notification except the handful proven not to touch
+  /// anything the composer renders, so the input bar can skip those rebuilds.
+  /// Bumping is the default: a path that forgets to opt out stays correct.
+  int get composerRevision => _composerRevision;
+
+  /// Changes only when a notification can affect ChatView's shell, transcript
+  /// boundaries, scrolling, or overlays. Header-only and in-place bubble
+  /// updates keep this stable so ChatView can skip its O(n) synchronization.
+  int get fullViewRevision => _fullViewRevision;
+
+  ValueListenable<int> get headerRevisionListenable => _headerRevisionNotifier;
+
+  ValueListenable<int> messageRevisionListenable(int messageId) =>
+      _messageRevisionNotifiers.putIfAbsent(
+        messageId,
+        () => ValueNotifier<int>(0),
+      );
+
+  @visibleForTesting
+  int get transcriptScanVisitsForTesting => _transcriptScanVisitsForTesting;
+
+  @visibleForTesting
+  int get messageRevisionNotifierCountForTesting =>
+      _messageRevisionNotifiers.length;
+
+  @visibleForTesting
+  void resetTranscriptScanVisitsForTesting() {
+    _transcriptScanVisitsForTesting = 0;
+  }
+
+  @visibleForTesting
+  void primeMessageIndexesForTesting() {
+    _ensureMessageIndexes();
+  }
+
+  bool _recordTranscriptScanVisitForTesting() {
+    _transcriptScanVisitsForTesting++;
+    return true;
+  }
+
+  @override
+  void notifyListeners() {
+    if (_isDisposed) return;
+    _composerRevision++;
+    _fullViewRevision++;
+    super.notifyListeners();
+  }
+
+  /// Notifies without bumping [composerRevision]. Only for state no composer
+  /// widget reads — the typing subtitle and the peer's online status, both of
+  /// which belong to the header.
+  void _notifyComposerNeutral() {
+    if (_isDisposed) return;
+    _headerRevisionNotifier.value++;
+    super.notifyListeners();
+  }
+
+  /// Rebuilds only materialized bubbles for [messageIds]. The regular model
+  /// notification is deliberately retained: ChatInputBar uses it to invalidate
+  /// AI context and preserves its focused revision-rebuild policy.
+  void _notifyLocalizedMessages(Iterable<int> messageIds) {
+    if (_isDisposed) return;
+    if (!_bumpMaterializedMessageRevisions(messageIds)) return;
+    _composerRevision++;
+    super.notifyListeners();
+  }
+
+  /// Refreshes materialized bubbles while retaining ChatView's full sync for
+  /// cross-message and shell dependencies such as translation and overlays.
+  void _notifyMessagesWithFullViewSync(Iterable<int> messageIds) {
+    if (_isDisposed) return;
+    if (!_bumpMaterializedMessageRevisions(messageIds)) return;
+    notifyListeners();
+  }
+
+  bool _bumpMaterializedMessageRevisions(Iterable<int> messageIds) {
+    var changed = false;
+    for (final messageId in messageIds.toSet()) {
+      final notifier = _messageRevisionNotifiers[messageId];
+      if (notifier != null) notifier.value++;
+      changed = true;
+    }
+    return changed;
+  }
+
+  int? consumePendingScrollToId() {
+    final id = _pendingScrollToId;
+    _pendingScrollToId = null;
+    return id;
+  }
+
+  List<int> consumeLiveIncomingMessageIds() => _liveIncomingMessages.takeAll();
+
+  ChatSendFailure? consumeSendFailure() {
+    final failure = _pendingSendFailure;
+    _pendingSendFailure = null;
+    return failure;
+  }
+
+  void useNextSendConfiguration(MessageSendConfiguration configuration) {
+    _nextSendConfiguration = configuration;
+  }
+
+  Map<String, dynamic> _withPaidMessageOptions(
+    Map<String, dynamic> request, {
+    MessageSendConfiguration? sendConfiguration,
+    bool consumePendingConfiguration = true,
+  }) {
+    final count = paidMessageStarCount;
+    final pending = sendConfiguration ?? _nextSendConfiguration;
+    if (consumePendingConfiguration && sendConfiguration == null) {
+      _nextSendConfiguration = null;
+    }
+    final topic = _forumTopicRef;
+    if (topic != null && request.int64('chat_id') == chatId) {
+      request.remove('message_thread_id');
+      request['topic_id'] = topic;
+    }
+    final existing = request.obj('options') ?? const <String, dynamic>{};
+    if (count > 0 || pending != null || existing.isNotEmpty) {
+      request['options'] = {
+        if (pending != null)
+          ...pending.messageSendOptions(paidStarCount: count),
+        ...existing,
+        '@type': 'messageSendOptions',
+        if (count > 0) 'paid_message_star_count': count,
+      };
+    }
+    return request;
+  }
+
+  void _setPaidMessageStarCount(int count, {bool notify = true}) {
+    final next = count < 0 ? 0 : count;
+    if (paidMessageStarCount == next) return;
+    paidMessageStarCount = next;
+    if (notify) notifyListeners();
+  }
+
+  Future<bool> prepareMessageSend() async {
+    if (!canSendMessages) return false;
+    final userId = peerUserId;
+    if (isGroup || isSecretChat || peerIsBot || userId == null) return true;
+    await _loadPrivatePaidMessageInfo(userId);
+    if (peerIsUnavailable) {
+      _publishSendFailure(ChatSendFailure.recipientUnavailable());
+      return false;
+    }
+    if (peerRequiresPremiumOrContact) {
+      _publishSendFailure(ChatSendFailure.premiumOrContactRequired());
+      return false;
+    }
+    return true;
+  }
+
+  Future<bool> _submitMessageRequest(Map<String, dynamic> request) async {
+    try {
+      await _client.query(_withPaidMessageOptions(request));
+      return true;
+    } catch (error) {
+      _publishSendFailure(
+        ChatSendFailure.fromError(
+          error,
+          paidMessageStarCount: paidMessageStarCount,
+        ),
+      );
+      return false;
+    }
+  }
+
+  void _submitMessageRequestWithoutWaiting(Map<String, dynamic> request) {
+    unawaited(_submitMessageRequest(request));
+  }
+
+  void _publishSendFailure(ChatSendFailure failure) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_lastSendFailureKey == failure.deduplicationKey &&
+        now - _lastSendFailureAtMilliseconds < 1500) {
+      return;
+    }
+    _lastSendFailureKey = failure.deduplicationKey;
+    _lastSendFailureAtMilliseconds = now;
+    _pendingSendFailure = failure;
+    notifyListeners();
+
+    if (failure.kind == ChatSendFailureKind.paidMessageRequired ||
+        failure.kind == ChatSendFailureKind.premiumRequired) {
+      final userId = peerUserId;
+      if (!isGroup && !isSecretChat && userId != null) {
+        unawaited(_loadPrivatePaidMessageInfo(userId, force: true));
+      }
+    }
+  }
+
+  // MARK: - Lifecycle
+
+  void onAppear() {
+    _client.send({'@type': 'openChat', 'chat_id': chatId});
+    _subscribeToUpdates();
+    KeywordBlocker.shared.removeListener(_applyKeywordFilter);
+    KeywordBlocker.shared.addListener(_applyKeywordFilter);
+    HiddenSenderStore.shared.removeListener(_applyKeywordFilter);
+    HiddenSenderStore.shared.addListener(_applyKeywordFilter);
+    () async {
+      unawaited(_loadMe());
+      unawaited(_loadAiCapabilities());
+      await _loadChatHeader();
+      if (_chatOpenWorkIsStale) return;
+      if (_restoredFromSession) {
+        unawaited(_discardStaleRestoredPendingMessages());
+        _resolveRichMessagesIfNeeded(messages);
+        _resolveSendersIfNeeded(messages);
+        _resolveRepliesIfNeeded(messages);
+        _resolveForwardsIfNeeded(messages);
+        _resolveServiceUsersIfNeeded(messages);
+        notifyListeners();
+        if (!anchoredHistory) {
+          unawaited(_hydrateRestoredLatestHistory());
+        }
+        unawaited(_loadAvailableMessageSenders());
+        return;
+      }
+      final target = initialMessageId;
+      if (target != null) {
+        await loadAroundMessage(target);
+        if (_chatOpenWorkIsStale) return;
+      } else if (sessionAnchorMessageId != null) {
+        var restored = await loadAroundMessage(
+          sessionAnchorMessageId!,
+          scrollToTarget: false,
+          onlyLocal: true,
+        );
+        if (_chatOpenWorkIsStale) return;
+        if (!restored) {
+          restored = await loadAroundMessage(
+            sessionAnchorMessageId!,
+            scrollToTarget: false,
+          );
+          if (_chatOpenWorkIsStale) return;
+        }
+        if (!restored) {
+          await _loadInitialHistory(
+            openAtLatest: sessionFallbackOpenAtLatest ?? markReadOnOpen,
+          );
+          if (_chatOpenWorkIsStale) return;
+        }
+      } else {
+        await _loadInitialHistory(openAtLatest: markReadOnOpen);
+        if (_chatOpenWorkIsStale) return;
+      }
+      initialLoaded = true;
+      notifyListeners();
+      unawaited(_loadAvailableMessageSenders());
+    }();
+  }
+
+  Future<void> _loadAiCapabilities() async {
+    try {
+      aiCapabilities = await telegramAi.capabilities();
+      notifyListeners();
+    } catch (_) {
+      // Capability discovery is optional. Unsupported servers keep all AI
+      // entry points hidden instead of exposing actions that will fail.
+    }
+  }
+
+  void ensureMessageCapabilities(ChatMessage message) {
+    if (message.contentType != 'messageVoiceNote' &&
+        message.contentType != 'messageVideoNote') {
+      return;
+    }
+    final cached = _speechRecognitionEligibility[message.id];
+    if (cached != null) {
+      message.canRecognizeSpeech = cached;
+      return;
+    }
+    if (!_messagePropertiesLoading.add(message.id)) return;
+    unawaited(_loadMessageCapabilities(message.id));
+  }
+
+  Future<void> _loadMessageCapabilities(int messageId) async {
+    try {
+      final properties = await _client.query({
+        '@type': 'getMessageProperties',
+        'chat_id': chatId,
+        'message_id': messageId,
+      });
+      final eligible = properties.boolean('can_recognize_speech') ?? false;
+      _speechRecognitionEligibility[messageId] = eligible;
+      for (final target in _messageRefs(messageId)) {
+        target.canRecognizeSpeech = eligible;
+      }
+      _notifyLocalizedMessages([messageId]);
+    } catch (_) {
+      _speechRecognitionEligibility[messageId] = false;
+    } finally {
+      _messagePropertiesLoading.remove(messageId);
+    }
+  }
+
+  Future<void> _loadMe() async {
+    try {
+      final me = await _client.query({'@type': 'getMe'});
+      meId = me.int64('id');
+      final name = TDParse.userName(me);
+      if (name.isNotEmpty) meName = name;
+      final usernames = me.obj('usernames');
+      final active = usernames?['active_usernames'];
+      final editable = usernames?.str('editable_username');
+      meUsernames = Set.unmodifiable({
+        if (active is List)
+          for (final username in active.whereType<String>())
+            if (username.trim().isNotEmpty)
+              username.trim().replaceFirst('@', '').toLowerCase(),
+        if (editable?.trim().isNotEmpty == true)
+          editable!.trim().replaceFirst('@', '').toLowerCase(),
+      });
+      mePhoto = TDParse.smallPhoto(me.obj('profile_photo'));
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _loadAvailableMessageSenders() async {
+    try {
+      final res = await _client.query({
+        '@type': 'getChatAvailableMessageSenders',
+        'chat_id': chatId,
+      });
+      final raw = res.objects('senders') ?? const <Map<String, dynamic>>[];
+      final loaded = <MessageSenderOption>[];
+      for (final item in raw) {
+        final sender = item.obj('sender');
+        if (sender == null) continue;
+        final option = await _messageSenderOption(
+          sender,
+          item.boolean('needs_premium') ?? false,
+        );
+        if (option != null) loaded.add(option);
+      }
+      availableMessageSenders = loaded;
+      selectedMessageSender = preferredMessageSenderOption(
+        loaded,
+        preferredSender: _messageSenderFromChat,
+        current: selectedMessageSender,
+      );
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<MessageSenderOption?> _messageSenderOption(
+    Map<String, dynamic> sender,
+    bool needsPremium,
+  ) async {
+    switch (sender.type) {
+      case 'messageSenderUser':
+        final userId = sender.int64('user_id');
+        if (userId == null) return null;
+        if (peerUserId == userId || userId > 0) {
+          try {
+            final user = await _client.query({
+              '@type': 'getUser',
+              'user_id': userId,
+            });
+            final name = TDParse.userName(user);
+            return MessageSenderOption(
+              sender: sender,
+              id: userId,
+              title: name.isEmpty ? meName : name,
+              photo: TDParse.smallPhoto(user.obj('profile_photo')),
+              needsPremium: needsPremium,
+            );
+          } catch (_) {}
+        }
+        return MessageSenderOption(
+          sender: sender,
+          id: userId,
+          title: meName,
+          photo: mePhoto,
+          needsPremium: needsPremium,
+        );
+      case 'messageSenderChat':
+        final senderChatId = sender.int64('chat_id');
+        if (senderChatId == null) return null;
+        try {
+          final chat = await _client.query({
+            '@type': 'getChat',
+            'chat_id': senderChatId,
+          });
+          return MessageSenderOption(
+            sender: sender,
+            id: senderChatId,
+            title: chat.str('title') ?? AppStrings.t(AppStringKeys.tabChannels),
+            photo: TDParse.smallPhoto(chat.obj('photo')),
+            needsPremium: needsPremium,
+          );
+        } catch (_) {
+          return MessageSenderOption(
+            sender: sender,
+            id: senderChatId,
+            title: AppStrings.t(AppStringKeys.tabChannels),
+            needsPremium: needsPremium,
+          );
+        }
+    }
+    return null;
+  }
+
+  Future<void> selectMessageSender(MessageSenderOption option) async {
+    final previous = selectedMessageSender;
+    selectedMessageSender = option;
+    _messageSenderFromChat = option.sender;
+    notifyListeners();
+    try {
+      await _client.query({
+        '@type': 'setChatMessageSender',
+        'chat_id': chatId,
+        'message_sender_id': option.sender,
+      });
+    } catch (_) {
+      selectedMessageSender = previous;
+      _messageSenderFromChat = previous?.sender;
+      notifyListeners();
+    }
+  }
+
+  void onDisappear() {
+    if (editingMessage != null) {
+      _restoreComposerAfterMessageEdit(notify: false);
+    }
+    _flushPendingDraftSave();
+    _sub?.cancel();
+    _sub = null;
+    KeywordBlocker.shared.removeListener(_applyKeywordFilter);
+    HiddenSenderStore.shared.removeListener(_applyKeywordFilter);
+    _client.send({'@type': 'closeChat', 'chat_id': chatId});
+  }
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    KeywordBlocker.shared.removeListener(_applyKeywordFilter);
+    HiddenSenderStore.shared.removeListener(_applyKeywordFilter);
+    _sub?.cancel();
+    _typingTimer?.cancel();
+    _draftSaveTimer?.cancel();
+    _coalescedNotifyTimer?.cancel();
+    for (final waiter in _messageSendWaiters.values) {
+      if (!waiter.isCompleted) {
+        waiter.completeError(StateError('Chat view model was disposed'));
+      }
+    }
+    _messageSendWaiters.clear();
+    for (final notifier in _messageRevisionNotifiers.values) {
+      notifier.dispose();
+    }
+    _messageRevisionNotifiers.clear();
+    _headerRevisionNotifier.dispose();
+    telegramAi.dispose();
+    super.dispose();
+  }
+
+  /// Tell TDLib the user is typing (drives the peer's typing indicator).
+  void sendTyping() {
+    _client.send({
+      '@type': 'sendChatAction',
+      'chat_id': chatId,
+      'topic_id': ?_forumTopicRef,
+      'action': {'@type': 'chatActionTyping'},
+    });
+  }
+
+  // MARK: - Sending
+
+  void setDraft(
+    String value, {
+    String? formattedText,
+    List<Map<String, dynamic>> entities = const [],
+  }) {
+    draft = value;
+    _draftFormattedText = formattedText ?? value;
+    _draftFormattedEntities = entities;
+    _draftMentions.removeWhere((m) => !draft.contains(m.text));
+    if (editingMessage == null) _scheduleDraftSave();
+  }
+
+  String get composerFormattedDraft => _draftFormattedText;
+
+  List<Map<String, dynamic>> get composerDraftEntities =>
+      List.unmodifiable(_draftFormattedEntities);
+
+  bool get editingMessageUsesCaption => switch (editingMessage?.contentType) {
+    'messagePhoto' ||
+    'messageVideo' ||
+    'messageAnimation' ||
+    'messageAudio' ||
+    'messageDocument' => true,
+    _ => false,
+  };
+
+  void beginMessageEdit(ChatMessage message) {
+    if (editingMessage != null) {
+      _restoreComposerAfterMessageEdit(notify: false, scheduleDraftSave: false);
+    }
+    _draftSaveTimer?.cancel();
+    _draftSaveTimer = null;
+    _draftBeforeEditing = draft;
+    _formattedDraftBeforeEditing = _draftFormattedText;
+    _entitiesBeforeEditing = [
+      for (final entity in _draftFormattedEntities)
+        Map<String, dynamic>.from(entity),
+    ];
+    _mentionsBeforeEditing = List<_DraftMention>.from(_draftMentions);
+    _replyBeforeEditing = replyTo;
+    _replyQuoteBeforeEditing = _replyQuote;
+    editingMessage = message;
+    replyTo = null;
+    draft = message.text;
+    _draftFormattedText = message.text;
+    _draftFormattedEntities = [
+      for (final entity in message.textEntities) entity.toTdJson(),
+    ];
+    _draftMentions.clear();
+    notifyListeners();
+  }
+
+  void cancelMessageEdit() {
+    if (editingMessage == null) return;
+    _restoreComposerAfterMessageEdit();
+  }
+
+  Future<bool> submitMessageEdit(
+    String text, {
+    List<Map<String, dynamic>> entities = const [],
+  }) async {
+    final message = editingMessage;
+    if (message == null) return false;
+    if (!editingMessageUsesCaption && text.trim().isEmpty) return false;
+    if (editingMessageUsesCaption) {
+      await editMessageCaption(message.id, text, entities: entities);
+    } else {
+      await editMessageText(message.id, text, entities: entities);
+    }
+    if (editingMessage?.id == message.id) {
+      _restoreComposerAfterMessageEdit();
+    }
+    return true;
+  }
+
+  void _restoreComposerAfterMessageEdit({
+    bool notify = true,
+    bool scheduleDraftSave = true,
+  }) {
+    final savedDraft = _draftBeforeEditing;
+    editingMessage = null;
+    if (savedDraft != null) {
+      draft = savedDraft;
+      _draftFormattedText = _formattedDraftBeforeEditing;
+      _draftFormattedEntities = [
+        for (final entity in _entitiesBeforeEditing)
+          Map<String, dynamic>.from(entity),
+      ];
+      _draftMentions
+        ..clear()
+        ..addAll(_mentionsBeforeEditing);
+      replyTo = _replyBeforeEditing;
+      _replyQuote = _replyQuoteBeforeEditing;
+    }
+    _draftBeforeEditing = null;
+    _formattedDraftBeforeEditing = '';
+    _entitiesBeforeEditing = const [];
+    _mentionsBeforeEditing = const [];
+    _replyBeforeEditing = null;
+    _replyQuoteBeforeEditing = null;
+    if (scheduleDraftSave) _scheduleDraftSave();
+    if (notify) notifyListeners();
+  }
+
+  void _scheduleDraftSave() {
+    _draftSaveTimer?.cancel();
+    _draftSaveTimer = Timer(const Duration(milliseconds: 750), () {
+      _draftSaveTimer = null;
+      _saveDraftNow();
+    });
+  }
+
+  void _flushPendingDraftSave() {
+    final timer = _draftSaveTimer;
+    if (timer == null) return;
+    timer.cancel();
+    _draftSaveTimer = null;
+    _saveDraftNow();
+  }
+
+  void _clearDraft({bool syncRemote = true}) {
+    draft = '';
+    _draftFormattedText = '';
+    _draftFormattedEntities = const [];
+    _draftMentions.clear();
+    _draftSaveTimer?.cancel();
+    _draftSaveTimer = null;
+    if (syncRemote) _saveDraftNow();
+  }
+
+  void _saveDraftNow() {
+    final text = _draftFormattedText;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      if (_lastSavedDraftText == '') return;
+      _lastSavedDraftText = '';
+      _client.send(
+        setTextChatDraftRequest(
+          chatId: chatId,
+          topicId: _forumTopicRef,
+          formattedText: null,
+          date: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        ),
+      );
+      return;
+    }
+
+    final allEntities = [
+      ..._draftFormattedEntities,
+      ..._mentionEntitiesFor(text, _draftFormattedEntities),
+    ];
+    if (_lastSavedDraftText == text && allEntities.isEmpty) return;
+    _lastSavedDraftText = text;
+    _client.send(
+      setTextChatDraftRequest(
+        chatId: chatId,
+        topicId: _forumTopicRef,
+        date: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        formattedText: {
+          '@type': 'formattedText',
+          'text': text,
+          if (allEntities.isNotEmpty) 'entities': allEntities,
+        },
+      ),
+    );
+  }
+
+  /// Flushes the current composer draft through the account-scoped TDLib proxy.
+  Future<void> persistComposerDraft() async {
+    _draftSaveTimer?.cancel();
+    _draftSaveTimer = null;
+    final text = _draftFormattedText;
+    final allEntities = [
+      ..._draftFormattedEntities,
+      ..._mentionEntitiesFor(text, _draftFormattedEntities),
+    ];
+    await _client.query(
+      setTextChatDraftRequest(
+        chatId: chatId,
+        topicId: _forumTopicRef,
+        date: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        formattedText: text.trim().isEmpty
+            ? null
+            : {
+                '@type': 'formattedText',
+                'text': text,
+                if (allEntities.isNotEmpty) 'entities': allEntities,
+              },
+      ),
+    );
+    _lastSavedDraftText = text.trim().isEmpty ? '' : text;
+  }
+
+  void _applyRemoteDraft(
+    Map<String, dynamic>? remoteDraft, {
+    bool force = false,
+    bool notify = true,
+  }) {
+    if (editingMessage != null) return;
+    if (!force && (_draftSaveTimer?.isActive ?? false)) return;
+    final text = TDParse.draftText(remoteDraft);
+    if (!force && text == _lastSavedDraftText) return;
+    draft = text;
+    _draftFormattedText = text;
+    _draftFormattedEntities = const [];
+    _draftMentions.clear();
+    _lastSavedDraftText = text;
+    if (notify) notifyListeners();
+  }
+
+  /// Appends an "@name " mention to the composer (long-press an avatar), backed
+  /// by a user-id entity so Telegram doesn't resolve the text as a public user.
+  void insertMention(ChatMessage message) {
+    final name = message.senderName?.trim() ?? '';
+    final userId = message.senderId;
+    if (name.isEmpty || userId == null || userId <= 0) return;
+    _insertMention(name, userId);
+  }
+
+  Future<List<MentionCandidate>> searchMentionCandidates(String query) async {
+    if (!isGroup) return const [];
+    try {
+      final result = await _client.query({
+        '@type': 'searchChatMembers',
+        'chat_id': chatId,
+        'query': query.trim(),
+        'limit': 50,
+        'filter': {'@type': 'chatMembersFilterMembers'},
+      });
+      final members = result.objects('members') ?? const [];
+      final resolved = await Future.wait(
+        members.map(_mentionCandidateFromMember),
+      );
+      return resolved.whereType<MentionCandidate>().toList(growable: false);
+    } catch (_) {
+      return _recentMentionCandidates(query);
+    }
+  }
+
+  Future<MentionCandidate?> _mentionCandidateFromMember(
+    Map<String, dynamic> member,
+  ) async {
+    final sender = member.obj('member_id');
+    if (sender?.type != 'messageSenderUser') return null;
+    final userId = sender?.int64('user_id');
+    if (userId == null || userId <= 0) return null;
+    try {
+      final user = await _client.query({'@type': 'getUser', 'user_id': userId});
+      final name = TDParse.userName(user).trim();
+      if (name.isEmpty) return null;
+      final usernames = user.obj('usernames');
+      final active = usernames?['active_usernames'];
+      final activeUsernames = active is List
+          ? active.whereType<String>().toList(growable: false)
+          : const <String>[];
+      final username = activeUsernames.isNotEmpty
+          ? activeUsernames.first
+          : usernames?.str('editable_username') ?? '';
+      return MentionCandidate(
+        userId: userId,
+        name: name.startsWith('@') ? name.substring(1) : name,
+        username: username,
+        photo: TDParse.smallPhoto(user.obj('profile_photo')),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<MentionCandidate> _recentMentionCandidates(String query) {
+    final normalized = query.trim().toLowerCase();
+    final seen = <int>{};
+    final result = <MentionCandidate>[];
+    for (final message in messages.reversed) {
+      final userId = message.senderId;
+      final name = message.senderName?.trim() ?? '';
+      if (userId == null || userId <= 0 || name.isEmpty || !seen.add(userId)) {
+        continue;
+      }
+      if (normalized.isNotEmpty && !name.toLowerCase().contains(normalized)) {
+        continue;
+      }
+      result.add(
+        MentionCandidate(
+          userId: userId,
+          name: name,
+          photo: message.senderPhoto,
+        ),
+      );
+      if (result.length == 30) break;
+    }
+    return result;
+  }
+
+  void _insertMention(String name, int userId) {
+    final mention = '@$name';
+    if (_draftMentions.any((m) => m.text == mention && m.userId == userId)) {
+      return;
+    }
+    final sep = (draft.isEmpty || draft.endsWith(' ')) ? '' : ' ';
+    draft = '$draft$sep$mention ';
+    _draftFormattedText = draft;
+    _draftFormattedEntities = const [];
+    _draftMentions.add(_DraftMention(text: mention, userId: userId));
+    if (editingMessage == null) _scheduleDraftSave();
+    notifyListeners();
+  }
+
+  Future<bool> send() async {
+    if (!canSendMessages) return false;
+    final trimmed = draft.trim();
+    if (trimmed.isEmpty) return false;
+
+    final request = <String, dynamic>{
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageText',
+        'text': {'@type': 'formattedText', 'text': trimmed},
+      },
+    };
+    if (replyTo != null) {
+      request['reply_to'] = replyToInput;
+    }
+    final sent = await _submitMessageRequest(request);
+    if (!sent) return false;
+    replyTo = null;
+    _clearDraft();
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> sendSuggestedPost({
+    required String text,
+    OutgoingAttachment? attachment,
+    SuggestedPostPrice? price,
+    int sendDate = 0,
+  }) async {
+    if (!canSendMessages || !isDirectMessagesGroup) return;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty && attachment == null) return;
+    Map<String, dynamic> content;
+    if (attachment == null) {
+      content = {
+        '@type': 'inputMessageText',
+        'text': {'@type': 'formattedText', 'text': trimmed},
+      };
+    } else {
+      final resolved = await resolveAttachmentDimensions(attachment);
+      content = attachmentInputMessageContent(resolved, caption: trimmed);
+    }
+    final request = <String, dynamic>{
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'options': {
+        '@type': 'messageSendOptions',
+        'suggested_post_info': {
+          '@type': 'inputSuggestedPostInfo',
+          'price': price?.toTdJson(),
+          'send_date': sendDate,
+        },
+      },
+      'input_message_content': content,
+    };
+    final response = await _client.query(_withPaidMessageOptions(request));
+    final message = TDParse.message(response);
+    if (message != null) {
+      _merge([message]);
+      _resolveSendersIfNeeded([message]);
+    }
+  }
+
+  Future<void> addSuggestedPostOffer(
+    int messageId, {
+    SuggestedPostPrice? price,
+    int sendDate = 0,
+  }) async {
+    if (!isDirectMessagesGroup) return;
+    await _client.query({
+      '@type': 'addOffer',
+      'chat_id': chatId,
+      'message_id': messageId,
+      'options': {
+        '@type': 'messageSendOptions',
+        'suggested_post_info': {
+          '@type': 'inputSuggestedPostInfo',
+          'price': price?.toTdJson(),
+          'send_date': sendDate,
+        },
+      },
+    });
+    await _refreshMessage(messageId);
+  }
+
+  bool sendBotStart() {
+    if (!peerIsBot) return false;
+    _clearDraft();
+    botStartSent = true;
+    _sendText('/start');
+    notifyListeners();
+    return true;
+  }
+
+  void _sendText(String text) {
+    if (!canSendMessages) return;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageText',
+        'text': {'@type': 'formattedText', 'text': trimmed},
+      },
+    });
+  }
+
+  /// Sends text that may contain inline custom emoji — [entities] is the list of
+  /// TDLib textEntity objects (e.g. textEntityTypeCustomEmoji) over [text]
+  /// (offsets in UTF-16 of [text], which already has the fallback chars).
+  Future<bool> sendFormatted(
+    String text,
+    List<Map<String, dynamic>> entities,
+  ) async {
+    if (!canSendMessages) return false;
+    if (text.trim().isEmpty) return false;
+    if (entities.isEmpty && _diceEmojis.contains(text.trim())) {
+      return _sendDice(text);
+    }
+    final allEntities = [...entities, ..._mentionEntitiesFor(text, entities)];
+    final request = <String, dynamic>{
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageText',
+        'text': {
+          '@type': 'formattedText',
+          'text': text,
+          if (allEntities.isNotEmpty) 'entities': allEntities,
+        },
+      },
+    };
+    if (replyTo != null) {
+      request['reply_to'] = replyToInput;
+    }
+    final sent = await _submitMessageRequest(request);
+    if (!sent) return false;
+    replyTo = null;
+    _clearDraft();
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> currentUserIsPremium() async {
+    final user = await _client.query({'@type': 'getMe'});
+    return user.boolean('is_premium') ?? false;
+  }
+
+  Future<int> currentUserId() async {
+    final user = await _client.query({'@type': 'getMe'});
+    final id = user.int64('id');
+    if (id == null || id <= 0) throw StateError('Current user is unavailable');
+    return id;
+  }
+
+  Future<void> _waitForMessageSend(
+    int pendingMessageId, {
+    Duration timeout = const Duration(seconds: 15),
+  }) {
+    final recent = _recentMessageSendResults.remove(pendingMessageId);
+    if (recent != null) {
+      final error = recent.error;
+      return error == null ? Future.value() : Future.error(error);
+    }
+    final waiter = Completer<void>();
+    _messageSendWaiters[pendingMessageId] = waiter;
+    return waiter.future
+        .timeout(
+          timeout,
+          onTimeout: () {
+            // A timeout means TDLib has not reported the final state yet. It
+            // does not mean the accepted message failed. In particular, do
+            // not mark it discarded: a late updateMessageSendSucceeded would
+            // otherwise delete the newly assigned server message id.
+            debugPrint(
+              'Message $pendingMessageId is still pending; keeping it until '
+              'TDLib reports success or failure',
+            );
+          },
+        )
+        .whenComplete(() {
+          if (identical(_messageSendWaiters[pendingMessageId], waiter)) {
+            _messageSendWaiters.remove(pendingMessageId);
+          }
+        });
+  }
+
+  @visibleForTesting
+  Future<void> waitForMessageSendTimeoutForTest(
+    int pendingMessageId, {
+    required Duration timeout,
+  }) => _waitForMessageSend(pendingMessageId, timeout: timeout);
+
+  @visibleForTesting
+  bool isPendingMessageDiscardedForTest(int pendingMessageId) =>
+      _discardedPendingMessageIds.contains(pendingMessageId);
+
+  void _discardPendingMessage(int pendingMessageId) {
+    _acknowledgedPendingMessageIds.remove(pendingMessageId);
+    _discardedPendingMessageIds.add(pendingMessageId);
+    _ignoredMergeMessageIdsCache = null;
+    _removeMessages([pendingMessageId]);
+    unawaited(_deleteDiscardedPendingMessage(pendingMessageId));
+  }
+
+  Future<void> _deleteDiscardedPendingMessage(int pendingMessageId) async {
+    try {
+      await _client.query({
+        '@type': 'deleteMessages',
+        'chat_id': chatId,
+        'message_ids': [pendingMessageId],
+        'revoke': false,
+      });
+    } catch (error) {
+      debugPrint('Failed to delete pending message $pendingMessageId: $error');
+    }
+  }
+
+  void _recordMessageSendResult(
+    int pendingMessageId,
+    _MessageSendResult result,
+  ) {
+    final waiter = _messageSendWaiters.remove(pendingMessageId);
+    if (waiter != null) {
+      final error = result.error;
+      if (error == null) {
+        waiter.complete();
+      } else {
+        waiter.completeError(error);
+      }
+      return;
+    }
+    _recentMessageSendResults[pendingMessageId] = result;
+    while (_recentMessageSendResults.length > 32) {
+      _recentMessageSendResults.remove(_recentMessageSendResults.keys.first);
+    }
+  }
+
+  static const _diceEmojis = {'🎲', '🎯', '🏀', '⚽', '🎳', '🎰'};
+
+  Future<bool> _sendDice(String text) async {
+    final emoji = text.trim();
+    if (!_diceEmojis.contains(emoji)) return false;
+    final request = <String, dynamic>{
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {'@type': 'inputMessageDice', 'emoji': emoji},
+    };
+    if (replyTo != null) {
+      request['reply_to'] = replyToInput;
+    }
+    final sent = await _submitMessageRequest(request);
+    if (!sent) return false;
+    replyTo = null;
+    _clearDraft();
+    notifyListeners();
+    return true;
+  }
+
+  /// Sets or clears the reply target without changing the current draft.
+  ///
+  /// The reply metadata already addresses the sender. Mentions remain an
+  /// explicit action so replying cannot accidentally invoke inline-bot search.
+  void setReply(ChatMessage? message, {MessageTextQuote? quote}) {
+    if (editingMessage != null) {
+      _restoreComposerAfterMessageEdit(notify: false);
+    }
+    replyTo = message;
+    if (message != null && !isSecretChat && quote != null) {
+      _replyQuote = quote;
+    }
+    notifyListeners();
+  }
+
+  bool get canQuoteText =>
+      canSendMessages && !isSecretChat && !hasProtectedContent;
+
+  Future<int> messageQuoteLengthLimit() async {
+    try {
+      final option = await _client.query({
+        '@type': 'getOption',
+        'name': 'message_reply_quote_length_max',
+      });
+      final limit = option.integer('value');
+      if (limit != null && limit > 0) return limit;
+    } catch (_) {}
+    return defaultMessageQuoteLengthLimit;
+  }
+
+  List<Map<String, dynamic>> _mentionEntitiesFor(
+    String text,
+    List<Map<String, dynamic>> existing,
+  ) {
+    final out = <Map<String, dynamic>>[];
+    final occupied = existing.map((e) {
+      final offset = e.integer('offset') ?? 0;
+      final length = e.integer('length') ?? 0;
+      return (offset, offset + length);
+    }).toList();
+    for (final mention in _draftMentions) {
+      var start = 0;
+      while (start < text.length) {
+        final offset = text.indexOf(mention.text, start);
+        if (offset < 0) break;
+        final end = offset + mention.text.length;
+        final overlaps = occupied.any((r) => offset < r.$2 && end > r.$1);
+        if (!overlaps) {
+          out.add({
+            '@type': 'textEntity',
+            'offset': offset,
+            'length': mention.text.length,
+            'type': {
+              '@type': 'textEntityTypeMentionName',
+              'user_id': mention.userId,
+            },
+          });
+          occupied.add((offset, end));
+          break;
+        }
+        start = end;
+      }
+    }
+    return out;
+  }
+
+  Future<void> sendAttachments(
+    List<OutgoingAttachment> attachments, {
+    String caption = '',
+    List<Map<String, dynamic>> captionEntities = const [],
+    MessageSendConfiguration sendConfiguration =
+        const MessageSendConfiguration(),
+  }) async {
+    if (attachments.isEmpty) return;
+    final allEntities = [
+      ...captionEntities,
+      ..._mentionEntitiesFor(caption, captionEntities),
+    ];
+    final requests = buildAttachmentSendRequests(
+      chatId: chatId,
+      topicId: _forumTopicRef,
+      attachments: attachments,
+      caption: caption,
+      captionEntities: allEntities,
+      replyTo: replyToInput,
+      sendConfiguration: sendConfiguration,
+    );
+    replyTo = null;
+    _clearDraft();
+    notifyListeners();
+    try {
+      for (final request in requests) {
+        await _client.query(
+          _withPaidMessageOptions(
+            request,
+            sendConfiguration: sendConfiguration,
+            consumePendingConfiguration: false,
+          ),
+        );
+      }
+    } catch (error) {
+      _publishSendFailure(
+        ChatSendFailure.fromError(
+          error,
+          paidMessageStarCount: paidMessageStarCount,
+        ),
+      );
+      rethrow;
+    }
+  }
+
+  void sendPhoto(
+    String path, {
+    String caption = '',
+    List<Map<String, dynamic>> captionEntities = const [],
+  }) {
+    final captionText = captionEntities.isEmpty ? caption.trim() : caption;
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessagePhoto',
+        'photo': {
+          '@type': 'inputPhoto',
+          'photo': {'@type': 'inputFileLocal', 'path': path},
+        },
+        if (captionText.trim().isNotEmpty)
+          'caption': {
+            '@type': 'formattedText',
+            'text': captionText,
+            if (captionEntities.isNotEmpty) 'entities': captionEntities,
+          },
+      },
+    });
+  }
+
+  void sendVideo(
+    String path, {
+    String caption = '',
+    List<Map<String, dynamic>> captionEntities = const [],
+  }) {
+    final captionText = captionEntities.isEmpty ? caption.trim() : caption;
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageVideo',
+        'video': {
+          '@type': 'inputVideo',
+          'video': {'@type': 'inputFileLocal', 'path': path},
+          'supports_streaming': true,
+        },
+        if (captionText.trim().isNotEmpty)
+          'caption': {
+            '@type': 'formattedText',
+            'text': captionText,
+            if (captionEntities.isNotEmpty) 'entities': captionEntities,
+          },
+      },
+    });
+  }
+
+  void sendAnimation(
+    String path, {
+    String caption = '',
+    List<Map<String, dynamic>> captionEntities = const [],
+  }) {
+    final captionText = captionEntities.isEmpty ? caption.trim() : caption;
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageAnimation',
+        'animation': {
+          '@type': 'inputAnimation',
+          'animation': {'@type': 'inputFileLocal', 'path': path},
+          'duration': 0,
+          'width': 0,
+          'height': 0,
+        },
+        if (captionText.trim().isNotEmpty)
+          'caption': {
+            '@type': 'formattedText',
+            'text': captionText,
+            if (captionEntities.isNotEmpty) 'entities': captionEntities,
+          },
+      },
+    });
+  }
+
+  Future<bool> sendGif(GifItem gif) async {
+    if (!canSendMessages) return false;
+    try {
+      final pendingMessage = await _client.query(
+        _withPaidMessageOptions(gifSendRequest(chatId: chatId, gif: gif)),
+      );
+      final pendingMessageId = pendingMessage.int64('id');
+      if (pendingMessageId != null &&
+          pendingMessage.obj('sending_state') != null) {
+        await _waitForMessageSend(pendingMessageId);
+      }
+      return true;
+    } catch (error) {
+      debugPrint('Failed to send GIF: $error');
+      _publishSendFailure(
+        ChatSendFailure.fromError(
+          error,
+          paidMessageStarCount: paidMessageStarCount,
+        ),
+      );
+      return false;
+    }
+  }
+
+  Future<bool> sendSticker(StickerItem sticker) async {
+    if (!canSendMessages) return false;
+    try {
+      final pendingMessage = await _client.query(
+        stickerMessageRequest(sticker),
+      );
+      final pendingMessageId = pendingMessage.int64('id');
+      if (pendingMessageId != null &&
+          pendingMessage.obj('sending_state') != null) {
+        await _waitForMessageSend(pendingMessageId);
+      }
+      return true;
+    } catch (error) {
+      debugPrint('Failed to send sticker: $error');
+      _publishSendFailure(
+        ChatSendFailure.fromError(
+          error,
+          paidMessageStarCount: paidMessageStarCount,
+        ),
+      );
+      return false;
+    }
+  }
+
+  @visibleForTesting
+  Map<String, dynamic> stickerMessageRequest(StickerItem sticker) {
+    final remoteId = sticker.remoteId?.trim();
+    final inputFile = remoteId != null && remoteId.isNotEmpty
+        ? {'@type': 'inputFileRemote', 'id': remoteId}
+        : {'@type': 'inputFileId', 'id': sticker.id};
+    return _withPaidMessageOptions({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageSticker',
+        // The bundled TDLib schema carries sticker file metadata in an
+        // inputSticker object rather than directly on inputMessageSticker.
+        'sticker': {
+          '@type': 'inputSticker',
+          'sticker': inputFile,
+          'width': sticker.width,
+          'height': sticker.height,
+        },
+        'emoji': sticker.emoji,
+      },
+    });
+  }
+
+  void sendDocument(String path, {String caption = ''}) {
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageDocument',
+        'document': {
+          '@type': 'inputDocument',
+          'document': {'@type': 'inputFileLocal', 'path': path},
+        },
+        if (caption.trim().isNotEmpty)
+          'caption': {'@type': 'formattedText', 'text': caption.trim()},
+      },
+    });
+  }
+
+  void sendLocation(double latitude, double longitude) {
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageLocation',
+        'location': {
+          '@type': 'location',
+          'latitude': latitude,
+          'longitude': longitude,
+          'horizontal_accuracy': 0,
+        },
+      },
+    });
+  }
+
+  Future<bool> sendVenue({
+    required double latitude,
+    required double longitude,
+    required String title,
+    required String address,
+  }) async {
+    final venueTitle = title.trim();
+    if (venueTitle.isEmpty) return false;
+    try {
+      await _client.query(
+        _withPaidMessageOptions({
+          '@type': 'sendMessage',
+          'chat_id': chatId,
+          'input_message_content': {
+            '@type': 'inputMessageVenue',
+            'venue': {
+              '@type': 'venue',
+              'location': {
+                '@type': 'location',
+                'latitude': latitude,
+                'longitude': longitude,
+                'horizontal_accuracy': 0,
+              },
+              'title': venueTitle,
+              'address': address.trim(),
+              'provider': '',
+              'id': '',
+              'type': '',
+            },
+          },
+        }),
+      );
+      return true;
+    } catch (error) {
+      _publishSendFailure(
+        ChatSendFailure.fromError(
+          error,
+          paidMessageStarCount: paidMessageStarCount,
+        ),
+      );
+      return false;
+    }
+  }
+
+  Future<bool> sendContact(MessageContactCard contact) async {
+    if (contact.phoneNumber.trim().isEmpty) return false;
+    try {
+      await _client.query(
+        _withPaidMessageOptions({
+          '@type': 'sendMessage',
+          'chat_id': chatId,
+          'input_message_content': {
+            '@type': 'inputMessageContact',
+            'contact': {
+              '@type': 'contact',
+              'phone_number': contact.phoneNumber,
+              'first_name': contact.firstName,
+              'last_name': contact.lastName,
+              'vcard': contact.vcard,
+              'user_id': contact.userId,
+            },
+          },
+        }),
+      );
+      return true;
+    } catch (error) {
+      _publishSendFailure(
+        ChatSendFailure.fromError(
+          error,
+          paidMessageStarCount: paidMessageStarCount,
+        ),
+      );
+      return false;
+    }
+  }
+
+  Future<bool> sendVoice(
+    String path,
+    int duration, {
+    String waveform = '',
+    MessageSendConfiguration sendConfiguration =
+        const MessageSendConfiguration(),
+  }) async {
+    if (!canSendMessages || !canSendVoiceNotes) return false;
+    try {
+      await _client.query(
+        _withPaidMessageOptions({
+          '@type': 'sendMessage',
+          'chat_id': chatId,
+          'input_message_content': {
+            '@type': 'inputMessageVoiceNote',
+            'voice_note': {
+              '@type': 'inputVoiceNote',
+              'voice_note': {'@type': 'inputFileLocal', 'path': path},
+              'duration': duration,
+              'waveform': waveform,
+            },
+            'self_destruct_type': ?sendConfiguration.selfDestructType,
+          },
+        }, sendConfiguration: sendConfiguration),
+      );
+      return true;
+    } catch (error) {
+      if (_isVoiceMessageRestrictionError(error)) {
+        canSendVoiceNotes = false;
+        notifyListeners();
+      }
+      debugPrint('Failed to send voice note: $error');
+      _publishSendFailure(
+        ChatSendFailure.fromError(
+          error,
+          paidMessageStarCount: paidMessageStarCount,
+        ),
+      );
+      return false;
+    }
+  }
+
+  /// 音频: send a picked audio file as a music message (TDLib computes metadata).
+  void sendAudio(String path) {
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageAudio',
+        'audio': {
+          '@type': 'inputAudio',
+          'audio': {'@type': 'inputFileLocal', 'path': path},
+          'duration': 0,
+          'title': '',
+          'performer': '',
+        },
+      },
+    });
+  }
+
+  /// 音频搜索: send a clean copy of an existing Telegram audio message.
+  Future<void> sendAudioFromMessage(
+    int sourceChatId,
+    ChatMessage message,
+  ) async {
+    await assertForwardAllowed(
+      query: _client.query,
+      fromChatId: sourceChatId,
+      messageIds: [message.id],
+      options: const ForwardOptions(removeSender: true),
+    );
+    final music = message.music;
+    final fileId = music?.file?.id;
+    if (music != null && fileId != null && fileId > 0) {
+      try {
+        await _client.query(
+          _withPaidMessageOptions({
+            '@type': 'sendMessage',
+            'chat_id': chatId,
+            'input_message_content': {
+              '@type': 'inputMessageAudio',
+              'audio': {
+                '@type': 'inputAudio',
+                'audio': {'@type': 'inputFileId', 'id': fileId},
+                'duration': music.duration,
+                'title': music.title,
+                'performer': music.performer ?? '',
+              },
+            },
+          }),
+        );
+        return;
+      } catch (_) {}
+    }
+    await _client.query(
+      _withPaidMessageOptions({
+        '@type': 'forwardMessages',
+        'chat_id': chatId,
+        'from_chat_id': sourceChatId,
+        'message_ids': [message.id],
+        'options': {'@type': 'messageSendOptions'},
+        'send_copy': true,
+        'remove_caption': false,
+      }),
+    );
+  }
+
+  /// 清单: send a checklist (to-do list). Creating checklists needs Premium.
+  void sendChecklist(ChecklistComposerResult draft) {
+    if (draft.title.trim().isEmpty || draft.tasks.isEmpty) return;
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageChecklist',
+        'checklist': ChecklistRequests.inputChecklist(draft),
+      },
+    });
+  }
+
+  Future<void> editChecklist(
+    ChatMessage message,
+    ChecklistComposerResult draft,
+  ) async {
+    final checklist = message.checklist;
+    if (checklist == null) return;
+    await _client.query(
+      ChecklistRequests.edit(
+        chatId: chatId,
+        messageId: message.id,
+        original: checklist,
+        draft: draft,
+      ),
+    );
+    await _refreshMessage(message.id);
+  }
+
+  Future<int> pollAnswerCountMax() async {
+    try {
+      final option = await _client.query({
+        '@type': 'getOption',
+        'name': 'poll_answer_count_max',
+      });
+      return (option.integer('value') ?? 30).clamp(2, 100);
+    } catch (_) {
+      return 30;
+    }
+  }
+
+  Future<bool> sendPoll(PollComposerResult draft) async {
+    final question = draft.question.trim();
+    final options = draft.options
+        .where((option) => option.text.trim().isNotEmpty)
+        .toList(growable: false);
+    if (question.isEmpty || options.length < 2) return false;
+    if (draft.isQuiz && draft.correctOptionIndexes.isEmpty) return false;
+    try {
+      await _client.query(
+        _withPaidMessageOptions({
+          '@type': 'sendMessage',
+          'chat_id': chatId,
+          'input_message_content': {
+            '@type': 'inputMessagePoll',
+            'question': {'@type': 'formattedText', 'text': question},
+            'options': [
+              for (final option in options)
+                {
+                  '@type': 'inputPollOption',
+                  'text': {
+                    '@type': 'formattedText',
+                    'text': option.text.trim(),
+                  },
+                  if (option.mediaPath case final path?)
+                    'media': _inputPollPhoto(path),
+                },
+            ],
+            if (draft.description.trim().isNotEmpty)
+              'description': {
+                '@type': 'formattedText',
+                'text': draft.description.trim(),
+              },
+            if (draft.pollMediaPath case final path?)
+              'media': _inputPollPhoto(path),
+            'is_anonymous': draft.isAnonymous,
+            'allows_multiple_answers': draft.allowsMultipleAnswers,
+            'allows_revoting': draft.allowsRevoting,
+            'shuffle_options': draft.shuffleOptions,
+            'hide_results_until_closes': draft.hideResultsUntilCloses,
+            'type': draft.isQuiz
+                ? {
+                    '@type': 'inputPollTypeQuiz',
+                    'correct_option_ids': draft.correctOptionIndexes.toList()
+                      ..sort(),
+                    'explanation': {
+                      '@type': 'formattedText',
+                      'text': draft.explanation.trim(),
+                    },
+                  }
+                : {
+                    '@type': 'inputPollTypeRegular',
+                    'allow_adding_options': draft.allowAddingOptions,
+                  },
+            'open_period': draft.openPeriod,
+          },
+        }),
+      );
+      return true;
+    } catch (error) {
+      debugPrint('Failed to send poll: $error');
+      _publishSendFailure(
+        ChatSendFailure.fromError(
+          error,
+          paidMessageStarCount: paidMessageStarCount,
+        ),
+      );
+      return false;
+    }
+  }
+
+  Map<String, dynamic> _inputPollPhoto(String path) => {
+    '@type': 'inputPollMediaPhoto',
+    'photo': {
+      '@type': 'inputPhoto',
+      'photo': {'@type': 'inputFileLocal', 'path': path},
+    },
+  };
+
+  Future<void> addPollOption(ChatMessage message, String text) async {
+    final value = text.trim();
+    if (message.poll == null || value.isEmpty) return;
+    await _client.query({
+      '@type': 'addPollOption',
+      'chat_id': chatId,
+      'message_id': message.id,
+      'option': {
+        '@type': 'inputPollOption',
+        'text': {'@type': 'formattedText', 'text': value},
+      },
+    });
+    await _refreshMessage(message.id);
+  }
+
+  Future<void> recognizeSpeech(ChatMessage message) async {
+    if (!canUseSpeechRecognition) {
+      throw StateError('SPEECH_RECOGNITION_UNAVAILABLE');
+    }
+    final properties = await _client.query({
+      '@type': 'getMessageProperties',
+      'chat_id': chatId,
+      'message_id': message.id,
+    });
+    if (properties.boolean('can_recognize_speech') != true) {
+      _speechRecognitionEligibility[message.id] = false;
+      for (final target in _messageRefs(message.id)) {
+        target.canRecognizeSpeech = false;
+      }
+      _notifyLocalizedMessages([message.id]);
+      throw StateError('SPEECH_RECOGNITION_UNAVAILABLE');
+    }
+    await _client.query({
+      '@type': 'recognizeSpeech',
+      'chat_id': chatId,
+      'message_id': message.id,
+    });
+    await _refreshMessage(message.id);
+  }
+
+  Future<Map<String, dynamic>> pollVoteStatistics(
+    ChatMessage message, {
+    required bool isDark,
+  }) => _client.query({
+    '@type': 'getPollVoteStatistics',
+    'chat_id': chatId,
+    'message_id': message.id,
+    'is_dark': isDark,
+  });
+
+  Future<List<Map<String, dynamic>>> pollVoters(
+    ChatMessage message,
+    int optionIndex, {
+    int offset = 0,
+  }) async {
+    final response = await _client.query({
+      '@type': 'getPollVoters',
+      'chat_id': chatId,
+      'message_id': message.id,
+      'option_id': optionIndex,
+      'offset': offset,
+      'limit': 50,
+    });
+    return response.objects('voters') ?? const <Map<String, dynamic>>[];
+  }
+
+  Future<void> votePoll(ChatMessage message, int optionIndex) async {
+    final poll = message.poll;
+    if (poll == null || poll.isClosed) return;
+    final selected = <int>[...poll.chosenOptionIndexes];
+    if (poll.allowsMultipleAnswers) {
+      selected.contains(optionIndex)
+          ? selected.remove(optionIndex)
+          : selected.add(optionIndex);
+    } else if (selected.length == 1 && selected.first == optionIndex) {
+      if (!poll.allowsRevoting) return;
+      selected.clear();
+    } else {
+      selected
+        ..clear()
+        ..add(optionIndex);
+    }
+    await _client.query({
+      '@type': 'setPollAnswer',
+      'chat_id': chatId,
+      'message_id': message.id,
+      'option_ids': selected,
+    });
+    await _refreshMessage(message.id);
+  }
+
+  Future<void> stopPoll(ChatMessage message) async {
+    if (message.poll == null || message.poll!.isClosed) return;
+    await _client.query({
+      '@type': 'stopPoll',
+      'chat_id': chatId,
+      'message_id': message.id,
+    });
+    await _refreshMessage(message.id);
+  }
+
+  Future<void> toggleChecklistTask(
+    ChatMessage message,
+    MessageChecklistTask task,
+  ) async {
+    final checklist = message.checklist;
+    if (checklist == null || !checklist.canMarkTasksAsDone) return;
+    await _client.query({
+      '@type': 'markChecklistTasksAsDone',
+      'chat_id': chatId,
+      'message_id': message.id,
+      'marked_as_done_task_ids': task.isCompleted ? <int>[] : [task.id],
+      'marked_as_not_done_task_ids': task.isCompleted ? [task.id] : <int>[],
+    });
+    await _refreshMessage(message.id);
+  }
+
+  Future<void> addChecklistTask(ChatMessage message, String text) async {
+    final checklist = message.checklist;
+    final value = text.trim();
+    if (checklist == null || !checklist.canAddTasks || value.isEmpty) return;
+    final nextId =
+        checklist.tasks.fold<int>(
+          0,
+          (current, task) => math.max(current, task.id),
+        ) +
+        1;
+    await _client.query({
+      '@type': 'addChecklistTasks',
+      'chat_id': chatId,
+      'message_id': message.id,
+      'tasks': [
+        {
+          '@type': 'inputChecklistTask',
+          'id': nextId,
+          'text': {'@type': 'formattedText', 'text': value},
+        },
+      ],
+    });
+    await _refreshMessage(message.id);
+  }
+
+  /// Re-sends the same content (the "+1" quick repeat) — only plain text and
+  /// photos; the badge that calls this is gated to those kinds too.
+  void repeatMessage(ChatMessage message) {
+    if (hasProtectedContent) return;
+    // Photo: send a clean copy (forwardMessages send_copy drops the "转发"
+    // header and works regardless of the original file's upload state).
+    if (message.isPhoto && message.image != null) {
+      _submitMessageRequestWithoutWaiting({
+        '@type': 'forwardMessages',
+        'chat_id': chatId,
+        'from_chat_id': chatId,
+        'message_ids': [message.id],
+        'send_copy': true,
+      });
+      return;
+    }
+    if (!message.isPlainText) return;
+    final text = message.text.trim();
+    if (text.isEmpty) return;
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageText',
+        'text': {'@type': 'formattedText', 'text': text},
+      },
+    });
+  }
+
+  bool sendKeyboardButtonText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return false;
+    _submitMessageRequestWithoutWaiting({
+      '@type': 'sendMessage',
+      'chat_id': chatId,
+      'input_message_content': {
+        '@type': 'inputMessageText',
+        'text': {'@type': 'formattedText', 'text': trimmed},
+      },
+    });
+    return true;
+  }
+
+  bool sendCommand(String command) {
+    final trimmed = command.trim();
+    if (!trimmed.startsWith('/')) return false;
+    _sendText(trimmed);
+    return true;
+  }
+
+  Future<Map<String, dynamic>> answerCallbackButton(
+    int messageId,
+    MessageButton button,
+  ) async {
+    final answer = await _client.query({
+      '@type': 'getCallbackQueryAnswer',
+      'chat_id': chatId,
+      'message_id': messageId,
+      'payload': {
+        '@type': 'callbackQueryPayloadData',
+        'data': button.data ?? '',
+      },
+    });
+    await _refreshMessage(messageId);
+    unawaited(
+      Future<void>.delayed(
+        const Duration(milliseconds: 700),
+        () => _refreshMessage(messageId),
+      ),
+    );
+    return answer;
+  }
+
+  Future<void> _refreshMessage(int messageId) async {
+    if (_isDisposed) return;
+    try {
+      final raw = await _client.query({
+        '@type': 'getMessage',
+        'chat_id': chatId,
+        'message_id': messageId,
+      });
+      if (_isDisposed) return;
+      final refreshed = TDParse.message(raw);
+      if (refreshed == null) return;
+      _merge([refreshed]);
+      _resolveRichMessagesIfNeeded([refreshed]);
+      _resolveSendersIfNeeded([refreshed]);
+      _resolveRepliesIfNeeded([refreshed]);
+      _resolveForwardsIfNeeded([refreshed]);
+      _resolveServiceUsersIfNeeded([refreshed]);
+    } catch (_) {
+      // Live TDLib updates remain the source of truth if a direct refresh fails.
+    }
+  }
+
+  Future<MessageTranslationResult> translateMessage(
+    int messageId,
+    String toLanguageCode,
+  ) async {
+    _setTranslationLoading(messageId, true);
+    try {
+      final formatted = await _client.query({
+        '@type': 'translateMessageText',
+        'chat_id': chatId,
+        'message_id': messageId,
+        'to_language_code': toLanguageCode,
+      });
+      final result = (
+        text: formatted.str('text') ?? '',
+        entities: TDParse.textEntities(formatted),
+        languageCode: toLanguageCode,
+      );
+      _replaceTranslation(
+        messageId,
+        result.text,
+        result.entities,
+        result.languageCode,
+      );
+      return result;
+    } catch (_) {
+      _setTranslationLoading(messageId, false);
+      rethrow;
+    }
+  }
+
+  Future<String> translateText(String text, String toLanguageCode) async {
+    final formatted = await _client.query({
+      '@type': 'translateText',
+      'text': {
+        '@type': 'formattedText',
+        'text': text,
+        'entities': const <Map<String, dynamic>>[],
+      },
+      'to_language_code': toLanguageCode,
+    });
+    return formatted.str('text') ?? '';
+  }
+
+  Future<void> summarizeMessage(
+    ChatMessage message, {
+    String translateToLanguageCode = '',
+    String tone = 'neutral',
+  }) async {
+    if (!canUseAiSummary ||
+        message.summaryLanguageCode.isEmpty ||
+        message.aiSummaryLoading) {
+      return;
+    }
+    final targets = _messageRefs(message.id);
+    for (final target in targets) {
+      target.aiSummaryLoading = true;
+    }
+    _notifyLocalizedMessages([message.id]);
+    try {
+      final result = await telegramAi.summarize(
+        chatId: chatId,
+        messageId: message.id,
+        translateToLanguageCode: translateToLanguageCode,
+        tone: tone,
+      );
+      final formatted = result.toTdJson();
+      for (final target in _messageRefs(message.id)) {
+        target.aiSummaryText = result.text;
+        target.aiSummaryEntities = TDParse.textEntities(formatted);
+        target.aiSummaryLoading = false;
+      }
+      _notifyLocalizedMessages([message.id]);
+    } catch (_) {
+      for (final target in _messageRefs(message.id)) {
+        target.aiSummaryLoading = false;
+      }
+      _notifyLocalizedMessages([message.id]);
+      rethrow;
+    }
+  }
+
+  Future<MessageTranslationResult> translateMessageExternally(
+    int messageId,
+    String toLanguageCode,
+    Future<String> Function() translate, {
+    bool showLoading = true,
+  }) async {
+    if (showLoading) _setTranslationLoading(messageId, true);
+    try {
+      final translated = await translate();
+      _replaceTranslation(messageId, translated, const [], toLanguageCode);
+      return (
+        text: translated,
+        entities: const <MessageTextEntity>[],
+        languageCode: toLanguageCode,
+      );
+    } catch (_) {
+      if (showLoading) _setTranslationLoading(messageId, false);
+      rethrow;
+    }
+  }
+
+  // MARK: - Message actions (long-press menu)
+
+  Future<void> forward(
+    int messageId,
+    int targetChatId, {
+    ForwardOptions options = const ForwardOptions(),
+  }) async {
+    await forwardMany([messageId], targetChatId, options: options);
+  }
+
+  Future<void> forwardMany(
+    List<int> messageIds,
+    int targetChatId, {
+    ForwardOptions options = const ForwardOptions(),
+  }) async {
+    if (hasProtectedContent) throw const ForwardBlockedException();
+    final forwardQuery = forwardQueryForOwner(
+      _client,
+      accountSlot: _accountSlot,
+      clientId: _accountClientId,
+    );
+    await forwardMessagesWithOptions(
+      client: _client,
+      targetChatId: targetChatId,
+      fromChatId: chatId,
+      messageIds: messageIds,
+      topicId: targetChatId == chatId ? _forumTopicRef : null,
+      options: options,
+      query: forwardQuery,
+    );
+  }
+
+  Future<void> saveToFavorites(int messageId) async {
+    await saveToFavoritesMany([messageId]);
+  }
+
+  Future<void> saveToFavoritesMany(List<int> messageIds) async {
+    if (messageIds.isEmpty) return;
+    if (hasProtectedContent) throw const ForwardBlockedException();
+    final me = await _client.query({'@type': 'getMe'});
+    final myId = me.int64('id');
+    if (myId == null) throw TdError({'message': 'Missing current user id'});
+    final saved = await _client.query({
+      '@type': 'createPrivateChat',
+      'user_id': myId,
+      'force': false,
+    });
+    final savedChatId = saved.int64('id');
+    if (savedChatId == null) {
+      throw TdError({'message': 'Missing Saved Messages chat id'});
+    }
+    await forwardMessagesWithOptions(
+      client: _client,
+      targetChatId: savedChatId,
+      fromChatId: chatId,
+      messageIds: messageIds,
+    );
+  }
+
+  void saveFavoriteSticker(int fileId) {
+    _client.send({
+      '@type': 'addFavoriteSticker',
+      'sticker': {'@type': 'inputFileId', 'id': fileId},
+    });
+  }
+
+  Future<void> deleteMessage(int id) {
+    return deleteMessages([id]);
+  }
+
+  Future<void> deleteMessages(List<int> ids) async {
+    if (ids.isEmpty) return;
+    await _client.query({
+      '@type': 'deleteMessages',
+      'chat_id': chatId,
+      'message_ids': ids,
+      'revoke': true,
+    });
+    _removeMessages(ids);
+  }
+
+  Future<void> deleteMessagesFromSender(ChatMessage message) async {
+    final senderId = message.senderId;
+    final sender = _messageSenderFor(message);
+    if (senderId == null || sender == null) {
+      throw TdError({'message': 'Missing message sender'});
+    }
+    await _client.query({
+      '@type': 'deleteChatMessagesBySender',
+      'chat_id': chatId,
+      'sender_id': sender,
+    });
+    final ids = _allMessages
+        .where((candidate) => candidate.senderId == senderId)
+        .map((candidate) => candidate.id)
+        .toList();
+    _removeMessages(ids);
+  }
+
+  Future<void> reportMessage(ChatMessage message) async {
+    await _reportTelegramContent(message);
+  }
+
+  Future<void> blockSender(ChatMessage message) async {
+    final senderId = message.senderId;
+    final sender = _messageSenderFor(message);
+    if (senderId == null || sender == null) {
+      throw TdError({'message': 'Missing message sender'});
+    }
+    _blockedSenderIds.add(senderId);
+    KeywordBlocker.shared.addBlockedSender(senderId);
+    _applyKeywordFilter();
+    try {
+      await _client.query({
+        '@type': 'setMessageSenderBlockList',
+        'sender_id': sender,
+        'block_list': {'@type': 'blockListMain'},
+      });
+    } catch (_) {
+      _blockedSenderIds.remove(senderId);
+      KeywordBlocker.shared.removeBlockedSender(senderId);
+      _applyKeywordFilter();
+      rethrow;
+    }
+  }
+
+  Future<void> blockAndReportSender(ChatMessage message) async {
+    await blockSender(message);
+    unawaited(_reportTelegramContent(message).catchError((_) {}));
+  }
+
+  Map<String, dynamic>? _messageSenderFor(ChatMessage message) {
+    final senderId = message.senderId;
+    if (senderId == null) return null;
+    if (senderId > 0) {
+      return {'@type': 'messageSenderUser', 'user_id': senderId};
+    }
+    return {'@type': 'messageSenderChat', 'chat_id': senderId};
+  }
+
+  Future<void> _reportTelegramContent(ChatMessage message) async {
+    final sender = _messageSenderFor(message);
+    final base = <String, dynamic>{
+      '@type': 'reportChat',
+      'chat_id': chatId,
+      'message_ids': [message.id],
+      'sender_id': sender,
+      'option_id': '',
+      'text': 'Objectionable or abusive content reported from Mithka.',
+    };
+    final result = await _client.query(base);
+    if (result.type != 'reportChatResultOptionRequired') return;
+    final options = result.objects('options') ?? const <Map<String, dynamic>>[];
+    if (options.isEmpty) return;
+    await _client.query({...base, 'option_id': options.first['id'] ?? ''});
+  }
+
+  Future<void> editMessageText(
+    int id,
+    String text, {
+    List<Map<String, dynamic>> entities = const [],
+  }) async {
+    if (text.trim().isEmpty) return;
+    await _client.query({
+      '@type': 'editMessageText',
+      'chat_id': chatId,
+      'message_id': id,
+      'input_message_content': {
+        '@type': 'inputMessageText',
+        'text': {
+          '@type': 'formattedText',
+          'text': text,
+          if (entities.isNotEmpty) 'entities': entities,
+        },
+        'link_preview_options': {
+          '@type': 'linkPreviewOptions',
+          'is_disabled': false,
+        },
+        'clear_draft': false,
+      },
+    });
+    final parsed = TDParse.textEntities({
+      '@type': 'formattedText',
+      'text': text,
+      'entities': entities,
+    });
+    _replaceText(
+      id,
+      text,
+      edited: true,
+      entities: parsed,
+      customEmoji: TDParse.customEmojiEntitiesFrom(parsed),
+    );
+  }
+
+  Future<void> editMessageCaption(
+    int id,
+    String caption, {
+    List<Map<String, dynamic>> entities = const [],
+  }) async {
+    await _client.query({
+      '@type': 'editMessageCaption',
+      'chat_id': chatId,
+      'message_id': id,
+      'caption': {
+        '@type': 'formattedText',
+        'text': caption,
+        if (entities.isNotEmpty) 'entities': entities,
+      },
+    });
+    _replaceText(
+      id,
+      caption,
+      edited: true,
+      entities: TDParse.textEntities({
+        '@type': 'formattedText',
+        'text': caption,
+        'entities': entities,
+      }),
+      customEmoji: TDParse.customEmojiEntitiesFrom(
+        TDParse.textEntities({
+          '@type': 'formattedText',
+          'text': caption,
+          'entities': entities,
+        }),
+      ),
+    );
+  }
+
+  Future<void> editMessageMedia(
+    int id,
+    OutgoingAttachment attachment, {
+    required String caption,
+    List<Map<String, dynamic>> entities = const [],
+  }) async {
+    await _client.query({
+      '@type': 'editMessageMedia',
+      'chat_id': chatId,
+      'message_id': id,
+      'input_message_content': attachmentInputMessageContent(
+        attachment,
+        caption: caption,
+        captionEntities: entities,
+      ),
+    });
+  }
+
+  // MARK: - Paging
+
+  Future<bool> loadOlder() async {
+    if (!canLoadOlder) return false;
+    _isLoadingOlder = true;
+    notifyListeners();
+    try {
+      return await _fetchHistory(_oldestServerMessageId, 0, 30, isOlder: true);
+    } finally {
+      _isLoadingOlder = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> loadOlderLocal() async {
+    if (!canLoadOlder) return false;
+    _isLoadingOlder = true;
+    notifyListeners();
+    try {
+      return await _fetchHistory(
+        _oldestServerMessageId,
+        0,
+        30,
+        isOlder: true,
+        onlyLocal: true,
+      );
+    } finally {
+      _isLoadingOlder = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> loadLatestHistory() async {
+    if (_chatOpenWorkIsStale || _latestHistoryLoadInFlight) return false;
+    final requestGeneration = ++_historyWindowGeneration;
+    _latestHistoryLoadInFlight = true;
+    _latestHistoryLiveArrivals.clear();
+    _latestHistoryDeletedMessageIds.clear();
+    _latestHistoryLoadInvalidated = false;
+    notifyListeners();
+    final messagesAtRequestStart = List<ChatMessage>.of(_allMessages);
+    try {
+      Map<String, dynamic> response;
+      try {
+        response = await _queryHistory({
+          '@type': 'getChatHistory',
+          'chat_id': chatId,
+          'from_message_id': 0,
+          'offset': 0,
+          'limit': 40,
+          'only_local': false,
+        });
+      } catch (error) {
+        if (_markPeerRestricted(error)) notifyListeners();
+        return false;
+      }
+      if (_chatOpenWorkIsStale ||
+          _latestHistoryLoadInvalidated ||
+          requestGeneration != _historyWindowGeneration) {
+        return false;
+      }
+      final rawMessages =
+          response.objects('messages') ?? const <Map<String, dynamic>>[];
+      final latest = rawMessages
+          .map(TDParse.message)
+          .whereType<ChatMessage>()
+          .toList();
+      if (rawMessages.isNotEmpty && latest.isEmpty) return false;
+
+      final fetched =
+          <ChatMessage>[...latest, ..._latestHistoryLiveArrivals.values]
+              .where(
+                (message) =>
+                    !_latestHistoryDeletedMessageIds.contains(message.id),
+              )
+              .toList();
+
+      ++_historyWindowGeneration;
+      ++_historyWindowRevision;
+      anchoredHistory = false;
+      _historyAnchorMessageId = null;
+      _pendingScrollToId = null;
+      _hasOlderHistory = fetched.isNotEmpty;
+      _historyReachesLatest = true;
+      _knownLatestMessageId = latestServerMessageId(fetched);
+      if (fetched.isEmpty) {
+        _allMessages = [];
+        _applyKeywordFilter();
+      } else {
+        _mergeHistoryWindow(
+          fetched,
+          messagesAtRequestStart: messagesAtRequestStart,
+          replaceCurrentWindow: true,
+          preserveLiveArrivals: false,
+        );
+      }
+      _resolveRichMessagesIfNeeded(fetched);
+      _resolveSendersIfNeeded(fetched);
+      _resolveRepliesIfNeeded(fetched);
+      _resolveForwardsIfNeeded(fetched);
+      _resolveServiceUsersIfNeeded(fetched);
+    } finally {
+      _latestHistoryLoadInFlight = false;
+      _latestHistoryLiveArrivals.clear();
+      _latestHistoryDeletedMessageIds.clear();
+      _latestHistoryLoadInvalidated = false;
+      notifyListeners();
+    }
+
+    return true;
+  }
+
+  /// Extends the current window toward the latest message without discarding
+  /// unread history or changing its viewport anchor. A short TDLib page is not
+  /// proof that we have reached the end of the chat.
+  Future<bool> loadNewer() async {
+    if (!canLoadNewer) return false;
+    final fromMessageId = latestServerMessageId(_allMessages);
+    final requestGeneration = _historyWindowGeneration;
+    _isLoadingNewer = true;
+    _newerHistoryDeletedMessageIds.clear();
+    try {
+      final response = await _queryHistory({
+        '@type': 'getChatHistory',
+        'chat_id': chatId,
+        'from_message_id': fromMessageId,
+        'offset': -30,
+        'limit': 31,
+        'only_local': false,
+      });
+      if (_chatOpenWorkIsStale ||
+          requestGeneration != _historyWindowGeneration) {
+        return false;
+      }
+      final parsed =
+          (response.objects('messages') ?? const <Map<String, dynamic>>[])
+              .map(TDParse.message)
+              .whereType<ChatMessage>()
+              .where(
+                (message) =>
+                    !_newerHistoryDeletedMessageIds.contains(message.id),
+              )
+              .toList();
+      final newestId = latestServerMessageId(parsed);
+      if (newestId <= fromMessageId) return false;
+      _historyReachesLatest =
+          _knownLatestMessageId > 0 && newestId >= _knownLatestMessageId;
+      _knownLatestMessageId = math.max(_knownLatestMessageId, newestId);
+      _merge(parsed);
+      _resolveRichMessagesIfNeeded(parsed);
+      _resolveSendersIfNeeded(parsed);
+      _resolveRepliesIfNeeded(parsed);
+      _resolveForwardsIfNeeded(parsed);
+      _resolveServiceUsersIfNeeded(parsed);
+      return true;
+    } catch (error) {
+      if (!_chatOpenWorkIsStale &&
+          requestGeneration == _historyWindowGeneration &&
+          _markPeerRestricted(error)) {
+        notifyListeners();
+      }
+      return false;
+    } finally {
+      _isLoadingNewer = false;
+      _newerHistoryDeletedMessageIds.clear();
+    }
+  }
+
+  /// Called only after the reader reaches the actual latest edge. Unlike an
+  /// explicit jump-to-latest, this keeps every paged message and its geometry.
+  void resumeLatestHistoryIfLoaded() {
+    if (!anchoredHistory || !_historyReachesLatest) return;
+    anchoredHistory = false;
+    _historyAnchorMessageId = null;
+    notifyListeners();
+  }
+
+  /// Prevents an in-flight latest-history response from replacing the current
+  /// anchored window after the user takes control of the transcript.
+  ///
+  /// TDLib does not expose cancellation for an already-sent query, so the
+  /// generation check in [loadLatestHistory] discards its eventual response.
+  void invalidateLatestHistoryLoad() {
+    if (!_latestHistoryLoadInFlight) return;
+    _latestHistoryLoadInvalidated = true;
+    ++_historyWindowGeneration;
+  }
+
+  // MARK: - Header
+
+  Future<void> _loadChatHeader() async {
+    final readStateRevisionAtRequestStart = _chatReadStateRevision;
+    final readInboxRevisionAtRequestStart = _chatReadInboxRevision;
+    Map<String, dynamic> chat;
+    try {
+      chat = await _client.query({'@type': 'getChat', 'chat_id': chatId});
+    } catch (error) {
+      if (_markPeerRestricted(error)) {
+        notifyListeners();
+      }
+      return;
+    }
+    if (_chatOpenWorkIsStale) return;
+    if (isForumTopicTranscript) {
+      final topic = await _loadForumTopic();
+      if (_chatOpenWorkIsStale) return;
+      chat = forumTopicChatSnapshot(chat, topic);
+    }
+    peerTitle = chat.str('title') ?? peerTitle;
+    _messageSenderFromChat = chat.obj('message_sender_id');
+    peerPhoto = TDParse.smallPhoto(chat.obj('photo'));
+    firstContactInfo = ChatFirstContactInfo.fromActionBar(
+      chat.obj('action_bar'),
+    );
+    _applyBusinessBotManageBar(chat.obj('business_bot_manage_bar'));
+    lastReadOutboxId = chat.int64('last_read_outbox_message_id') ?? 0;
+    if (shouldApplyInitialChatReadState(
+      readInboxRevisionAtRequestStart: readInboxRevisionAtRequestStart,
+      currentReadInboxRevision: _chatReadInboxRevision,
+    )) {
+      lastReadInboxId = chat.int64('last_read_inbox_message_id') ?? 0;
+      unreadCount = chat.integer('unread_count') ?? 0;
+    }
+    unreadMentionCount = chat.integer('unread_mention_count') ?? 0;
+    unreadReactionCount = chat.integer('unread_reaction_count') ?? 0;
+    isMarkedUnread = chat.boolean('is_marked_as_unread') ?? false;
+    hasProtectedContent =
+        chat.boolean('has_protected_content') ?? hasProtectedContent;
+    final notificationSettings = chat.obj('notification_settings');
+    isMuted = ScopeNotificationSettings.shared.isMuted(chat);
+    if (hasLegacyHiddenNotificationPreview(notificationSettings)) {
+      unawaited(_repairLegacyNotificationPreview(notificationSettings!));
+    }
+    isForum = chat.boolean('view_as_topics') ?? false;
+    messageAutoDeleteTime = _autoDeleteSeconds(chat);
+    _setPaidMessageStarCount(_paidMessageStars(chat), notify: false);
+    _applyRemoteDraft(chat.obj('draft_message'), force: true, notify: false);
+    final kind = TDParse.chatKind(chat);
+    chatKind = kind;
+    isGroup = kind == ChatKind.group || kind == ChatKind.channel;
+    isSecretChat = kind == ChatKind.secret;
+    if (!_didCaptureUnreadSummaryRange) {
+      _didCaptureUnreadSummaryRange = true;
+    }
+    _primeLastMessage(
+      chat,
+      preserveNewer: _chatReadStateRevision != readStateRevisionAtRequestStart,
+    );
+    _chatReadStateLoaded = true;
+    ++_chatReadStateRevision;
+    // Reopen positioning and safe read marking need only the coherent getChat
+    // read/latest snapshot. Publish it before optional peer metadata awaits.
+    notifyListeners();
+    // Chat-wide default send permission + permissive membership defaults
+    // (refined per type below).
+    _chatCanSend =
+        chat.obj('permissions')?.boolean('can_send_basic_messages') ?? true;
+    canSendMessages = _chatCanSend;
+    canSendVoiceNotes =
+        chat.obj('permissions')?.boolean('can_send_voice_notes') ?? true;
+    isMember = true;
+    canJoin = false;
+    joinByRequest = false;
+    isChannel = false;
+    hasLinkedDiscussion = false;
+    isDirectMessagesGroup = false;
+    isAdministeredDirectMessagesGroup = false;
+    canDeleteMessagesBySender = false;
+    sendDisabledReason = '';
+    isPeerRestricted = false;
+    isPeerPornographicRestricted = false;
+    peerRestrictionText = '';
+    final chatRestrictionReason = TDParse.restrictionReasonFor(chat);
+    if (chatRestrictionReason != null && TDParse.isBlockingRestriction(chat)) {
+      _setPeerRestricted(
+        chatRestrictionReason,
+        isPornographic: TDParse.isPornographicRestriction(chat),
+      );
+    }
+
+    final type = chat.obj('type');
+    if (type?.type == 'chatTypeSecret') {
+      _secretChatId = type?.integer('secret_chat_id');
+      _applySecretChatReadiness(SecretChatReadiness.unknown, notify: false);
+      await _loadSecretChatState();
+      if (_chatOpenWorkIsStale) return;
+    } else {
+      _secretChatId = null;
+    }
+    switch (type?.type) {
+      case 'chatTypePrivate':
+      case 'chatTypeSecret':
+        peerBasicGroupId = null;
+        peerSupergroupId = null;
+        peerUserId = type?.int64('user_id');
+        final uid = peerUserId;
+        if (uid != null) {
+          try {
+            final user = await _client.query({
+              '@type': 'getUser',
+              'user_id': uid,
+            });
+            if (_chatOpenWorkIsStale) return;
+            final restrictionReason = TDParse.restrictionReasonFor(user);
+            if (restrictionReason != null &&
+                TDParse.isBlockingRestriction(user)) {
+              _setPeerRestricted(
+                restrictionReason,
+                isPornographic: TDParse.isPornographicRestriction(user),
+              );
+            }
+            _applyPeerBotCapabilities(user, notify: false);
+            peerOnline = TDParse.isUserOnline(user);
+            peerStatusText = TDParse.userStatus(user);
+            firstContactInfo = firstContactInfo?.withUser(user);
+          } catch (error) {
+            if (_markPeerRestricted(error)) {
+              notifyListeners();
+            }
+          }
+          if (type?.type == 'chatTypePrivate') {
+            unawaited(_loadPrivatePaidMessageInfo(uid));
+            if (peerIsBot) {
+              await _loadBotInfo(uid);
+              if (_chatOpenWorkIsStale) return;
+            }
+          }
+        }
+      case 'chatTypeBasicGroup':
+        final gid = type?.int64('basic_group_id');
+        peerUserId = null;
+        peerBasicGroupId = gid;
+        peerSupergroupId = null;
+        if (gid != null) {
+          try {
+            final bg = await _client.query({
+              '@type': 'getBasicGroup',
+              'basic_group_id': gid,
+            });
+            if (_chatOpenWorkIsStale) return;
+            memberCount = bg.integer('member_count') ?? 0;
+            _applyGroupStatus(bg.obj('status'));
+          } catch (_) {}
+          unawaited(_loadBasicGroupFullInfo(gid));
+        }
+      case 'chatTypeSupergroup':
+        final sgid = type?.int64('supergroup_id');
+        peerUserId = null;
+        peerBasicGroupId = null;
+        peerSupergroupId = sgid;
+        if (sgid != null) {
+          try {
+            final sg = await _client.query({
+              '@type': 'getSupergroup',
+              'supergroup_id': sgid,
+            });
+            if (_chatOpenWorkIsStale) return;
+            final restrictionReason = TDParse.restrictionReasonFor(sg);
+            if (restrictionReason != null &&
+                TDParse.isBlockingRestriction(sg)) {
+              _setPeerRestricted(
+                restrictionReason,
+                isPornographic: TDParse.isPornographicRestriction(sg),
+              );
+            }
+            isChannel = sg.boolean('is_channel') ?? false;
+            isDirectMessagesGroup =
+                sg.boolean('is_direct_messages_group') ?? false;
+            isAdministeredDirectMessagesGroup =
+                sg.boolean('is_administered_direct_messages_group') ?? false;
+            isForum = isForum || (sg.boolean('is_forum') ?? false);
+            hasForumTabs = sg.boolean('has_forum_tabs') ?? false;
+            joinByRequest = sg.boolean('join_by_request') ?? false;
+            _setPaidMessageStarCount(_paidMessageStars(sg), notify: false);
+            _applyGroupStatus(sg.obj('status'));
+          } catch (error) {
+            if (_markPeerRestricted(error)) {
+              notifyListeners();
+            }
+          }
+          unawaited(_loadSupergroupFullInfo(sgid));
+        }
+    }
+    if (supportsTopics) {
+      unawaited(loadForumTopics());
+    } else if (forumTopics.isNotEmpty || forumTopicsLoading) {
+      forumTopicsLoading = false;
+      forumTopics = const [];
+    }
+    if (isChannel || peerIsBot) {
+      unawaited(_retrieveSponsoredMessages());
+    }
+    if (!canSendMessages && sendDisabledReason.isEmpty && isPeerRestricted) {
+      sendDisabledReason = AppStrings.t(
+        AppStringKeys.chatRestrictedTelegramTosMessage,
+      );
+    }
+    notifyListeners();
+    unawaited(_loadPinnedMessage());
+  }
+
+  Future<void> refreshPeerRestrictionState() => _loadChatHeader();
+
+  Future<void> _loadSecretChatState() async {
+    final secretChatId = _secretChatId;
+    if (secretChatId == null) return;
+    try {
+      final secretChat = await SecretChatService.get(secretChatId);
+      if (_secretChatId != secretChatId) return;
+      _applySecretChatReadiness(
+        SecretChatService.readiness(secretChat),
+        notify: false,
+      );
+    } catch (error) {
+      debugPrint('Could not load secret chat $secretChatId: $error');
+      _applySecretChatReadiness(SecretChatReadiness.unknown, notify: false);
+    }
+  }
+
+  void _applySecretChatReadiness(
+    SecretChatReadiness readiness, {
+    bool notify = true,
+  }) {
+    switch (readiness) {
+      case SecretChatReadiness.ready:
+        canSendMessages = _chatCanSend;
+        sendDisabledReason = canSendMessages
+            ? ''
+            : AppStrings.t(AppStringKeys.chatRestrictedTelegramTosMessage);
+      case SecretChatReadiness.closed:
+        canSendMessages = false;
+        sendDisabledReason = AppStrings.t(AppStringKeys.secretChatClosed);
+      case SecretChatReadiness.pending:
+      case SecretChatReadiness.unknown:
+        canSendMessages = false;
+        sendDisabledReason = AppStrings.t(AppStringKeys.secretChatWaiting);
+    }
+    if (notify) notifyListeners();
+  }
+
+  Future<void> _retrieveSponsoredMessages() async {
+    final cacheKey = '${_client.activeSlot}:$chatId';
+    try {
+      final snapshot = await _sponsoredMessagesCache.retrieve(
+        cacheKey: cacheKey,
+        refresh: true,
+        fetch: () => _client.query({
+          '@type': 'getChatSponsoredMessages',
+          'chat_id': chatId,
+        }),
+      );
+      if (_isDisposed) return;
+      sponsoredMessages = snapshot;
+    } catch (_) {
+      // Sponsorship retrieval must never prevent a channel from opening.
+    }
+  }
+
+  void _primeLastMessage(
+    Map<String, dynamic> chat, {
+    bool preserveNewer = false,
+  }) {
+    final lastRaw = chat.obj('last_message');
+    final lastMessage = lastRaw == null ? null : TDParse.message(lastRaw);
+    if (lastMessage == null) return;
+    final lastMessageId = isPendingChatMessage(lastMessage)
+        ? 0
+        : lastMessage.id;
+    _knownLatestMessageId = preserveNewer
+        ? math.max(_knownLatestMessageId, lastMessageId)
+        : lastMessageId;
+    if (_restoredFromSession) {
+      // A restored transcript may predate this item. Appending it here would
+      // create a visible hole until history hydration completes.
+      _historyReachesLatest = false;
+      return;
+    }
+    final canPrimeWindow =
+        _allMessages.isEmpty ||
+        _allMessages.any((message) => message.id == lastMessage.id);
+    if (!canPrimeWindow) {
+      _historyReachesLatest = false;
+      return;
+    }
+    _historyReachesLatest = true;
+    _merge([lastMessage]);
+    _resolveRichMessagesIfNeeded([lastMessage]);
+    _resolveRepliesIfNeeded([lastMessage]);
+    _resolveForwardsIfNeeded([lastMessage]);
+  }
+
+  Future<void> _loadSupergroupFullInfo(int supergroupId) async {
+    try {
+      final full = await _client.query({
+        '@type': 'getSupergroupFullInfo',
+        'supergroup_id': supergroupId,
+      });
+      if (_isDisposed || peerSupergroupId != supergroupId) return;
+      memberCount = full.integer('member_count') ?? memberCount;
+      hasLinkedDiscussion =
+          isChannel && (full.int64('linked_chat_id') ?? 0) != 0;
+      _setPaidMessageStarCount(_paidMessageStars(full), notify: false);
+      notifyListeners();
+      if (isChannel) {
+        _clearGroupBotCommands();
+      } else {
+        unawaited(_applyGroupBotCommands(full));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadBasicGroupFullInfo(int basicGroupId) async {
+    try {
+      final full = await _client.query({
+        '@type': 'getBasicGroupFullInfo',
+        'basic_group_id': basicGroupId,
+      });
+      if (_isDisposed || peerBasicGroupId != basicGroupId) return;
+      final members = full.objects('members');
+      if (members != null) memberCount = members.length;
+      notifyListeners();
+      unawaited(_applyGroupBotCommands(full));
+    } catch (_) {}
+  }
+
+  Future<void> _applyGroupBotCommands(Map<String, dynamic> fullInfo) async {
+    final generation = ++_groupBotCommandsGeneration;
+    final commands = await resolveGroupBotCommandOptions(fullInfo, (
+      userId,
+    ) async {
+      try {
+        return await _client.query({'@type': 'getUser', 'user_id': userId});
+      } catch (_) {
+        return null;
+      }
+    });
+    if (_isDisposed ||
+        generation != _groupBotCommandsGeneration ||
+        !isGroup ||
+        isChannel) {
+      return;
+    }
+    botCommands = commands;
+    notifyListeners();
+  }
+
+  void _clearGroupBotCommands() {
+    _groupBotCommandsGeneration++;
+    if (botCommands.isEmpty) return;
+    botCommands = const [];
+    notifyListeners();
+  }
+
+  Future<void> _loadPrivatePaidMessageInfo(int userId, {bool force = false}) {
+    if (!force &&
+        _privateMessageInfoLoaded &&
+        _privateMessageInfoUserId == userId) {
+      return Future.value();
+    }
+    final current = _privateMessageInfoLoad;
+    if (current != null && _privateMessageInfoUserId == userId) return current;
+    _privateMessageInfoUserId = userId;
+    final future = _fetchPrivateMessageInfo(userId);
+    _privateMessageInfoLoad = future;
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_privateMessageInfoLoad, future)) {
+          _privateMessageInfoLoad = null;
+        }
+      }),
+    );
+    return future;
+  }
+
+  Future<void> _fetchPrivateMessageInfo(int userId) async {
+    var next = 0;
+    var restrictsNewChats = false;
+    var isUnavailable = false;
+    var voiceMessagesForbidden = false;
+    try {
+      final full = await _client.query({
+        '@type': 'getUserFullInfo',
+        'user_id': userId,
+      });
+      next = _paidMessageStars(full);
+      voiceMessagesForbidden =
+          full.boolean('has_restricted_voice_and_video_note_messages') ?? false;
+    } catch (_) {}
+    try {
+      final result = await _client.query({
+        '@type': 'canSendMessageToUser',
+        'user_id': userId,
+        'only_local': false,
+      });
+      switch (result.type) {
+        case 'canSendMessageToUserResultUserHasPaidMessages':
+          next = _paidMessageStars(result);
+        case 'canSendMessageToUserResultUserRestrictsNewChats':
+          next = 0;
+          restrictsNewChats = true;
+        case 'canSendMessageToUserResultUserIsDeleted':
+          next = 0;
+          isUnavailable = true;
+        case 'canSendMessageToUserResultOk':
+          next = 0;
+      }
+    } catch (_) {}
+    if (_isDisposed || peerUserId != userId) return;
+    _privateMessageInfoLoaded = true;
+    final paidCountChanged = paidMessageStarCount != next;
+    final requirementChanged =
+        peerRequiresPremiumOrContact != restrictsNewChats ||
+        peerIsUnavailable != isUnavailable;
+    final voiceRestrictionChanged =
+        canSendVoiceNotes != !voiceMessagesForbidden;
+    peerRequiresPremiumOrContact = restrictsNewChats;
+    peerIsUnavailable = isUnavailable;
+    canSendVoiceNotes = !voiceMessagesForbidden;
+    _setPaidMessageStarCount(next, notify: false);
+    if (paidCountChanged || requirementChanged || voiceRestrictionChanged) {
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadForumTopics() async {
+    if (!supportsTopics || forumTopicsLoading) return;
+    forumTopicsLoading = true;
+    notifyListeners();
+    try {
+      final response = await _client.query({
+        '@type': 'getForumTopics',
+        'chat_id': chatId,
+        'query': '',
+        'offset_date': 0,
+        'offset_message_id': 0,
+        'offset_forum_topic_id': 0,
+        'limit': 80,
+      });
+      final raw = response.objects('topics') ?? const <Map<String, dynamic>>[];
+      final topics = <ForumTopicOption>[];
+      for (final topic in raw) {
+        final info = topic.obj('info') ?? topic;
+        final id = _forumTopicId(topic, info);
+        if (id == null || id == 0) continue;
+        final name =
+            info.str('name') ??
+            topic.str('name') ??
+            AppStrings.t(AppStringKeys.topicChatTopicTitle);
+        final icon = info.obj('icon') ?? topic.obj('icon');
+        topics.add(
+          ForumTopicOption(
+            id: id,
+            name: name,
+            iconCustomEmojiId:
+                icon?.int64('custom_emoji_id') ??
+                info.int64('icon_custom_emoji_id') ??
+                topic.int64('icon_custom_emoji_id') ??
+                0,
+            iconColor:
+                icon?.integer('color') ??
+                info.integer('icon_color') ??
+                topic.integer('icon_color') ??
+                0,
+          ),
+        );
+      }
+      forumTopics = topics;
+    } catch (_) {
+      forumTopics = const [];
+    } finally {
+      forumTopicsLoading = false;
+      notifyListeners();
+    }
+  }
+
+  int? _forumTopicId(Map<String, dynamic> topic, Map<String, dynamic> info) {
+    return info.integer('forum_topic_id') ??
+        topic.integer('forum_topic_id') ??
+        info.int64('message_thread_id') ??
+        topic.int64('message_thread_id');
+  }
+
+  int _autoDeleteSeconds(Map<String, dynamic> chat) {
+    final nested = chat.obj('message_auto_delete_time');
+    return nested?.integer('time') ??
+        chat.integer('message_auto_delete_time') ??
+        chat.integer('auto_delete_time') ??
+        0;
+  }
+
+  int _paidMessageStars(Map<String, dynamic> object) {
+    final direct = object.obj('direct_messages_chat_topic');
+    final settings = object.obj('paid_message_settings');
+    return object.int64('outgoing_paid_message_star_count') ??
+        object.int64('paid_message_star_count') ??
+        object.int64('send_paid_message_star_count') ??
+        object.int64('paid_messages_star_count') ??
+        direct?.int64('outgoing_paid_message_star_count') ??
+        direct?.int64('paid_message_star_count') ??
+        direct?.int64('send_paid_message_star_count') ??
+        settings?.int64('outgoing_paid_message_star_count') ??
+        settings?.int64('paid_message_star_count') ??
+        settings?.int64('send_paid_message_star_count') ??
+        0;
+  }
+
+  bool _isBotUser(Map<String, dynamic> user) => TDParse.isBotUser(user);
+
+  void _applyPeerBotCapabilities(
+    Map<String, dynamic> user, {
+    bool notify = true,
+  }) {
+    if (user.int64('id') != peerUserId) return;
+    final nextIsBot = TDParse.isBotUser(user);
+    final nextSupportsTopics = TDParse.botUserHasTopics(user);
+    if (peerIsBot == nextIsBot && supportsBotTopics == nextSupportsTopics) {
+      return;
+    }
+    peerIsBot = nextIsBot;
+    supportsBotTopics = nextSupportsTopics;
+    if (!supportsTopics) {
+      forumTopicsLoading = false;
+      forumTopics = const [];
+    }
+    if (notify) notifyListeners();
+  }
+
+  Future<int?> webAppBotUserId(ChatMessage? message) async {
+    if (peerIsBot && peerUserId != null) return peerUserId;
+    final senderId = message?.senderId;
+    if (senderId == null || senderId <= 0) return null;
+    try {
+      final user = await _client.query({
+        '@type': 'getUser',
+        'user_id': senderId,
+      });
+      return _isBotUser(user) ? senderId : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _loadBotInfo(int userId) async {
+    try {
+      final full = await _client.query({
+        '@type': 'getUserFullInfo',
+        'user_id': userId,
+      });
+      final info = full.obj('bot_info');
+      if (info == null) return;
+      final menu = _parseBotMenu(info.obj('menu_button'));
+      final commands =
+          (info.objects('commands') ?? const <Map<String, dynamic>>[])
+              .map(
+                (c) => BotCommandOption(
+                  command: c.str('command') ?? '',
+                  description: c.str('description') ?? '',
+                ),
+              )
+              .where((c) => c.command.trim().isNotEmpty)
+              .toList();
+      botMenu = menu;
+      botCommands = commands;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  BotMenuInfo? _parseBotMenu(Map<String, dynamic>? menu) {
+    if (menu == null) return null;
+    switch (menu.type) {
+      case 'botMenuButton':
+        return BotMenuInfo(
+          type: menu.type!,
+          text: menu.str('text') ?? AppStrings.t(AppStringKeys.chatMenu),
+          url: menu.str('url') ?? '',
+        );
+      case 'botMenuButtonCommands':
+      case 'botMenuButtonDefault':
+        return BotMenuInfo(type: menu.type!);
+    }
+    return null;
+  }
+
+  /// Maps the current user's member status (+ channel-ness / chat defaults) onto
+  /// the send / membership / join flags the chat UI reads.
+  void _applyGroupStatus(Map<String, dynamic>? status) {
+    switch (status?.type) {
+      case 'chatMemberStatusCreator':
+        canDeleteMessagesBySender = true;
+        isMember = true;
+        canSendMessages = true;
+      case 'chatMemberStatusAdministrator':
+        canDeleteMessagesBySender =
+            status?.obj('rights')?.boolean('can_delete_messages') ?? false;
+        isMember = true;
+        canSendMessages = true;
+      case 'chatMemberStatusMember':
+        isMember = true;
+        canSendMessages = isChannel ? false : _chatCanSend;
+        if (!canSendMessages) {
+          sendDisabledReason = isChannel
+              ? AppStrings.t(AppStringKeys.chatAdminsOnlyPosting)
+              : AppStrings.t(AppStringKeys.chatAllMembersMuted);
+        }
+      case 'chatMemberStatusRestricted':
+        isMember = status?.boolean('is_member') ?? true;
+        canSendMessages =
+            status?.obj('permissions')?.boolean('can_send_basic_messages') ??
+            false;
+        canSendVoiceNotes =
+            status?.obj('permissions')?.boolean('can_send_voice_notes') ??
+            canSendVoiceNotes;
+        if (!isMember) canJoin = true;
+        if (!canSendMessages) {
+          sendDisabledReason = AppStrings.t(AppStringKeys.chatYouAreMuted);
+        }
+      case 'chatMemberStatusLeft':
+        isMember = false;
+        canSendMessages = false;
+        canSendVoiceNotes = false;
+        canJoin = true;
+      case 'chatMemberStatusBanned':
+        isMember = false;
+        canSendMessages = false;
+        canSendVoiceNotes = false;
+        sendDisabledReason = AppStrings.t(
+          AppStringKeys.chatYouWereRemovedFromGroup,
+        );
+    }
+  }
+
+  /// Mute / unmute notifications — the bottom-bar action for a channel you're
+  /// subscribed to but can't post in (mirrors the official client).
+  Future<void> toggleMute() async {
+    final target = isMuted;
+    isMuted = !isMuted;
+    notifyListeners();
+    try {
+      await _client.query({
+        '@type': 'setChatNotificationSettings',
+        'chat_id': chatId,
+        'notification_settings': inheritedChatNotificationSettings(
+          muteFor: target ? 0 : 2147483647,
+        ),
+      });
+    } catch (_) {
+      isMuted = target; // revert on failure
+      notifyListeners();
+    }
+  }
+
+  Future<void> _repairLegacyNotificationPreview(
+    Map<String, dynamic> settings,
+  ) async {
+    try {
+      await _client.query({
+        '@type': 'setChatNotificationSettings',
+        'chat_id': chatId,
+        'notification_settings': repairedChatNotificationSettings(settings),
+      });
+    } catch (_) {}
+  }
+
+  /// Joins (or, for approval-required chats, requests to join) the current chat.
+  /// Optimistically updates membership; TDLib updates refine it.
+  Future<void> joinChat() async {
+    try {
+      await _client.query({'@type': 'joinChat', 'chat_id': chatId});
+      if (joinByRequest) {
+        joinRequested = true;
+      } else {
+        isMember = true;
+        canJoin = false;
+        canSendMessages = isChannel ? false : _chatCanSend;
+        if (!canSendMessages && isChannel) {
+          sendDisabledReason = AppStrings.t(
+            AppStringKeys.chatAdminsOnlyPosting,
+          );
+        }
+      }
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _loadPinnedMessage() async {
+    try {
+      final res = await _queryHistory({
+        '@type': 'searchChatMessages',
+        'chat_id': chatId,
+        'query': '',
+        'sender_id': null,
+        'from_message_id': 0,
+        'offset': 0,
+        'limit': 50,
+        'filter': {'@type': 'searchMessagesFilterPinned'},
+      });
+      final list = res.objects('messages');
+      if (list == null || list.isEmpty) return;
+      final parsed = list
+          .map(TDParse.message)
+          .whereType<ChatMessage>()
+          .toList();
+      if (parsed.isEmpty) return;
+      pinnedMessages = parsed;
+      pinnedMessageIndex = pinnedMessageIndex.clamp(0, parsed.length - 1);
+      pinnedMessage = parsed[pinnedMessageIndex];
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  bool get hasPreviousPinnedMessage => pinnedMessageIndex > 0;
+  bool get hasNextPinnedMessage =>
+      pinnedMessageIndex < pinnedMessages.length - 1;
+
+  ChatMessage? previousPinnedMessage() {
+    if (!hasPreviousPinnedMessage) return null;
+    pinnedMessageIndex--;
+    pinnedMessage = pinnedMessages[pinnedMessageIndex];
+    pinnedDismissed = false;
+    notifyListeners();
+    return pinnedMessage;
+  }
+
+  ChatMessage? nextPinnedMessage() {
+    if (!hasNextPinnedMessage) return null;
+    pinnedMessageIndex++;
+    pinnedMessage = pinnedMessages[pinnedMessageIndex];
+    pinnedDismissed = false;
+    notifyListeners();
+    return pinnedMessage;
+  }
+
+  void dismissPinned() {
+    pinnedDismissed = true;
+    notifyListeners();
+  }
+
+  Future<void> pinTodo(ChatMessage message) async {
+    await _client.query({
+      '@type': 'pinChatMessage',
+      'chat_id': chatId,
+      'message_id': message.id,
+      'disable_notification': true,
+      'only_for_self': false,
+    });
+    pinnedMessage = message;
+    pinnedMessages = [
+      message,
+      ...pinnedMessages.where((m) => m.id != message.id),
+    ];
+    pinnedMessageIndex = 0;
+    pinnedDismissed = false;
+    notifyListeners();
+  }
+
+  Future<void> unpinTodo(ChatMessage message) async {
+    await _client.query({
+      '@type': 'unpinChatMessage',
+      'chat_id': chatId,
+      'message_id': message.id,
+    });
+    final removedIndex = pinnedMessages.indexWhere((m) => m.id == message.id);
+    pinnedMessages = pinnedMessages.where((m) => m.id != message.id).toList();
+    if (pinnedMessages.isEmpty) {
+      pinnedMessage = null;
+      pinnedMessageIndex = 0;
+      pinnedDismissed = false;
+      notifyListeners();
+      return;
+    }
+    if (removedIndex >= 0 && removedIndex <= pinnedMessageIndex) {
+      pinnedMessageIndex = (pinnedMessageIndex - 1).clamp(
+        0,
+        pinnedMessages.length - 1,
+      );
+    } else {
+      pinnedMessageIndex = pinnedMessageIndex.clamp(
+        0,
+        pinnedMessages.length - 1,
+      );
+    }
+    pinnedMessage = pinnedMessages[pinnedMessageIndex];
+    pinnedDismissed = false;
+    notifyListeners();
+  }
+
+  // MARK: - History
+
+  Future<void> _loadInitialHistory({required bool openAtLatest}) async {
+    if (shouldLoadInitialHistoryAroundLastRead(
+      openAtLatest: openAtLatest,
+      lastReadInboxId: lastReadInboxId,
+      unreadCount: unreadCount,
+    )) {
+      final loaded = await _loadInitialAroundLastRead();
+      if (_chatOpenWorkIsStale) return;
+      // A chat-list preview hit can satisfy around-last-read with one local
+      // bubble. Fall through to latest hydration so the open path does not
+      // settle until the user scrolls.
+      if (loaded && !isThinInitialHistoryWindow(messages.length)) return;
+    }
+    await _loadInitialLatestHistory();
+  }
+
+  Future<bool> _loadInitialAroundLastRead() async {
+    final loadedLocal = await loadAroundMessage(
+      lastReadInboxId,
+      onlyLocal: true,
+      scrollToTarget: false,
+    );
+    if (_chatOpenWorkIsStale) return false;
+    if (loadedLocal) {
+      if (isThinInitialHistoryWindow(messages.length)) {
+        final loadedRemote = await loadAroundMessage(
+          lastReadInboxId,
+          scrollToTarget: false,
+          replaceCurrentWindow: false,
+        );
+        if (_chatOpenWorkIsStale) return false;
+        return loadedRemote;
+      }
+      unawaited(
+        loadAroundMessage(
+          lastReadInboxId,
+          scrollToTarget: false,
+          replaceCurrentWindow: false,
+        ),
+      );
+      return true;
+    }
+    return loadAroundMessage(lastReadInboxId, scrollToTarget: false);
+  }
+
+  Future<void> _loadInitialLatestHistory() async {
+    if (_chatOpenWorkIsStale) return;
+    anchoredHistory = false;
+    _historyAnchorMessageId = null;
+    final localLoaded = await _fetchHistory(0, 0, 40, onlyLocal: true);
+    if (_chatOpenWorkIsStale) return;
+    if (shouldHydrateInitialHistoryInBackground(
+      loadedMessageCount: _allMessages.length,
+    )) {
+      // The chat-list seed or a local TDLib page is enough to make the view
+      // interactive. Refreshing through loadLatestHistory publishes its own
+      // completion notification and blocks short-window paging from racing the
+      // same remote request.
+      unawaited(loadLatestHistory());
+      return;
+    }
+    if (!localLoaded) await _fetchHistory(0, 0, 40);
+  }
+
+  Future<void> _hydrateRestoredLatestHistory() async {
+    await _fetchHistory(0, 0, 40, onlyLocal: true);
+    if (_chatOpenWorkIsStale) return;
+    await _fetchHistory(0, 0, 40);
+  }
+
+  Future<bool> loadAroundMessage(
+    int messageId, {
+    bool onlyLocal = false,
+    bool scrollToTarget = true,
+    bool replaceCurrentWindow = true,
+    bool Function()? isCancelled,
+  }) async {
+    bool cancelled() => isCancelled?.call() ?? false;
+
+    if (_chatOpenWorkIsStale || cancelled()) return false;
+    final requestGeneration = replaceCurrentWindow
+        ? ++_historyWindowGeneration
+        : _historyWindowGeneration;
+    final messagesAtRequestStart = List<ChatMessage>.of(_allMessages);
+    final latestMessageIdAtRequestStart = _knownLatestMessageId;
+    final batch = <ChatMessage>[];
+    try {
+      final targetRaw = await _client.query({
+        '@type': 'getMessage',
+        'chat_id': chatId,
+        'message_id': messageId,
+      });
+      if (cancelled()) return false;
+      final target = TDParse.message(targetRaw);
+      if (target != null) batch.add(target);
+    } catch (_) {
+      if (cancelled()) return false;
+      // A missing or restricted target message doesn't imply the containing
+      // chat is restricted. Load its surrounding history when available.
+    }
+
+    if (_chatOpenWorkIsStale ||
+        cancelled() ||
+        requestGeneration != _historyWindowGeneration) {
+      return false;
+    }
+
+    try {
+      final response = await _queryHistory({
+        '@type': 'getChatHistory',
+        'chat_id': chatId,
+        'from_message_id': messageId,
+        'offset': -30,
+        'limit': 80,
+        'only_local': onlyLocal,
+      });
+      if (cancelled()) return false;
+      batch.addAll(
+        (response.objects('messages') ?? const <Map<String, dynamic>>[])
+            .map(TDParse.message)
+            .whereType<ChatMessage>(),
+      );
+    } catch (error) {
+      if (cancelled()) return false;
+      if (_markPeerRestricted(error)) notifyListeners();
+    }
+
+    if (_chatOpenWorkIsStale ||
+        cancelled() ||
+        requestGeneration != _historyWindowGeneration) {
+      return false;
+    }
+    if (batch.isEmpty) return false;
+    if (replaceCurrentWindow) {
+      ++_historyWindowGeneration;
+      ++_historyWindowRevision;
+    }
+    _hasOlderHistory = true;
+    anchoredHistory = true;
+    _historyAnchorMessageId = messageId;
+    if (scrollToTarget) _pendingScrollToId = messageId;
+    _mergeHistoryWindow(
+      batch,
+      messagesAtRequestStart: messagesAtRequestStart,
+      replaceCurrentWindow: replaceCurrentWindow,
+      preserveLiveArrivals:
+          latestMessageIdAtRequestStart <= 0 ||
+          batch.any((message) => message.id == latestMessageIdAtRequestStart),
+    );
+    final reachesKnownLatest =
+        _knownLatestMessageId <= 0 ||
+        _allMessages.any((message) => message.id == _knownLatestMessageId);
+    _historyReachesLatest = replaceCurrentWindow
+        ? reachesKnownLatest
+        : _historyReachesLatest || reachesKnownLatest;
+    _resolveRichMessagesIfNeeded(batch);
+    _resolveSendersIfNeeded(batch);
+    _resolveRepliesIfNeeded(batch);
+    _resolveForwardsIfNeeded(batch);
+    _resolveServiceUsersIfNeeded(batch);
+    return messages.any((m) => m.id == messageId);
+  }
+
+  Future<int?> openNextUnreadMention() async {
+    try {
+      final response = await _queryHistory({
+        '@type': 'searchChatMessages',
+        'chat_id': chatId,
+        'query': '',
+        'sender_id': null,
+        'from_message_id': 0,
+        'offset': 0,
+        'limit': math.min(
+          100,
+          math.max(10, unreadMentionCount + _locallyViewedMentionIds.length),
+        ),
+        'filter': {'@type': 'searchMessagesFilterUnreadMention'},
+      });
+      final rawMessages =
+          response.objects('messages') ?? const <Map<String, dynamic>>[];
+      if (rawMessages.isEmpty) {
+        _setUnreadMentionCount(0, emitLocalUpdate: true);
+        return null;
+      }
+      final mentions = rawMessages
+          .map(TDParse.message)
+          .whereType<ChatMessage>()
+          .where((message) => !_locallyViewedMentionIds.contains(message.id))
+          .toList();
+      final mention = mentions.isEmpty ? null : mentions.first;
+      return mention?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<int?> openNextUnreadReaction() async {
+    try {
+      final response = await _queryHistory({
+        '@type': 'searchChatMessages',
+        'chat_id': chatId,
+        'query': '',
+        'sender_id': null,
+        'from_message_id': 0,
+        'offset': 0,
+        'limit': math.min(
+          100,
+          math.max(10, unreadReactionCount + _locallyViewedReactionIds.length),
+        ),
+        'filter': {'@type': 'searchMessagesFilterUnreadReaction'},
+      });
+      final rawMessages =
+          response.objects('messages') ?? const <Map<String, dynamic>>[];
+      if (rawMessages.isEmpty) {
+        _setUnreadReactionCount(0, emitLocalUpdate: true);
+        return null;
+      }
+      final reactions = rawMessages
+          .map(TDParse.message)
+          .whereType<ChatMessage>()
+          .where((message) => !_locallyViewedReactionIds.contains(message.id))
+          .toList();
+      final reaction = reactions.isEmpty ? null : reactions.first;
+      return reaction?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Reports the exact messages that entered the viewport. TDLib tracks
+  /// unread mentions and reactions independently from the ordinary inbox
+  /// boundary. Sending the concrete IDs clears all three states correctly.
+  void markVisibleMessagesViewed(Iterable<ChatMessage> visibleMessages) {
+    final viewed = visibleMessages
+        .where(
+          (message) =>
+              (!message.isOutgoing && !message.isService) ||
+              message.hasUnreadReactions,
+        )
+        .toList(growable: false);
+    if (viewed.isEmpty) return;
+    _client.send({
+      '@type': 'viewMessages',
+      'chat_id': chatId,
+      'message_ids': viewed.map((message) => message.id).toSet().toList(),
+      'force_read': true,
+    });
+    _consumeViewedMentions(
+      viewed
+          .where((message) => message.containsUnreadMention)
+          .map((message) => message.id),
+    );
+    _consumeViewedReactions(
+      viewed
+          .where((message) => message.hasUnreadReactions)
+          .map((message) => message.id),
+    );
+  }
+
+  /// Marks the mention selected by the blue @ control after the view has
+  /// scrolled it into place. Awaiting TDLib prevents a quick second tap from
+  /// resolving the same mention again.
+  Future<void> markUnreadMentionRead(int messageId) async {
+    try {
+      await _client.query({
+        '@type': 'viewMessages',
+        'chat_id': chatId,
+        'message_ids': [messageId],
+        'force_read': true,
+      });
+    } catch (_) {
+      return;
+    }
+    _consumeViewedMentions([messageId], force: true);
+  }
+
+  Future<void> markUnreadReactionRead(int messageId) async {
+    try {
+      await _client.query({
+        '@type': 'viewMessages',
+        'chat_id': chatId,
+        'message_ids': [messageId],
+        'force_read': true,
+      });
+    } catch (_) {
+      return;
+    }
+    _consumeViewedReactions([messageId], force: true);
+  }
+
+  void _consumeViewedMentions(Iterable<int> messageIds, {bool force = false}) {
+    final candidates = messageIds
+        .where((id) => id > 0 && !_locallyViewedMentionIds.contains(id))
+        .toSet();
+    if (candidates.isEmpty) return;
+    final unreadIds = force
+        ? candidates
+        : _allMessages
+              .where(
+                (message) =>
+                    candidates.contains(message.id) &&
+                    message.containsUnreadMention,
+              )
+              .map((message) => message.id)
+              .toSet();
+    if (unreadIds.isEmpty) return;
+
+    _locallyViewedMentionIds.addAll(unreadIds);
+    while (_locallyViewedMentionIds.length > 512) {
+      _locallyViewedMentionIds.remove(_locallyViewedMentionIds.first);
+    }
+    for (final message in _allMessages) {
+      if (unreadIds.contains(message.id)) {
+        message.containsUnreadMention = false;
+      }
+    }
+    _setUnreadMentionCount(
+      unreadMentionCountAfterReading(unreadMentionCount, unreadIds.length),
+      emitLocalUpdate: true,
+    );
+  }
+
+  void _consumeViewedReactions(Iterable<int> messageIds, {bool force = false}) {
+    final candidates = messageIds
+        .where((id) => id > 0 && !_locallyViewedReactionIds.contains(id))
+        .toSet();
+    if (candidates.isEmpty) return;
+    final unreadIds = force
+        ? candidates
+        : _allMessages
+              .where(
+                (message) =>
+                    candidates.contains(message.id) &&
+                    message.hasUnreadReactions,
+              )
+              .map((message) => message.id)
+              .toSet();
+    if (unreadIds.isEmpty) return;
+
+    _locallyViewedReactionIds.addAll(unreadIds);
+    while (_locallyViewedReactionIds.length > 512) {
+      _locallyViewedReactionIds.remove(_locallyViewedReactionIds.first);
+    }
+    for (final message in _allMessages) {
+      if (unreadIds.contains(message.id)) {
+        message.hasUnreadReactions = false;
+      }
+    }
+    _setUnreadReactionCount(
+      unreadReactionCountAfterReading(unreadReactionCount, unreadIds.length),
+      emitLocalUpdate: true,
+    );
+  }
+
+  bool _setUnreadMentionCount(int count, {bool emitLocalUpdate = false}) {
+    final next = math.max(0, count);
+    final changed = unreadMentionCount != next;
+    unreadMentionCount = next;
+    if (changed) notifyListeners();
+    if (emitLocalUpdate && !isForumTopicTranscript) {
+      _client.emitLocalUpdate({
+        '@type': 'updateChatUnreadMentionCount',
+        'chat_id': chatId,
+        'unread_mention_count': next,
+      });
+    }
+    return changed;
+  }
+
+  bool _setUnreadReactionCount(int count, {bool emitLocalUpdate = false}) {
+    final next = math.max(0, count);
+    final changed = unreadReactionCount != next;
+    unreadReactionCount = next;
+    if (changed) notifyListeners();
+    if (emitLocalUpdate && !isForumTopicTranscript) {
+      _client.emitLocalUpdate({
+        '@type': 'updateChatUnreadReactionCount',
+        'chat_id': chatId,
+        'unread_reaction_count': next,
+      });
+    }
+    return changed;
+  }
+
+  Future<bool> _fetchHistory(
+    int fromMessageId,
+    int offset,
+    int limit, {
+    bool isOlder = false,
+    bool onlyLocal = false,
+  }) async {
+    if (_chatOpenWorkIsStale) return false;
+    final requestGeneration = _historyWindowGeneration;
+    Map<String, dynamic> response;
+    try {
+      response = await _queryHistory({
+        '@type': 'getChatHistory',
+        'chat_id': chatId,
+        'from_message_id': fromMessageId,
+        'offset': offset,
+        'limit': limit,
+        'only_local': onlyLocal,
+      });
+    } catch (error) {
+      if (_markPeerRestricted(error)) notifyListeners();
+      return false;
+    }
+    if (_chatOpenWorkIsStale || requestGeneration != _historyWindowGeneration) {
+      return false;
+    }
+
+    final rawMessages =
+        response.objects('messages') ?? const <Map<String, dynamic>>[];
+    final parsed = rawMessages
+        .map(TDParse.message)
+        .whereType<ChatMessage>()
+        .toList();
+    if (parsed.isEmpty) {
+      // A local-cache miss says nothing about whether the server still has
+      // older history. Only an empty remote page confirms exhaustion.
+      if (confirmsOlderHistoryExhausted(onlyLocal: onlyLocal)) {
+        _hasOlderHistory = false;
+      }
+      return false;
+    }
+
+    _merge(parsed);
+    if (fromMessageId == 0) {
+      _historyReachesLatest =
+          _knownLatestMessageId <= 0 ||
+          parsed.any((message) => message.id == _knownLatestMessageId);
+    }
+    _resolveRichMessagesIfNeeded(parsed);
+    _resolveSendersIfNeeded(parsed);
+    _resolveRepliesIfNeeded(parsed);
+    _resolveForwardsIfNeeded(parsed);
+    _resolveServiceUsersIfNeeded(parsed);
+    return true;
+  }
+
+  bool _markPeerRestricted(Object error) {
+    final text = error.toString();
+    final normalized = _normalizedRestrictionText(text);
+    final restricted =
+        TDParse.isTelegramTermsRestrictionText(text) ||
+        TDParse.isPornographicRestrictionText(text) ||
+        normalized.contains('chat_restricted') ||
+        normalized.contains('channel_restricted');
+    if (!restricted) return false;
+    _setPeerRestricted(
+      text,
+      isPornographic: TDParse.isPornographicRestrictionText(text),
+    );
+    return true;
+  }
+
+  String _normalizedRestrictionText(String text) =>
+      text.toLowerCase().replaceAll('’', "'");
+
+  void _setPeerRestricted(String text, {required bool isPornographic}) {
+    isPeerRestricted = true;
+    isPeerPornographicRestricted =
+        isPeerPornographicRestricted || isPornographic;
+    peerRestrictionText = text;
+  }
+
+  Future<void> leaveChat() async {
+    await _client.query({'@type': 'leaveChat', 'chat_id': chatId});
+  }
+
+  /// Confirms a session-reopen override from concrete messages rather than an
+  /// unread-count delta. The latter can shrink after another-device reads,
+  /// deletions, or the exit-time read that follows snapshot capture.
+  Future<int?> confirmedNewIncomingUnreadSinceSession({
+    required int savedKnownLatestMessageId,
+    required int expectedReadStateRevision,
+  }) async {
+    if (!_chatReadStateLoaded ||
+        expectedReadStateRevision != _chatReadStateRevision) {
+      return null;
+    }
+
+    bool qualifies(ChatMessage message, int readBoundary) =>
+        !isPendingChatMessage(message) &&
+        isNewIncomingUnreadSinceChatSession(
+          messageId: message.id,
+          isOutgoing: message.isOutgoing,
+          isService: message.isService,
+          savedKnownLatestMessageId: savedKnownLatestMessageId,
+          currentLastReadInboxId: readBoundary,
+        );
+
+    final readBoundary = lastReadInboxId;
+    int? earliestConfirmedMessageId;
+    for (final message in _allMessages) {
+      if (qualifies(message, readBoundary)) {
+        earliestConfirmedMessageId = earliestConfirmedMessageId == null
+            ? message.id
+            : math.min(earliestConfirmedMessageId, message.id);
+      }
+    }
+
+    // A loaded concrete message is sufficient even if its paired unread-count
+    // update has not arrived yet. The count only controls whether a read-only
+    // history probe is warranted to find an earlier unread target.
+    if (!shouldProbeChatSessionUnreadHistory(
+      savedKnownLatestMessageId: savedKnownLatestMessageId,
+      currentKnownLatestMessageId: _knownLatestMessageId,
+      currentUnreadCount: unreadCount,
+    )) {
+      return earliestConfirmedMessageId;
+    }
+
+    final stopAtMessageId = math.max(savedKnownLatestMessageId, readBoundary);
+    var fromMessageId = 0;
+    var previousOldestMessageId = 0;
+    var pagesScanned = 0;
+    while (!_chatOpenWorkIsStale &&
+        expectedReadStateRevision == _chatReadStateRevision &&
+        shouldContinueChatSessionUnreadHistoryProbe(
+          pagesScanned: pagesScanned,
+        )) {
+      Map<String, dynamic> response;
+      try {
+        response = await _queryHistory({
+          '@type': 'getChatHistory',
+          'chat_id': chatId,
+          'from_message_id': fromMessageId,
+          'offset': 0,
+          'limit': 100,
+          'only_local': false,
+        });
+      } catch (_) {
+        return earliestConfirmedMessageId;
+      }
+      if (_chatOpenWorkIsStale ||
+          expectedReadStateRevision != _chatReadStateRevision) {
+        return null;
+      }
+      pagesScanned++;
+      final page =
+          (response.objects('messages') ?? const <Map<String, dynamic>>[])
+              .map(TDParse.message)
+              .whereType<ChatMessage>()
+              .where(
+                (message) => !isPendingChatMessage(message) && message.id > 0,
+              )
+              .toList(growable: false);
+      for (final message in page) {
+        if (qualifies(message, readBoundary)) {
+          earliestConfirmedMessageId = earliestConfirmedMessageId == null
+              ? message.id
+              : math.min(earliestConfirmedMessageId, message.id);
+        }
+      }
+      if (page.isEmpty) return earliestConfirmedMessageId;
+
+      final oldestMessageId = page
+          .map((message) => message.id)
+          .reduce(math.min);
+      if (oldestMessageId <= stopAtMessageId ||
+          oldestMessageId == previousOldestMessageId) {
+        return earliestConfirmedMessageId;
+      }
+      previousOldestMessageId = oldestMessageId;
+      fromMessageId = oldestMessageId;
+    }
+    return earliestConfirmedMessageId;
+  }
+
+  Future<void> markLoadedMessagesRead() async {
+    if (!_chatReadStateLoaded || !_historyReachesLatest) return;
+    if (_markReadInFlight) return;
+    _markReadInFlight = true;
+    try {
+      final latestLoadedId = latestServerMessageId(_allMessages);
+      var messageId = latestLoadedId;
+      final previousUnreadCount = unreadCount;
+      final previousMarkedUnread = isMarkedUnread;
+      if (previousUnreadCount > 0 || previousMarkedUnread || messageId <= 0) {
+        try {
+          final raw = isForumTopicTranscript
+              ? await _client.query({
+                  '@type': 'getForumTopic',
+                  'chat_id': chatId,
+                  'forum_topic_id': forumTopicId,
+                })
+              : await _client.query({'@type': 'getChat', 'chat_id': chatId});
+          final latestRaw = raw.obj('last_message');
+          final latest = latestRaw == null ? null : TDParse.message(latestRaw);
+          messageId = math.max(
+            messageId,
+            latest == null ? 0 : latestServerMessageId([latest]),
+          );
+        } catch (_) {}
+      }
+
+      final shouldClearMarker = previousMarkedUnread;
+      final shouldForceRead =
+          messageId > 0 &&
+          (previousUnreadCount > 0 ||
+              messageId > lastReadInboxId ||
+              _lastForcedReadMessageId != messageId);
+      if (!shouldClearMarker && !shouldForceRead) return;
+
+      if (shouldClearMarker) isMarkedUnread = false;
+      if (messageId > lastReadInboxId) lastReadInboxId = messageId;
+      if (unreadCount != 0) unreadCount = 0;
+      ++_chatReadInboxRevision;
+      ++_chatReadStateRevision;
+      notifyListeners();
+
+      if (shouldClearMarker) {
+        _client.send({
+          '@type': 'toggleChatIsMarkedAsUnread',
+          'chat_id': chatId,
+          'is_marked_as_unread': false,
+        });
+        _client.emitLocalUpdate({
+          '@type': 'updateChatIsMarkedAsUnread',
+          'chat_id': chatId,
+          'is_marked_as_unread': false,
+        });
+      }
+      if (shouldForceRead) {
+        _lastForcedReadMessageId = messageId;
+        _client.send({
+          '@type': 'viewMessages',
+          'chat_id': chatId,
+          'message_ids': [messageId],
+          'source': isForumTopicTranscript
+              ? {'@type': 'messageSourceForumTopicHistory'}
+              : null,
+          'force_read': true,
+        });
+        // A topic's read position is not the chat's; TDLib reports the
+        // resulting chat-wide counts through its own updates.
+        if (!isForumTopicTranscript) {
+          _client.emitLocalUpdate({
+            '@type': 'updateChatReadInbox',
+            'chat_id': chatId,
+            'last_read_inbox_message_id': messageId,
+            'unread_count': 0,
+          });
+        }
+      }
+      if (isForumTopicTranscript) return;
+      final chatDelta =
+          !isMuted && (previousUnreadCount > 0 || shouldClearMarker) ? -1 : 0;
+      final messageDelta = !isMuted && previousUnreadCount > 0
+          ? -previousUnreadCount
+          : 0;
+      if (chatDelta != 0 || messageDelta != 0) {
+        _client.emitLocalUpdate({
+          '@type': 'handyUnreadDelta',
+          'chat_list': {'@type': 'chatListMain'},
+          'chat_id': chatId,
+          'chat_delta': chatDelta,
+          'message_delta': messageDelta,
+        });
+      }
+    } finally {
+      _markReadInFlight = false;
+    }
+  }
+
+  // MARK: - Live updates
+
+  /// Every `@type` [_handle] has an arm for. Keep in sync with its switch: an
+  /// omission silently stops that arm from ever running.
+  static const _handledUpdateTypes = <String>[
+    'updateNewMessage',
+    'updateMessageContent',
+    'updateMessageSuggestedPostInfo',
+    'updateChatUnreadMentionCount',
+    'updateMessageMentionRead',
+    'updateChatUnreadReactionCount',
+    'updateMessageUnreadReactions',
+    'updateMessageSendSucceeded',
+    'updateMessageSendAcknowledged',
+    'updateMessageSendFailed',
+    'updateSecretChat',
+    'updateChat',
+    'updateChatActionBar',
+    'updateChatBusinessBotManageBar',
+    'updateChatHasProtectedContent',
+    'updateChatDraftMessage',
+    'updateForumTopic',
+    'updateChatMessageAutoDeleteTime',
+    'updateChatPaidMessageStarCount',
+    'updateDeleteMessages',
+    'handyChatHistoryCleared',
+    'handyChatLeft',
+    'updateChatReadOutbox',
+    'updateChatReadInbox',
+    'updateChatIsMarkedAsUnread',
+    'updateChatAction',
+    'updateChatMessageSender',
+    'updateUser',
+    'updateUserFullInfo',
+    'updateSupergroup',
+    'updateSupergroupFullInfo',
+    'updateBasicGroupFullInfo',
+    'updateUserStatus',
+    'updateMessageEdited',
+    'updateMessageInteractionInfo',
+    'updateAvailableMessageEffects',
+    'updateBlockMessageSender',
+  ];
+
+  void _subscribeToUpdates() {
+    // An open chat used to be woken for every update in the app — including the
+    // `updateFile` storm of a chunked download — only to walk 33 cases and
+    // return. It now hears exactly the types it handles.
+    _sub ??= _client.updatesOfAny(_handledUpdateTypes).listen(_handle);
+  }
+
+  void _handle(Map<String, dynamic> update) {
+    switch (update.type) {
+      case 'updateNewMessage':
+        final raw = update.obj('message');
+        if (raw == null || raw.int64('chat_id') != chatId) return;
+        if (!_belongsToTranscript(raw)) return;
+        final rawContent = raw.obj('content');
+        if (rawContent?.type == 'messageChatHasProtectedContentToggled') {
+          hasProtectedContent =
+              rawContent?.boolean('new_has_protected_content') ??
+              hasProtectedContent;
+        }
+        final message = TDParse.message(raw);
+        if (message == null) return;
+        if (_latestHistoryLoadInFlight) {
+          _latestHistoryLiveArrivals[message.id] = message;
+        }
+        final canAppendToTranscript = shouldMergeLiveMessageIntoChatWindow(
+          historyReachesLatest: _historyReachesLatest,
+        );
+        if (!message.isOutgoing && !message.isService) {
+          _liveIncomingMessages.add(message.id);
+        }
+        if (!isPendingChatMessage(message)) {
+          _knownLatestMessageId = math.max(_knownLatestMessageId, message.id);
+          ++_chatReadStateRevision;
+        }
+        if (!canAppendToTranscript) {
+          notifyListeners();
+          return;
+        }
+        _merge([message]);
+        _resolveRichMessagesIfNeeded([message]);
+        _resolveSendersIfNeeded([message]);
+        _resolveRepliesIfNeeded([message]);
+        _resolveForwardsIfNeeded([message]);
+        _resolveServiceUsersIfNeeded([message]);
+
+      case 'updateMessageContent':
+        if (update.int64('chat_id') != chatId) return;
+        final messageId = update.int64('message_id');
+        final content = update.obj('new_content');
+        if (messageId == null || content == null) return;
+        // Apply concealment immediately, before an asynchronous media refresh.
+        for (final message in _messageRefs(messageId)) {
+          message.hasSpoiler = content.boolean('has_spoiler') ?? false;
+        }
+        if (content.type == 'messageChatHasProtectedContentToggled') {
+          hasProtectedContent =
+              content.boolean('new_has_protected_content') ??
+              hasProtectedContent;
+        }
+        if (mediaContentUpdateNeedsRefresh(
+          contentType: content.type,
+          isSending: _isSending(messageId),
+        )) {
+          unawaited(_refreshMessage(messageId));
+        } else if (content.type == 'messageVideo') {
+          _replaceVideoMedia(messageId, content);
+        }
+        if (content.type == 'messageChatSetBackground' ||
+            content.type == 'messageChatSetTheme') {
+          unawaited(_refreshMessage(messageId));
+          return;
+        }
+        _replaceText(
+          messageId,
+          // Chat-list previews deliberately synthesize labels such as
+          // "Photo", "Video", and a document name. A transcript update must
+          // keep using only user-authored text, otherwise TDLib's live content
+          // update for a just-sent attachment turns that preview label into a
+          // visible caption until the confirmed message replaces it.
+          TDParse.messageContentText(content),
+          entities: TDParse.messageTextEntities(content),
+          customEmoji: TDParse.customEmojiEntitiesForContent(content),
+          linkPreview: TDParse.linkPreview(content.obj('link_preview')),
+          updateLinkPreview: true,
+        );
+        if (content.type == 'messageRichMessage') {
+          _replaceRichMessageContent(messageId, content);
+          final target = _messageRefs(messageId);
+          _resolveRichMessagesIfNeeded(target);
+        }
+
+      case 'updateMessageSuggestedPostInfo':
+        if (update.int64('chat_id') != chatId) return;
+        final messageId = update.int64('message_id');
+        if (messageId == null) return;
+        unawaited(_refreshMessage(messageId));
+
+      case 'updateChatUnreadMentionCount':
+        if (update.int64('chat_id') != chatId || isForumTopicTranscript) {
+          return;
+        }
+        _setUnreadMentionCount(
+          update.integer('unread_mention_count') ?? unreadMentionCount,
+        );
+
+      case 'updateMessageMentionRead':
+        if (update.int64('chat_id') != chatId) return;
+        final messageId = update.int64('message_id');
+        if (messageId == null) return;
+        _locallyViewedMentionIds.add(messageId);
+        while (_locallyViewedMentionIds.length > 512) {
+          _locallyViewedMentionIds.remove(_locallyViewedMentionIds.first);
+        }
+        final targets = _messageRefs(messageId);
+        final flagChanged = targets.any(
+          (message) => message.containsUnreadMention,
+        );
+        for (final message in targets) {
+          message.containsUnreadMention = false;
+        }
+        final countChanged = _setUnreadMentionCount(
+          update.integer('unread_mention_count') ?? unreadMentionCount,
+        );
+        if (flagChanged && !countChanged) {
+          _notifyLocalizedMessages([messageId]);
+        }
+
+      case 'updateChatUnreadReactionCount':
+        if (update.int64('chat_id') != chatId || isForumTopicTranscript) {
+          return;
+        }
+        _setUnreadReactionCount(
+          update.integer('unread_reaction_count') ?? unreadReactionCount,
+        );
+
+      case 'updateMessageUnreadReactions':
+        if (update.int64('chat_id') != chatId) return;
+        final messageId = update.int64('message_id');
+        if (messageId == null) return;
+        final hasUnreadReactions =
+            (update.objects('unread_reactions') ?? const []).isNotEmpty;
+        if (hasUnreadReactions) {
+          _locallyViewedReactionIds.remove(messageId);
+        } else {
+          _locallyViewedReactionIds.add(messageId);
+          while (_locallyViewedReactionIds.length > 512) {
+            _locallyViewedReactionIds.remove(_locallyViewedReactionIds.first);
+          }
+        }
+        final targets = _messageRefs(messageId);
+        final flagChanged = targets.any(
+          (message) => message.hasUnreadReactions != hasUnreadReactions,
+        );
+        for (final message in targets) {
+          message.hasUnreadReactions = hasUnreadReactions;
+        }
+        final countChanged = _setUnreadReactionCount(
+          update.integer('unread_reaction_count') ?? unreadReactionCount,
+        );
+        if (flagChanged && !countChanged) {
+          _notifyLocalizedMessages([messageId]);
+        }
+
+      case 'updateMessageSendSucceeded':
+        if (messageSendUpdateChatId(update) != chatId) return;
+        final oldMessageId = update.int64('old_message_id');
+        final rawSentMessage = update.obj('message');
+        if (oldMessageId == null || rawSentMessage == null) return;
+        _acknowledgedPendingMessageIds.remove(oldMessageId);
+        if (_latestHistoryLoadInFlight) {
+          _latestHistoryLiveArrivals.remove(oldMessageId);
+          final sentMessage = TDParse.message(rawSentMessage);
+          if (sentMessage != null) {
+            _latestHistoryLiveArrivals[sentMessage.id] = sentMessage;
+          }
+        }
+        _replacePendingMessage(oldMessageId, rawSentMessage);
+        _recordMessageSendResult(
+          oldMessageId,
+          const _MessageSendResult.success(),
+        );
+
+      case 'updateMessageSendAcknowledged':
+        if (update.int64('chat_id') != chatId) return;
+        final messageId = update.int64('message_id');
+        if (messageId == null) return;
+        _rememberAcknowledgedPendingMessageId(messageId);
+        final targets = _messageRefs(messageId);
+        if (targets.isEmpty) return;
+        for (final message in targets) {
+          message.isSendAcknowledged = true;
+        }
+        _notifyLocalizedMessages([messageId]);
+
+      case 'updateMessageSendFailed':
+        if (messageSendUpdateChatId(update) != chatId) return;
+        final oldMessageId = update.int64('old_message_id');
+        if (oldMessageId == null) return;
+        _acknowledgedPendingMessageIds.remove(oldMessageId);
+        if (_latestHistoryLoadInFlight) {
+          _latestHistoryLiveArrivals.remove(oldMessageId);
+        }
+        final errorData =
+            update.obj('error') ??
+            update.obj('message')?.obj('sending_state')?.obj('error') ??
+            <String, dynamic>{
+              '@type': 'error',
+              'code': 400,
+              'message': 'Message send failed',
+            };
+        final error = TdError(errorData);
+        debugPrint('Message $oldMessageId failed to send: $error');
+        if (_isVoiceMessageRestrictionError(error)) {
+          canSendVoiceNotes = false;
+        }
+        _discardPendingMessage(oldMessageId);
+        _recordMessageSendResult(
+          oldMessageId,
+          _MessageSendResult.failure(error),
+        );
+        _publishSendFailure(
+          ChatSendFailure.fromError(
+            error,
+            paidMessageStarCount: paidMessageStarCount,
+          ),
+        );
+
+      case 'updateSecretChat':
+        final secretChat = update.obj('secret_chat');
+        if (secretChat == null || secretChat.integer('id') != _secretChatId) {
+          return;
+        }
+        _applySecretChatReadiness(SecretChatService.readiness(secretChat));
+
+      case 'updateChat':
+        final chat = update.obj('chat');
+        if (chat == null || chat.int64('id') != chatId) return;
+        if (!isForumTopicTranscript &&
+            chat.containsKey('last_read_inbox_message_id') &&
+            chat.containsKey('unread_count')) {
+          lastReadInboxId =
+              chat.int64('last_read_inbox_message_id') ?? lastReadInboxId;
+          unreadCount = chat.integer('unread_count') ?? unreadCount;
+          _primeLastMessage(chat, preserveNewer: true);
+          ++_chatReadInboxRevision;
+          ++_chatReadStateRevision;
+        }
+        if (!isForumTopicTranscript) {
+          unreadMentionCount =
+              chat.integer('unread_mention_count') ?? unreadMentionCount;
+          unreadReactionCount =
+              chat.integer('unread_reaction_count') ?? unreadReactionCount;
+        }
+        messageAutoDeleteTime = _autoDeleteSeconds(chat);
+        _setPaidMessageStarCount(_paidMessageStars(chat), notify: false);
+        hasProtectedContent =
+            chat.boolean('has_protected_content') ?? hasProtectedContent;
+        if (chat.containsKey('permissions')) {
+          canSendVoiceNotes =
+              chat.obj('permissions')?.boolean('can_send_voice_notes') ??
+              canSendVoiceNotes;
+        }
+        if (!isForumTopicTranscript && chat.containsKey('draft_message')) {
+          _applyRemoteDraft(chat.obj('draft_message'), notify: false);
+        }
+        if (chat.containsKey('action_bar')) {
+          firstContactInfo = ChatFirstContactInfo.fromActionBar(
+            chat.obj('action_bar'),
+          );
+        }
+        notifyListeners();
+
+      case 'updateChatActionBar':
+        if (update.int64('chat_id') != chatId) return;
+        firstContactInfo = ChatFirstContactInfo.fromActionBar(
+          update.obj('action_bar'),
+        );
+        notifyListeners();
+
+      case 'updateChatBusinessBotManageBar':
+        if (update.int64('chat_id') != chatId) return;
+        _applyBusinessBotManageBar(update.obj('business_bot_manage_bar'));
+        notifyListeners();
+
+      case 'updateChatHasProtectedContent':
+        if (update.int64('chat_id') != chatId) return;
+        hasProtectedContent =
+            update.boolean('has_protected_content') ?? hasProtectedContent;
+        notifyListeners();
+
+      case 'updateChatDraftMessage':
+        if (update.int64('chat_id') != chatId || isForumTopicTranscript) {
+          return;
+        }
+        _applyRemoteDraft(update.obj('draft_message'));
+
+      case 'updateForumTopic':
+        if (!isForumTopicTranscript ||
+            update.int64('chat_id') != chatId ||
+            update.integer('forum_topic_id') != forumTopicId) {
+          return;
+        }
+        lastReadOutboxId =
+            update.int64('last_read_outbox_message_id') ?? lastReadOutboxId;
+        final topicReadInbox = update.int64('last_read_inbox_message_id');
+        if (topicReadInbox != null && topicReadInbox > lastReadInboxId) {
+          lastReadInboxId = topicReadInbox;
+          ++_chatReadInboxRevision;
+          ++_chatReadStateRevision;
+        }
+        _setUnreadMentionCount(
+          update.integer('unread_mention_count') ?? unreadMentionCount,
+        );
+        _setUnreadReactionCount(
+          update.integer('unread_reaction_count') ?? unreadReactionCount,
+        );
+        if (update.containsKey('draft_message')) {
+          _applyRemoteDraft(update.obj('draft_message'), notify: false);
+        }
+        notifyListeners();
+
+      case 'updateChatMessageAutoDeleteTime':
+        if (update.int64('chat_id') != chatId) return;
+        messageAutoDeleteTime =
+            update.obj('message_auto_delete_time')?.integer('time') ??
+            update.integer('message_auto_delete_time') ??
+            update.integer('time') ??
+            0;
+        notifyListeners();
+
+      case 'updateChatPaidMessageStarCount':
+        if (update.int64('chat_id') != chatId) return;
+        _setPaidMessageStarCount(
+          update.int64('paid_message_star_count') ??
+              update.int64('outgoing_paid_message_star_count') ??
+              update.int64('star_count') ??
+              0,
+        );
+
+      case 'updateDeleteMessages':
+        if (update.int64('chat_id') != chatId) return;
+        // from_cache unloads (is_permanent == false) must not remove messages
+        // from the UI — the messages still exist on the server.
+        if (update.boolean('is_permanent') != true) return;
+        final deletedIds = update.int64Array('message_ids') ?? const <int>[];
+        ++_chatReadStateRevision;
+        if (_isLoadingNewer) {
+          _newerHistoryDeletedMessageIds.addAll(deletedIds);
+        }
+        if (_latestHistoryLoadInFlight) {
+          _latestHistoryDeletedMessageIds.addAll(deletedIds);
+          for (final messageId in deletedIds) {
+            _latestHistoryLiveArrivals.remove(messageId);
+          }
+        }
+        _removeMessages(deletedIds);
+
+      case 'handyChatHistoryCleared':
+        if (update.int64('chat_id') != chatId) return;
+        ++_historyWindowGeneration;
+        ++_historyWindowRevision;
+        ++_historyWindowInvalidationRevision;
+        if (_latestHistoryLoadInFlight) {
+          _latestHistoryLoadInvalidated = true;
+          _latestHistoryLiveArrivals.clear();
+        }
+        _allMessages = [];
+        messages = [];
+        _messageIndexesDirty = true;
+        _hasOlderHistory = false;
+        anchoredHistory = false;
+        _historyAnchorMessageId = null;
+        _historyReachesLatest = true;
+        _knownLatestMessageId = 0;
+        ++_chatReadStateRevision;
+        _pendingScrollToId = null;
+        notifyListeners();
+
+      case 'handyChatLeft':
+        if (update.int64('chat_id') != chatId) return;
+        isMember = false;
+        canSendMessages = false;
+        canJoin = true;
+        sendDisabledReason = isChannel
+            ? AppStrings.t(AppStringKeys.topicChatLeaveChannel)
+            : AppStrings.t(AppStringKeys.chatYouWereRemovedFromGroup);
+        notifyListeners();
+
+      case 'updateChatReadOutbox':
+        if (update.int64('chat_id') != chatId || isForumTopicTranscript) {
+          return;
+        }
+        lastReadOutboxId =
+            update.int64('last_read_outbox_message_id') ?? lastReadOutboxId;
+        notifyListeners();
+
+      case 'updateChatReadInbox':
+        if (update.int64('chat_id') != chatId || isForumTopicTranscript) {
+          return;
+        }
+        lastReadInboxId =
+            update.int64('last_read_inbox_message_id') ?? lastReadInboxId;
+        unreadCount = update.integer('unread_count') ?? unreadCount;
+        ++_chatReadInboxRevision;
+        ++_chatReadStateRevision;
+        notifyListeners();
+
+      case 'updateChatIsMarkedAsUnread':
+        if (update.int64('chat_id') != chatId || isForumTopicTranscript) {
+          return;
+        }
+        isMarkedUnread = update.boolean('is_marked_as_unread') ?? false;
+        notifyListeners();
+
+      case 'updateChatAction':
+        if (update.int64('chat_id') != chatId) return;
+        final sender = update.obj('sender_id');
+        final sid = sender?.int64('user_id') ?? sender?.int64('chat_id');
+        if (sid == null) return;
+        final actionType = update.obj('action')?.type;
+        if (actionType == 'chatActionCancel') {
+          // Nothing rendered changes when the sender had no active action.
+          if (_chatActions.remove(sid) == null) return;
+        } else {
+          final name = _senderCache[sid]?.name ?? '';
+          final action = actionType ?? 'chatActionTyping';
+          final active = _chatActions[sid];
+          // TDLib re-sends the same action every few seconds while it lasts;
+          // notifying again rebuilds the whole screen for the same subtitle.
+          final unchanged =
+              active != null &&
+              active.actionType == action &&
+              active.name == name;
+          if (!unchanged) _chatActions[sid] = _ChatActionInfo(name, action);
+          if (name.isEmpty && isGroup && sid > 0) {
+            _resolveSender(sid); // fills the name for the next render
+          }
+          _restartTypingTimer();
+          if (unchanged) return;
+        }
+        _notifyComposerNeutral();
+
+      case 'updateChatMessageSender':
+        if (update.int64('chat_id') != chatId) return;
+        final sender = update.obj('message_sender_id');
+        if (sender == null) {
+          selectedMessageSender = null;
+          notifyListeners();
+          return;
+        }
+        for (final option in availableMessageSenders) {
+          if (option.sameSender(sender)) {
+            selectedMessageSender = option;
+            notifyListeners();
+            return;
+          }
+        }
+        _loadAvailableMessageSenders();
+
+      case 'updateUser':
+        final user = update.obj('user');
+        if (user == null) return;
+        if (!isGroup && user.int64('id') == peerUserId) {
+          _applyPeerBotCapabilities(user);
+        }
+        _applySenderUserUpdate(user);
+
+      case 'updateUserFullInfo':
+        if (isGroup || update.int64('user_id') != peerUserId) return;
+        _setPaidMessageStarCount(
+          _paidMessageStars(update.obj('user_full_info') ?? update),
+        );
+
+      case 'updateSupergroup':
+        final supergroup = update.obj('supergroup');
+        if (supergroup == null || supergroup.int64('id') != peerSupergroupId) {
+          return;
+        }
+        final nextIsForum = supergroup.boolean('is_forum') ?? isForum;
+        final nextHasForumTabs =
+            supergroup.boolean('has_forum_tabs') ?? hasForumTabs;
+        if (isForum != nextIsForum || hasForumTabs != nextHasForumTabs) {
+          isForum = nextIsForum;
+          hasForumTabs = nextHasForumTabs;
+          notifyListeners();
+          if (supportsTopics && forumTopics.isEmpty) {
+            unawaited(loadForumTopics());
+          }
+        }
+        _setPaidMessageStarCount(_paidMessageStars(supergroup));
+
+      case 'updateSupergroupFullInfo':
+        if (update.int64('supergroup_id') != peerSupergroupId) return;
+        final fullInfo = update.obj('supergroup_full_info') ?? update;
+        hasLinkedDiscussion =
+            isChannel && (fullInfo.int64('linked_chat_id') ?? 0) != 0;
+        _setPaidMessageStarCount(_paidMessageStars(fullInfo));
+        if (isChannel) {
+          _clearGroupBotCommands();
+        } else {
+          unawaited(_applyGroupBotCommands(fullInfo));
+        }
+
+      case 'updateBasicGroupFullInfo':
+        if (update.int64('basic_group_id') != peerBasicGroupId) return;
+        final fullInfo = update.obj('basic_group_full_info') ?? update;
+        final members = fullInfo.objects('members');
+        if (members != null) memberCount = members.length;
+        notifyListeners();
+        unawaited(_applyGroupBotCommands(fullInfo));
+
+      case 'updateUserStatus':
+        if (isGroup || update.int64('user_id') != peerUserId) return;
+        final status = update.obj('status');
+        peerOnline = status?.type == 'userStatusOnline';
+        peerStatusText = status == null
+            ? ''
+            : TDParse.userStatus({'status': status});
+        _notifyComposerNeutral();
+
+      case 'updateMessageEdited':
+        if (update.int64('chat_id') != chatId) return;
+        final mid = update.int64('message_id');
+        if (mid == null) return;
+        final rows = TDParse.messageButtonRows(update.obj('reply_markup'));
+        final targets = _messageRefs(mid);
+        if (targets.isEmpty) return;
+        // One lookup and one notify for the whole edit: the button rows used
+        // to be applied through a second scan that notified on its own.
+        var edited = false;
+        for (final message in targets) {
+          if (!identical(message.buttonRows, rows)) {
+            message.buttonRows = rows;
+            edited = true;
+          }
+          if (!message.isEdited) {
+            message.isEdited = true;
+            edited = true;
+          }
+        }
+        if (edited) _notifyLocalizedMessages([mid]);
+
+      case 'updateMessageInteractionInfo':
+        if (update.int64('chat_id') != chatId) return;
+        final mid = update.int64('message_id');
+        if (mid == null) return;
+        final targets = _messageRefs(mid);
+        if (targets.isNotEmpty) {
+          final interactionInfo = update.obj('interaction_info');
+          final replyInfo = interactionInfo?.obj('reply_info');
+          final reactions = TDParse.reactionsFrom({
+            'interaction_info': interactionInfo,
+          });
+          for (final message in targets) {
+            message.commentThreadMetadataKnown = true;
+            message.reactions = reactions;
+            message.viewCount = interactionInfo?.integer('view_count') ?? 0;
+            message.forwardCount =
+                interactionInfo?.integer('forward_count') ?? 0;
+            if (!message.isContentRestricted) {
+              message.hasCommentThread = replyInfo != null;
+              message.commentCount =
+                  replyInfo?.integer('reply_count') ??
+                  replyInfo?.integer('comment_count') ??
+                  0;
+              message.lastCommentMessageId = replyInfo?.int64(
+                'last_message_id',
+              );
+            }
+          }
+          _notifyLocalizedMessages([mid]);
+        }
+
+      case 'updateAvailableMessageEffects':
+        final ids = <int>{
+          ...?update.int64Array('reaction_effect_ids'),
+          ...?update.int64Array('sticker_effect_ids'),
+        };
+        unawaited(_resolveMessageEffects(ids));
+
+      case 'updateBlockMessageSender':
+        // Invalidate blocked-user cache so the hide-on-block toggle
+        // takes effect immediately without app restart.
+        if (BlockedUserService.shared.enabled) {
+          unawaited(
+            BlockedUserService.shared.loadBlockedUsers().then((_) {
+              _applyKeywordFilter();
+            }),
+          );
+        }
+    }
+  }
+
+  void _applyBusinessBotManageBar(Map<String, dynamic>? value) {
+    businessBotUserId = value?.int64('bot_user_id') ?? 0;
+    businessBotManageUrl = value?.str('manage_url') ?? '';
+    businessBotPaused = value?.boolean('is_bot_paused') ?? false;
+    businessBotCanReply = value?.boolean('can_bot_reply') ?? false;
+  }
+
+  Future<void> _resolveMessageEffects(Set<int> ids) async {
+    if (ids.isEmpty) {
+      availableMessageEffects = const [];
+      notifyListeners();
+      return;
+    }
+    final effects = await Future.wait(
+      ids.map((id) async {
+        try {
+          final effect = await _client.query({
+            '@type': 'getMessageEffect',
+            'effect_id': id,
+          });
+          return AvailableMessageEffect(
+            id: id,
+            emoji: effect.str('emoji') ?? '✨',
+          );
+        } catch (_) {
+          return null;
+        }
+      }),
+    );
+    if (_isDisposed) return;
+    availableMessageEffects = effects
+        .whereType<AvailableMessageEffect>()
+        .toList(growable: false);
+    notifyListeners();
+  }
+
+  // MARK: - Reactions
+
+  Future<MessageReactionAvailability> messageReactionAvailability(
+    int messageId, {
+    int rowSize = 7,
+  }) async {
+    try {
+      final responses = await Future.wait([
+        _client.queryTo({
+          '@type': 'getMessageAvailableReactions',
+          'chat_id': chatId,
+          'message_id': messageId,
+          'row_size': rowSize.clamp(5, 25),
+        }, _accountClientId),
+        _client.queryTo({
+          '@type': 'getOption',
+          'name': 'is_premium',
+        }, _accountClientId),
+      ]);
+      return MessageReactionAvailability.fromTd(
+        responses.first,
+        isPremium: responses.last.boolean('value') ?? false,
+      );
+    } catch (_) {
+      rethrow;
+    }
+  }
+
+  Future<void> addReaction(int messageId, String emoji) =>
+      _addReactionChoice(messageId, QuickReactionChoice.emoji(emoji));
+
+  /// Custom (premium) emoji reaction.
+  Future<void> addCustomReaction(int messageId, int customEmojiId) =>
+      _addReactionChoice(messageId, QuickReactionChoice.custom(customEmojiId));
+
+  Future<void> _addReactionChoice(
+    int messageId,
+    QuickReactionChoice requested,
+  ) async {
+    final availability = await messageReactionAvailability(messageId);
+    final reaction = availability.canonicalChoice(requested);
+    if (reaction == null) throw const MessageReactionUnavailableException();
+    await _sendReactionChoice(messageId, reaction);
+  }
+
+  Future<void> _sendReactionChoice(
+    int messageId,
+    QuickReactionChoice reaction,
+  ) async {
+    await _client.queryTo({
+      '@type': 'addMessageReaction',
+      'chat_id': chatId,
+      'message_id': messageId,
+      'reaction_type': reaction.isCustom
+          ? {
+              '@type': 'reactionTypeCustomEmoji',
+              'custom_emoji_id': reaction.customEmojiId,
+            }
+          : {'@type': 'reactionTypeEmoji', 'emoji': reaction.emoji},
+      'is_big': false,
+      'update_recent_reactions': true,
+    }, _accountClientId);
+  }
+
+  Future<void> toggleReaction(ChatMessage m, MessageReaction r) async {
+    if (r.chosen) {
+      // TDLib guarantees that a chosen reaction remains removable even when
+      // the user can no longer add reactions to the message.
+      await _client.queryTo({
+        '@type': 'removeMessageReaction',
+        'chat_id': chatId,
+        'message_id': m.id,
+        'reaction_type': r.type,
+      }, _accountClientId);
+    } else {
+      final reaction = r.customEmojiId != 0
+          ? QuickReactionChoice.custom(r.customEmojiId)
+          : QuickReactionChoice.emoji(r.emoji ?? '');
+      await _addReactionChoice(m.id, reaction);
+    }
+  }
+
+  Future<List<MessageReactionUser>> reactionUsers(
+    ChatMessage message,
+    MessageReaction reaction,
+  ) async {
+    final res = await _client.query({
+      '@type': 'getMessageAddedReactions',
+      'chat_id': chatId,
+      'message_id': message.id,
+      'reaction_type': reaction.type,
+      'offset': '',
+      'limit': 100,
+    });
+    final added = res.objects('reactions') ?? const <Map<String, dynamic>>[];
+    final users = <MessageReactionUser>[];
+    for (final item in added) {
+      final senderId = _senderIdFromTd(item.obj('sender_id'));
+      if (senderId == null) continue;
+      final info = await _reactionSenderInfo(senderId);
+      users.add(
+        MessageReactionUser(
+          senderId: senderId,
+          title: info.name,
+          photo: info.photo,
+          date: item.integer('date') ?? 0,
+        ),
+      );
+    }
+    return users;
+  }
+
+  int? _senderIdFromTd(Map<String, dynamic>? sender) {
+    return switch (sender?.type) {
+      'messageSenderUser' => sender?.int64('user_id'),
+      'messageSenderChat' => sender?.int64('chat_id'),
+      _ => null,
+    };
+  }
+
+  Future<_SenderInfo> _reactionSenderInfo(int senderId) async {
+    final cached = _senderCache[senderId];
+    if (cached != null) return cached;
+    if (senderId > 0) {
+      try {
+        final user = await _client.query({
+          '@type': 'getUser',
+          'user_id': senderId,
+        });
+        return _SenderInfo(
+          TDParse.userName(user),
+          TDParse.smallPhoto(user.obj('profile_photo')),
+          MemberRole.member,
+          null,
+        );
+      } catch (_) {
+        return _SenderInfo(
+          AppStrings.t(AppStringKeys.chatUserFallbackName, {
+            'value1': senderId,
+          }),
+          null,
+          MemberRole.member,
+          null,
+        );
+      }
+    }
+    try {
+      final chat = await _client.query({
+        '@type': 'getChat',
+        'chat_id': senderId,
+      });
+      return _SenderInfo(
+        chat.str('title') ?? AppStrings.t(AppStringKeys.chatInfoGroupMembers),
+        TDParse.smallPhoto(chat.obj('photo')),
+        MemberRole.member,
+        null,
+      );
+    } catch (_) {
+      return _SenderInfo(
+        AppStrings.t(AppStringKeys.chatInfoGroupMembers),
+        null,
+        MemberRole.member,
+        null,
+      );
+    }
+  }
+
+  void _restartTypingTimer() {
+    _typingTimer?.cancel();
+    _typingTimer = Timer(const Duration(seconds: 6), () {
+      if (_chatActions.isNotEmpty) {
+        _chatActions.clear();
+        _notifyComposerNeutral();
+      }
+    });
+  }
+
+  String get _chatActionSubtitle {
+    if (_chatActions.isEmpty) return '';
+    final actions = _chatActions.values.toList(growable: false);
+    if (actions.length > 1) {
+      final allTyping = actions.every(
+        (a) => a.actionType == 'chatActionTyping',
+      );
+      return AppStrings.t(
+        allTyping
+            ? AppStringKeys.chatPeopleTyping
+            : AppStringKeys.chatPeopleDoingAction,
+        {'value1': actions.length},
+      );
+    }
+
+    final action = actions.first;
+    final label = _chatActionLabel(action.actionType);
+    if (!isGroup) return label;
+    final name = action.name.trim();
+    if (name.isEmpty) return label;
+    if (action.actionType == 'chatActionTyping') {
+      return AppStrings.t(AppStringKeys.chatUserTyping, {'value1': name});
+    }
+    return AppStrings.t(AppStringKeys.chatUserDoingAction, {
+      'value1': name,
+      'value2': label,
+    });
+  }
+
+  String _chatActionLabel(String type) {
+    switch (type) {
+      case 'chatActionRecordingVideo':
+        return AppStrings.t(AppStringKeys.chatActionRecordingVideo);
+      case 'chatActionUploadingVideo':
+        return AppStrings.t(AppStringKeys.chatActionUploadingVideo);
+      case 'chatActionRecordingVoiceNote':
+        return AppStrings.t(AppStringKeys.chatActionRecordingVoice);
+      case 'chatActionUploadingVoiceNote':
+        return AppStrings.t(AppStringKeys.chatActionUploadingVoice);
+      case 'chatActionUploadingPhoto':
+        return AppStrings.t(AppStringKeys.chatActionUploadingPhoto);
+      case 'chatActionUploadingDocument':
+        return AppStrings.t(AppStringKeys.chatActionUploadingFile);
+      case 'chatActionChoosingSticker':
+        return AppStrings.t(AppStringKeys.chatActionChoosingSticker);
+      case 'chatActionChoosingLocation':
+        return AppStrings.t(AppStringKeys.chatActionChoosingLocation);
+      case 'chatActionChoosingContact':
+        return AppStrings.t(AppStringKeys.chatActionChoosingContact);
+      case 'chatActionStartPlayingGame':
+        return AppStrings.t(AppStringKeys.chatActionPlayingGame);
+      case 'chatActionRecordingVideoNote':
+        return AppStrings.t(AppStringKeys.chatActionRecordingVideoNote);
+      case 'chatActionUploadingVideoNote':
+        return AppStrings.t(AppStringKeys.chatActionUploadingVideoNote);
+      case 'chatActionWatchingAnimations':
+        return AppStrings.t(AppStringKeys.chatActionWatchingAnimations);
+      case 'chatActionTyping':
+      default:
+        return AppStrings.t(AppStringKeys.chatTyping);
+    }
+  }
+
+  // MARK: - 引用 reply-quote resolution
+
+  /// For each message that replies to another, resolve the quoted sender +
+  /// preview — from the already-loaded list when possible, else via getMessages.
+  void _resolveRepliesIfNeeded(List<ChatMessage> batch) {
+    final repliesToResolve = batch
+        .where(
+          (message) =>
+              message.replyToMessageId != null &&
+              message.replyToPreview == null,
+        )
+        .toList(growable: false);
+    if (repliesToResolve.isEmpty) return;
+    // This index is already maintained by transcript mutations. Rebuilding a
+    // map for each history page (or scanning the transcript for a live reply)
+    // made quoting increasingly expensive as more history was loaded.
+    _ensureMessageIndexes();
+    final unresolved = <int, List<ChatMessage>>{};
+    for (final m in repliesToResolve) {
+      final rid = m.replyToMessageId!;
+      final quoted = _messagesById[rid];
+      if (quoted != null) {
+        _applyReply(m, quoted);
+        continue;
+      }
+      unresolved.putIfAbsent(rid, () => <ChatMessage>[]).add(m);
+    }
+    if (unresolved.isEmpty) return;
+    // One getMessage per distinct target meant 10-25 concurrent round trips for
+    // a single reply-heavy history page, repeated for every page scrolled up.
+    // getMessages answers them all at once, so the previews fill in together.
+    final targets = unresolved.keys.toList();
+    for (var start = 0; start < targets.length; start += 100) {
+      final end = start + 100 > targets.length ? targets.length : start + 100;
+      _resolveReplyTargets(targets.sublist(start, end), unresolved);
+    }
+  }
+
+  /// Fetches one batch of reply targets and patches every message waiting on it.
+  void _resolveReplyTargets(
+    List<int> messageIds,
+    Map<int, List<ChatMessage>> unresolved,
+  ) {
+    _client
+        .query({
+          '@type': 'getMessages',
+          'chat_id': chatId,
+          'message_ids': messageIds,
+        })
+        .then((response) {
+          var changed = false;
+          // Unavailable ids come back as nulls that carry no identity, so the
+          // bucket is looked up by the id on each returned message, not by
+          // position.
+          final raws =
+              response.objects('messages') ?? const <Map<String, dynamic>>[];
+          for (final raw in raws) {
+            final quoted = TDParse.message(raw);
+            if (quoted == null) continue;
+            final waiting = unresolved[quoted.id];
+            if (waiting == null) continue;
+            for (final message in waiting) {
+              if (message.replyToMessageId != quoted.id ||
+                  message.replyToPreview != null) {
+                continue;
+              }
+              _applyReply(message, quoted);
+              changed = true;
+            }
+          }
+          if (changed) _scheduleCoalescedNotify();
+        })
+        .catchError((_) {});
+  }
+
+  void _applyReply(ChatMessage m, ChatMessage quoted) {
+    m.replyToPreview = _replyPreview(quoted);
+    m.replyToDate = quoted.date;
+    m.replyToEntities = quoted.textEntities;
+    m.replyToImage = quoted.previewImage;
+    m.replyToImageWidth = quoted.imageWidth;
+    m.replyToImageHeight = quoted.imageHeight;
+    if (quoted.isOutgoing) {
+      m.replyToSender = meName;
+      return;
+    }
+    // Name the actual author of the quoted message — never the chat/group name.
+    final name = quoted.senderName;
+    if (name != null && name.isNotEmpty) {
+      m.replyToSender = name;
+      return;
+    }
+    final sid = quoted.senderId;
+    final cached = sid == null ? null : _senderCache[sid];
+    if (cached != null) {
+      m.replyToSender = cached.name;
+    } else if (sid != null) {
+      m.replyToSender = ''; // resolve in the background, fill on next render
+      _resolveQuotedSender(m, sid);
+    } else {
+      m.replyToSender = isGroup ? '' : peerTitle;
+    }
+  }
+
+  /// Resolves a quoted message's author name (user or chat sender) and patches
+  /// the reply in place. Reuses the sender cache populated for the transcript.
+  Future<void> _resolveQuotedSender(ChatMessage m, int senderId) async {
+    final existing = _senderCache[senderId];
+    if (existing != null) {
+      m.replyToSender = existing.name;
+      _scheduleCoalescedNotify();
+      return;
+    }
+    String? name;
+    try {
+      if (senderId > 0) {
+        final user = await _client.query({
+          '@type': 'getUser',
+          'user_id': senderId,
+        });
+        name = TDParse.userName(user);
+      } else {
+        final chat = await _client.query({
+          '@type': 'getChat',
+          'chat_id': senderId,
+        });
+        name = chat.str('title');
+      }
+    } catch (_) {}
+    if (name != null && name.isNotEmpty) {
+      m.replyToSender = name;
+      _scheduleCoalescedNotify();
+    }
+  }
+
+  String _replyPreview(ChatMessage q) {
+    if (q.document != null) {
+      return AppStrings.t(AppStringKeys.composerFilePreview, {
+        'value1': q.document!.fileName,
+      });
+    }
+    if (q.voice != null) {
+      return AppStrings.t(AppStringKeys.composerVoicePreview);
+    }
+    if (q.location != null) {
+      return AppStrings.t(AppStringKeys.composerLocationPreview);
+    }
+    if (q.isDice) {
+      return q.diceEmoji ?? q.text;
+    }
+    if (q.isAnimatedEmoji) {
+      return q.text;
+    }
+    if (q.animatedSticker != null) {
+      return AppStrings.t(AppStringKeys.composerAnimatedEmojiPreview);
+    }
+    if (q.image != null) {
+      final placeholder = switch (q.contentType) {
+        'messagePhoto' => AppStrings.t(AppStringKeys.composerImagePreview),
+        'messageVideo' => AppStrings.t(AppStringKeys.chatVideoPlaceholder),
+        'messageAnimation' => AppStrings.t(AppStringKeys.tdMessageGif),
+        _ => null,
+      };
+      return q.text == placeholder ? '' : q.text;
+    }
+    return q.text;
+  }
+
+  // MARK: - Merge / mutate
+
+  bool _isBlockedMessage(ChatMessage message) {
+    if (message.isOutgoing || message.isService) return false;
+    final senderId = message.senderId;
+    if (senderId != null && _blockedSenderIds.contains(senderId)) return true;
+    if (KeywordBlocker.shared.isSenderBlocked(senderId)) return true;
+    if (HiddenSenderStore.shared.hides(senderId, chatId)) return true;
+    return KeywordBlocker.shared.matches(message.text);
+  }
+
+  /// Rebuilds `messages` from `_allMessages` and refreshes the lookup indexes.
+  ///
+  /// One pass does the filtering, the blocked-user marking and the index fill
+  /// that used to cost four separate walks plus a sort. `_allMessages` is kept
+  /// sorted by every writer, so re-sorting the filtered subsequence here was
+  /// pure cost on every incoming message.
+  void _applyKeywordFilter() {
+    // The chat_view transcript memo relies on list identity to notice
+    // blocked-state changes, so the flags must be set before `messages` is
+    // published — never flip them outside this pass.
+    final blockedUserService = BlockedUserService.shared;
+    final marksBlockedUsers = blockedUserService.enabled;
+    _marksBlockedUsers = marksBlockedUsers;
+    final visible = <ChatMessage>[];
+    final blockedIds = <int>[];
+    _messagesById.clear();
+    _allMessagesById.clear();
+    _messagesBySenderId.clear();
+    _pendingMessageCount = 0;
+    for (final message in _allMessages) {
+      assert(_recordTranscriptScanVisitForTesting());
+      _allMessagesById[message.id] = message;
+      if (isPendingChatMessage(message)) ++_pendingMessageCount;
+      if (_isBlockedMessage(message)) {
+        blockedIds.add(message.id);
+        continue;
+      }
+      final senderId = message.senderId;
+      message.blockedByUser =
+          marksBlockedUsers &&
+          !message.isOutgoing &&
+          !message.isService &&
+          senderId != null &&
+          blockedUserService.isBlocked(senderId);
+      visible.add(message);
+      _messagesById[message.id] = message;
+      if (senderId != null) {
+        (_messagesBySenderId[senderId] ??= <ChatMessage>[]).add(message);
+      }
+    }
+    _messageIndexesDirty = false;
+    // Guards the dropped sort. With a pending send in the list the comparator
+    // is not a total order, so only the pure-id case can be checked.
+    assert(_pendingMessageCount > 0 || _isSortedById(_allMessages));
+    messages = visible;
+    _blockedMessageIds = blockedIds;
+    _markBlockedMessagesReadThroughVisibleBoundary(blockedIds);
+    notifyListeners();
+  }
+
+  // State the incremental append path needs to stay equivalent to the full
+  // pass: what `blockedByUser` was last computed against, and every blocked id
+  // in `_allMessages` (the read-boundary marker is handed the whole set each
+  // time, because an arrival can move the boundary past an older blocked one).
+  bool _marksBlockedUsers = false;
+  List<int> _blockedMessageIds = <int>[];
+
+  /// Folds one strictly-newest message into the published transcript without
+  /// the whole-transcript rebuild [_applyKeywordFilter] does.
+  ///
+  /// That rebuild walked every loaded message and refilled three indexes per
+  /// arrival, so a chat got measurably slower the further back the user had
+  /// scrolled — thousands of blocked checks and map inserts for one message.
+  void _appendToVisibleTranscript(ChatMessage message) {
+    final blockedUserService = BlockedUserService.shared;
+    // The full pass re-evaluates blockedByUser for the whole transcript. The
+    // other inputs to it announce themselves (KeywordBlocker notifies,
+    // updateBlockMessageSender reloads), but this toggle does not, so a change
+    // has to fall back.
+    if (blockedUserService.enabled != _marksBlockedUsers) {
+      _applyKeywordFilter();
+      return;
+    }
+    // Guaranteed by _appendIfStrictlyNewest, so the pending count cannot move.
+    assert(!isPendingChatMessage(message));
+    _allMessagesById[message.id] = message;
+    if (_isBlockedMessage(message)) {
+      _blockedMessageIds.add(message.id);
+    } else {
+      final senderId = message.senderId;
+      message.blockedByUser =
+          _marksBlockedUsers &&
+          !message.isOutgoing &&
+          !message.isService &&
+          senderId != null &&
+          blockedUserService.isBlocked(senderId);
+      // Reassigned, never mutated: chat_view's transcript memo keys on the
+      // list's identity.
+      messages = [...messages, message];
+      _messagesById[message.id] = message;
+      if (senderId != null) {
+        (_messagesBySenderId[senderId] ??= <ChatMessage>[]).add(message);
+      }
+    }
+    _messageIndexesDirty = false;
+    _markBlockedMessagesReadThroughVisibleBoundary(_blockedMessageIds);
+    notifyListeners();
+  }
+
+  bool _isSortedById(List<ChatMessage> list) {
+    for (var i = 1; i < list.length; i++) {
+      if (list[i - 1].id > list[i].id) return false;
+    }
+    return true;
+  }
+
+  /// Refreshes the lookup indexes after a caller mutated either list without
+  /// going through `_applyKeywordFilter`.
+  void _ensureMessageIndexes() {
+    if (!_messageIndexesDirty) return;
+    _messagesById.clear();
+    _allMessagesById.clear();
+    _messagesBySenderId.clear();
+    _pendingMessageCount = 0;
+    for (final message in _allMessages) {
+      assert(_recordTranscriptScanVisitForTesting());
+      _allMessagesById[message.id] = message;
+      if (isPendingChatMessage(message)) ++_pendingMessageCount;
+    }
+    for (final message in messages) {
+      assert(_recordTranscriptScanVisitForTesting());
+      _messagesById[message.id] = message;
+      final senderId = message.senderId;
+      if (senderId != null) {
+        (_messagesBySenderId[senderId] ??= <ChatMessage>[]).add(message);
+      }
+    }
+    _messageIndexesDirty = false;
+  }
+
+  void _markBlockedMessagesReadThroughVisibleBoundary(List<int> blockedIds) {
+    if (blockedIds.isEmpty || _allMessages.isEmpty) return;
+    final visibleMax = latestServerMessageReadBoundary(
+      visibleMessages: messages,
+      allMessages: _allMessages,
+    );
+    if (visibleMax <= 0) return;
+    final ids = blockedIds
+        .where((id) => id <= visibleMax && !_blockedReadIds.contains(id))
+        .toList();
+    if (ids.isEmpty) return;
+    _blockedReadIds.addAll(ids);
+    for (var i = 0; i < ids.length; i += 100) {
+      final end = i + 100 > ids.length ? ids.length : i + 100;
+      final chunk = ids.sublist(i, end);
+      _client.send({
+        '@type': 'viewMessages',
+        'chat_id': chatId,
+        'message_ids': chunk,
+        'force_read': true,
+      });
+    }
+  }
+
+  void _merge(List<ChatMessage> incoming) {
+    if (incoming.isEmpty) return;
+    for (final message in incoming) {
+      if (_acknowledgedPendingMessageIds.contains(message.id)) {
+        message.isSendAcknowledged = true;
+      }
+      if (_locallyViewedMentionIds.contains(message.id)) {
+        message.containsUnreadMention = false;
+      }
+      if (_locallyViewedReactionIds.contains(message.id)) {
+        message.hasUnreadReactions = false;
+      }
+    }
+    if (_appendIfStrictlyNewest(incoming)) {
+      _appendToVisibleTranscript(incoming.first);
+      return;
+    }
+    _allMessages = mergeChatMessages(
+      _allMessages,
+      incoming,
+      ignoredMessageIds: _ignoredMergeMessageIds,
+    );
+    _applyKeywordFilter();
+  }
+
+  /// A live message almost always arrives newer than everything loaded, where
+  /// the general merge still rebuilds a map of the whole transcript and
+  /// re-sorts it. Appending skips both — but only while the list holds no
+  /// pending send, because then the comparator is a plain ascending id order
+  /// and the tail is provably the largest element.
+  bool _appendIfStrictlyNewest(List<ChatMessage> incoming) {
+    if (incoming.length != 1 || _allMessages.isEmpty) return false;
+    final message = incoming.first;
+    if (isPendingChatMessage(message)) return false;
+    _ensureMessageIndexes();
+    if (_pendingMessageCount > 0) return false;
+    if (_allMessages.last.id >= message.id) return false;
+    if (_allMessagesById.containsKey(message.id)) return false;
+    if (_ignoredMergeMessageIds.contains(message.id)) return false;
+    _allMessages.add(message);
+    _messageIndexesDirty = true;
+    return true;
+  }
+
+  Set<int>? _ignoredMergeMessageIdsCache;
+
+  /// Union of the two pending-id sets. Building it inline allocated a fresh
+  /// set of up to 512 ids on every merge.
+  Set<int> get _ignoredMergeMessageIds => _ignoredMergeMessageIdsCache ??= {
+    ..._discardedPendingMessageIds,
+    ..._settledPendingMessageIds,
+  };
+
+  void _mergeHistoryWindow(
+    List<ChatMessage> incoming, {
+    required List<ChatMessage> messagesAtRequestStart,
+    required bool replaceCurrentWindow,
+    required bool preserveLiveArrivals,
+  }) {
+    if (incoming.isEmpty) return;
+    for (final message in incoming) {
+      if (_acknowledgedPendingMessageIds.contains(message.id)) {
+        message.isSendAcknowledged = true;
+      }
+      if (_locallyViewedMentionIds.contains(message.id)) {
+        message.containsUnreadMention = false;
+      }
+      if (_locallyViewedReactionIds.contains(message.id)) {
+        message.hasUnreadReactions = false;
+      }
+    }
+    _allMessages = mergeChatHistoryWindow(
+      currentAtRequestStart: messagesAtRequestStart,
+      currentAtCompletion: _allMessages,
+      fetched: incoming,
+      replaceCurrentWindow: replaceCurrentWindow,
+      preserveLiveArrivals: preserveLiveArrivals,
+      ignoredMessageIds: _ignoredMergeMessageIds,
+    );
+    _applyKeywordFilter();
+  }
+
+  void _rememberSettledPendingMessageId(int messageId) {
+    _settledPendingMessageIds.add(messageId);
+    while (_settledPendingMessageIds.length > 256) {
+      _settledPendingMessageIds.remove(_settledPendingMessageIds.first);
+    }
+    _ignoredMergeMessageIdsCache = null;
+  }
+
+  void _rememberAcknowledgedPendingMessageId(int messageId) {
+    _acknowledgedPendingMessageIds.add(messageId);
+    while (_acknowledgedPendingMessageIds.length > 256) {
+      _acknowledgedPendingMessageIds.remove(
+        _acknowledgedPendingMessageIds.first,
+      );
+    }
+  }
+
+  Future<void> _discardStaleRestoredPendingMessages() async {
+    final pendingIds = _allMessages
+        .where((message) => message.isOutgoing && message.isSending)
+        .map((message) => message.id)
+        .toList(growable: false);
+    if (pendingIds.isEmpty) return;
+
+    final staleIds = <int>[];
+    final replacements = <ChatMessage>[];
+    for (final pendingId in pendingIds) {
+      try {
+        final raw = await _client.query({
+          '@type': 'getMessage',
+          'chat_id': chatId,
+          'message_id': pendingId,
+        });
+        final current = TDParse.message(raw);
+        if (current == null || current.id != pendingId || !current.isSending) {
+          staleIds.add(pendingId);
+          if (current != null) replacements.add(current);
+        }
+      } on TdError catch (error) {
+        if (error.code == 400 || error.code == 404) staleIds.add(pendingId);
+      } catch (_) {
+        // Keep a pending bubble if TDLib cannot confirm its current state.
+      }
+    }
+    if (_isDisposed || staleIds.isEmpty) return;
+    for (final pendingId in staleIds) {
+      _rememberSettledPendingMessageId(pendingId);
+    }
+    _removeMessages(staleIds);
+    if (replacements.isNotEmpty) _merge(replacements);
+  }
+
+  void _replaceText(
+    int messageId,
+    String text, {
+    bool edited = false,
+    List<MessageTextEntity>? entities,
+    List<CustomEmojiEntity>? customEmoji,
+    MessageLinkPreview? linkPreview,
+    bool updateLinkPreview = false,
+  }) {
+    final targets = _messageRefs(messageId);
+    if (targets.isEmpty) return;
+    for (final target in targets) {
+      target.text = text;
+      target.textQuoteSource = text;
+      target.textQuoteSourceEntities = entities ?? target.textEntities;
+      if (entities != null) target.textEntities = entities;
+      if (customEmoji != null) target.customEmoji = customEmoji;
+      if (updateLinkPreview) target.linkPreview = linkPreview;
+      if (edited) target.isEdited = true;
+    }
+    // Text can only change transcript membership while text rules exist.
+    // Sender blocking is independent of the body, so the overwhelmingly
+    // common no-keyword path can avoid republishing and rescanning every
+    // loaded message. A full ChatView sync is still required because message
+    // text feeds chat-language detection, automatic translation, the repeat
+    // affordance on the next bubble, and any open message action overlay.
+    if (!KeywordBlocker.shared.hasTextRules) {
+      _notifyMessagesWithFullViewSync([messageId]);
+    } else {
+      _applyKeywordFilter();
+    }
+  }
+
+  bool _isSending(int messageId) =>
+      _messageRefs(messageId).any((message) => message.isSending);
+
+  void _replaceVideoMedia(int messageId, Map<String, dynamic> content) {
+    final media = TDParse.mediaAttachment(content);
+    for (final target in _messageRefs(messageId)) {
+      target.contentType = content.type;
+      target.image =
+          media.image?.inheritLocalPathFrom(target.image) ?? target.image;
+      target.video =
+          media.video?.inheritLocalPathFrom(target.video) ?? target.video;
+      if ((media.width ?? 0) > 0) target.imageWidth = media.width;
+      if ((media.height ?? 0) > 0) target.imageHeight = media.height;
+      if ((media.videoDuration ?? 0) > 0) {
+        target.videoDuration = media.videoDuration;
+      }
+      if ((media.videoFileSize ?? 0) > 0) {
+        target.videoFileSize = media.videoFileSize;
+      }
+    }
+  }
+
+  void _replacePendingMessage(
+    int pendingMessageId,
+    Map<String, dynamic> rawMessage,
+  ) {
+    _rememberSettledPendingMessageId(pendingMessageId);
+    if (_discardedPendingMessageIds.remove(pendingMessageId)) {
+      _ignoredMergeMessageIdsCache = null;
+      final sentMessageId = rawMessage.int64('id');
+      if (sentMessageId != null) {
+        _discardedPendingMessageIds.add(sentMessageId);
+        _removeMessages([pendingMessageId, sentMessageId]);
+        unawaited(_deleteDiscardedPendingMessage(sentMessageId));
+      } else {
+        _removeMessages([pendingMessageId]);
+      }
+      return;
+    }
+    _ensureMessageIndexes();
+    final pendingMessage =
+        _allMessagesById[pendingMessageId] ?? _messagesById[pendingMessageId];
+    _allMessages.removeWhere((message) => message.id == pendingMessageId);
+    // Reassigned (not mutated) so the transcript memo's identity check stays
+    // valid even if a notify lands before the merge below.
+    messages = messages
+        .where((message) => message.id != pendingMessageId)
+        .toList();
+    _messageIndexesDirty = true;
+    final sentMessage = TDParse.message(rawMessage);
+    if (sentMessage == null) {
+      _applyKeywordFilter();
+      return;
+    }
+    if (pendingMessage != null) {
+      sentMessage.inheritLocalMediaFrom(pendingMessage);
+    }
+    _merge([sentMessage]);
+    _resolveRichMessagesIfNeeded([sentMessage]);
+    _resolveSendersIfNeeded([sentMessage]);
+    _resolveRepliesIfNeeded([sentMessage]);
+    _resolveForwardsIfNeeded([sentMessage]);
+    _resolveServiceUsersIfNeeded([sentMessage]);
+  }
+
+  final Set<int> _loadingFullRichMessageIds = <int>{};
+
+  void _replaceRichMessageContent(int messageId, Map<String, dynamic> content) {
+    final refs = _messageRefs(messageId);
+    if (refs.isEmpty) return;
+    final full = content.obj('message')?.boolean('is_full') ?? false;
+    final text = TDParse.richMessageDisplayText(content);
+    final entities = TDParse.messageTextEntities(content);
+    final blocks = TDParse.richMessageBlocks(content);
+    final customEmoji = TDParse.customEmojiEntitiesForContent(content);
+    for (final message in refs) {
+      message.text = text;
+      message.textEntities = entities;
+      message.richBlocks = blocks;
+      message.customEmoji = customEmoji;
+      message.richMessageIsFull = full;
+    }
+    _applyKeywordFilter();
+  }
+
+  void _resolveRichMessagesIfNeeded(List<ChatMessage> candidates) {
+    for (final message in candidates) {
+      if (message.contentType != 'messageRichMessage' ||
+          message.richMessageIsFull ||
+          !_loadingFullRichMessageIds.add(message.id)) {
+        continue;
+      }
+      unawaited(_loadFullRichMessage(message.id));
+    }
+  }
+
+  Future<void> _loadFullRichMessage(int messageId) async {
+    try {
+      final richMessage = await _client.query({
+        '@type': 'getFullRichMessage',
+        'chat_id': chatId,
+        'message_id': messageId,
+      });
+      _replaceRichMessageContent(messageId, {
+        '@type': 'messageRichMessage',
+        'message': richMessage,
+      });
+    } catch (error) {
+      // Keep the partial placeholder; a later content/history update retries it.
+      debugPrint('Failed to load full rich message $messageId: $error');
+    } finally {
+      _loadingFullRichMessageIds.remove(messageId);
+    }
+  }
+
+  void _setTranslationLoading(int messageId, bool loading) {
+    final target = _messageRefs(messageId);
+    if (target.isEmpty) return;
+    for (final message in target) {
+      message.isTranslating = loading;
+    }
+    _scheduleCoalescedNotify();
+  }
+
+  void _replaceTranslation(
+    int messageId,
+    String text,
+    List<MessageTextEntity> entities,
+    String languageCode,
+  ) {
+    final target = _messageRefs(messageId);
+    if (target.isEmpty) return;
+    for (final message in target) {
+      message.translationText = text;
+      message.translationEntities = entities;
+      message.translationLanguageCode = languageCode;
+      message.isTranslating = false;
+    }
+    _scheduleCoalescedNotify();
+  }
+
+  void restoreMessageTranslation(
+    int messageId,
+    MessageTranslationResult translation,
+  ) {
+    _replaceTranslation(
+      messageId,
+      translation.text,
+      translation.entities,
+      translation.languageCode,
+    );
+  }
+
+  void clearTranslations(Iterable<int> messageIds) {
+    var changed = false;
+    for (final messageId in messageIds.toSet()) {
+      for (final message in _messageRefs(messageId)) {
+        if (message.translationText == null && !message.isTranslating) continue;
+        message.translationText = null;
+        message.translationEntities = const [];
+        message.translationLanguageCode = null;
+        message.isTranslating = false;
+        changed = true;
+      }
+    }
+    if (changed) notifyListeners();
+  }
+
+  List<ChatMessage> _messageRefs(int messageId) {
+    _ensureMessageIndexes();
+    final refs = <ChatMessage>[];
+    final visible = _messagesById[messageId];
+    final loaded = _allMessagesById[messageId];
+    if (visible != null) refs.add(visible);
+    if (loaded != null && (visible == null || !identical(visible, loaded))) {
+      refs.add(loaded);
+    }
+    final buffered = _latestHistoryLiveArrivals[messageId];
+    if (buffered != null &&
+        !refs.any((message) => identical(message, buffered))) {
+      refs.add(buffered);
+    }
+    return refs;
+  }
+
+  void _removeMessages(List<int> ids) {
+    if (ids.isEmpty) return;
+    final removed = ids.toSet();
+    _allMessages.removeWhere((m) => removed.contains(m.id));
+    // Reassign (never mutate in place): the transcript memo in chat_view
+    // caches on the list's identity, so an in-place removeWhere would keep
+    // rendering the deleted message.
+    messages = messages.where((m) => !removed.contains(m.id)).toList();
+    // This path bypasses _applyKeywordFilter, so the lookup indexes would
+    // otherwise keep handing out deleted messages.
+    _messageIndexesDirty = true;
+    _blockedReadIds.removeWhere(removed.contains);
+    // Same reason: the incremental append path hands this list straight to the
+    // read-boundary marker, so a deleted id left here is force-read again (and
+    // never dropped until the next full pass).
+    _blockedMessageIds.removeWhere(removed.contains);
+    if (replyTo != null && removed.contains(replyTo!.id)) replyTo = null;
+    if (pinnedMessages.any((m) => removed.contains(m.id))) {
+      pinnedMessages = pinnedMessages
+          .where((m) => !removed.contains(m.id))
+          .toList();
+      pinnedMessageIndex = pinnedMessageIndex.clamp(
+        0,
+        math.max(0, pinnedMessages.length - 1),
+      );
+      pinnedMessage = pinnedMessages.isEmpty
+          ? null
+          : pinnedMessages[pinnedMessageIndex];
+      pinnedDismissed = pinnedMessage == null ? false : pinnedDismissed;
+    }
+    notifyListeners();
+  }
+
+  void _patchSender(_SenderInfo info, int senderId) {
+    _patchSenders(<int, _SenderInfo>{senderId: info});
+  }
+
+  void _patchSenders(Map<int, _SenderInfo> senders) {
+    if (senders.isEmpty) return;
+    // Walk only the bubbles of the senders being patched. _resolveSender fires
+    // this twice per sender, so a whole-transcript walk per call was the bulk
+    // of the cost of opening or paging a busy group.
+    _ensureMessageIndexes();
+    var changed = false;
+    for (final entry in senders.entries) {
+      final bucket = _messagesBySenderId[entry.key];
+      if (bucket == null) continue;
+      final info = entry.value;
+      for (final m in bucket) {
+        if (m.isOutgoing && !m.senderIsChat) continue;
+        if (m.senderName == info.name &&
+            _sameSenderPhoto(m.senderPhoto, info.photo) &&
+            m.senderRole == info.role &&
+            m.senderTitle == (info.title ?? m.senderTitle) &&
+            m.senderIsPremium == info.isPremium &&
+            m.senderAccentColorId == info.accentColorId &&
+            m.senderEmojiStatusId == info.emojiStatusId) {
+          continue;
+        }
+        m.senderName = info.name;
+        m.senderPhoto = info.photo;
+        m.senderRole = info.role;
+        m.senderTitle = info.title ?? m.senderTitle;
+        m.senderIsPremium = info.isPremium;
+        m.senderAccentColorId = info.accentColorId;
+        m.senderEmojiStatusId = info.emojiStatusId;
+        changed = true;
+      }
+    }
+    if (changed) _scheduleCoalescedNotify();
+  }
+
+  bool _sameSenderPhoto(TdFileRef? current, TdFileRef? next) {
+    if (identical(current, next)) return true;
+    if (current == null || next == null) return false;
+    return current.id == next.id &&
+        current.localPath == next.localPath &&
+        current.photoId == next.photoId &&
+        current.hasAnimation == next.hasAnimation;
+  }
+
+  /// Folds a burst of background patches into one notify per frame. Every
+  /// notify drives a full chat-screen rebuild, and the per-message resolvers
+  /// (senders, replies, forwards, service text, translations) each complete on
+  /// their own round trip.
+  void _scheduleCoalescedNotify() {
+    if (_isDisposed) return;
+    if (_coalescedNotifyTimer != null) return;
+    _coalescedNotifyTimer = Timer(const Duration(milliseconds: 16), () {
+      _coalescedNotifyTimer = null;
+      notifyListeners();
+    });
+  }
+
+  // MARK: - Sender resolution (groups/channels only)
+
+  void _resolveSendersIfNeeded(List<ChatMessage> batch) {
+    if (!isGroup) return;
+    final senderIds = _resolvableSenderIds(batch);
+    final cachedToPatch = _primeCachedSenderIdentities(senderIds);
+    final pending = <int>{};
+    for (final senderId in senderIds) {
+      final cached = _senderCache[senderId];
+      if (cached != null) {
+        cachedToPatch[senderId] = cached;
+        if (!_resolvedSenderDetails.contains(senderId) &&
+            !_resolvingSenders.contains(senderId)) {
+          pending.add(senderId);
+        }
+      } else if (!_resolvingSenders.contains(senderId)) {
+        pending.add(senderId);
+      }
+    }
+    _patchSenders(cachedToPatch);
+    for (final senderId in pending) {
+      _resolvingSenders.add(senderId);
+      _resolveSender(senderId);
+    }
+  }
+
+  Set<int> _resolvableSenderIds(Iterable<ChatMessage> batch) => {
+    for (final message in batch)
+      if (!(message.isOutgoing && !message.senderIsChat) &&
+          !message.isService &&
+          message.senderId != null)
+        message.senderId!,
+  };
+
+  Map<int, _SenderInfo> _primeCachedSenderIdentities(Set<int> senderIds) {
+    final primed = <int, _SenderInfo>{};
+    for (final senderId in senderIds) {
+      if (senderId <= 0) continue;
+      final user = TdUserIndex.shared.userFor(_client.activeSlot, senderId);
+      if (user == null) continue;
+      final existing = _senderCache[senderId];
+      final info = _senderInfoFromUser(
+        user,
+        role: existing?.role ?? MemberRole.member,
+        title: existing?.title,
+      );
+      _senderCache[senderId] = info;
+      primed[senderId] = info;
+    }
+    return primed;
+  }
+
+  @visibleForTesting
+  void primeCachedSenderIdentitiesForTesting() {
+    _patchSenders(_primeCachedSenderIdentities(_resolvableSenderIds(messages)));
+  }
+
+  @visibleForTesting
+  void applySenderUserUpdateForTesting(Map<String, dynamic> user) {
+    _applySenderUserUpdate(user);
+  }
+
+  @visibleForTesting
+  void applyLiveUpdateForTesting(Map<String, dynamic> update) {
+    _handle(update);
+  }
+
+  @visibleForTesting
+  void mergeMessageForTesting(ChatMessage message) {
+    _merge([message]);
+  }
+
+  void _applySenderUserUpdate(Map<String, dynamic> user) {
+    if (!isGroup) return;
+    final userId = user.int64('id');
+    if (userId == null) return;
+    // TDLib emits updateUser for every user the account learns about, so test
+    // the cheap cache before touching the transcript at all.
+    if (!_senderCache.containsKey(userId) && !_hasVisibleSender(userId)) return;
+    final existing = _senderCache[userId];
+    final info = _senderInfoFromUser(
+      user,
+      role: existing?.role ?? MemberRole.member,
+      title: existing?.title,
+    );
+    _senderCache[userId] = info;
+    _patchSender(info, userId);
+  }
+
+  bool _hasVisibleSender(int userId) {
+    _ensureMessageIndexes();
+    final bucket = _messagesBySenderId[userId];
+    if (bucket == null) return false;
+    for (final message in bucket) {
+      if (message.isOutgoing && !message.senderIsChat) continue;
+      if (message.isService) continue;
+      return true;
+    }
+    return false;
+  }
+
+  _SenderInfo _senderInfoFromUser(
+    Map<String, dynamic> user, {
+    required MemberRole role,
+    required String? title,
+  }) {
+    return _SenderInfo(
+      TDParse.userName(user),
+      TDParse.smallPhoto(user.obj('profile_photo')),
+      role,
+      title,
+      isPremium: user.boolean('is_premium') ?? false,
+      accentColorId: user.integer('accent_color_id') ?? -1,
+      emojiStatusId: TDParse.emojiStatusCustomEmojiId(user.obj('emoji_status')),
+    );
+  }
+
+  /// Fills `forwardOrigin` for forwarded messages whose origin is a user or
+  /// chat we can name (hidden-user names already arrive inline).
+  void _resolveForwardsIfNeeded(List<ChatMessage> batch) {
+    for (final m in batch) {
+      if (m.forwardOrigin != null && m.forwardOrigin!.isNotEmpty) continue;
+      final uid = m.forwardFromUserId;
+      final cid = m.forwardFromChatId;
+      if (uid != null) {
+        final cached = _senderCache[uid]?.name ?? _forwardUserNames[uid];
+        if (cached != null) {
+          m.forwardOrigin = cached;
+          continue;
+        }
+        final waiting = _pendingForwardUsers[uid];
+        if (waiting != null) {
+          waiting.add(m);
+          continue;
+        }
+        _pendingForwardUsers[uid] = <ChatMessage>[m];
+        _resolveForwardName(userId: uid);
+      } else if (cid != null) {
+        final cached = _forwardChatTitles[cid];
+        if (cached != null) {
+          m.forwardOrigin = cached;
+          continue;
+        }
+        final waiting = _pendingForwardChats[cid];
+        if (waiting != null) {
+          waiting.add(m);
+          continue;
+        }
+        _pendingForwardChats[cid] = <ChatMessage>[m];
+        _resolveForwardName(chatId: cid);
+      }
+    }
+  }
+
+  // Forwards arrive in runs from the same origin, and the resolver used to keep
+  // no result and no in-flight set: a page with 20 forwards from one channel
+  // fired 20 identical getChat round trips, and every later page repeated them.
+  // Chat and user ids need separate maps — TDLib chat ids for groups/channels
+  // are already negative, and a private chat id equals its user id.
+  final Map<int, String> _forwardUserNames = {};
+  final Map<int, String> _forwardChatTitles = {};
+  final Map<int, List<ChatMessage>> _pendingForwardUsers = {};
+  final Map<int, List<ChatMessage>> _pendingForwardChats = {};
+
+  Future<void> _resolveForwardName({int? userId, int? chatId}) async {
+    String? name;
+    try {
+      if (userId != null) {
+        final user = await _client.query({
+          '@type': 'getUser',
+          'user_id': userId,
+        });
+        name = TDParse.userName(user);
+      } else if (chatId != null) {
+        final chat = await _client.query({
+          '@type': 'getChat',
+          'chat_id': chatId,
+        });
+        name = chat.str('title');
+      }
+    } catch (_) {}
+    final List<ChatMessage>? waiting;
+    if (userId != null) {
+      waiting = _pendingForwardUsers.remove(userId);
+    } else if (chatId != null) {
+      waiting = _pendingForwardChats.remove(chatId);
+    } else {
+      waiting = null;
+    }
+    // A failed lookup is not remembered, so a later page retries it exactly as
+    // it used to.
+    if (name == null || name.isEmpty || waiting == null) return;
+    if (userId != null) {
+      _forwardUserNames[userId] = name;
+    } else if (chatId != null) {
+      _forwardChatTitles[chatId] = name;
+    }
+    for (final message in waiting) {
+      message.forwardOrigin = name;
+    }
+    _scheduleCoalescedNotify();
+  }
+
+  void _resolveServiceUsersIfNeeded(List<ChatMessage> batch) {
+    for (final message in batch) {
+      if (!message.isService) continue;
+      switch (message.contentType) {
+        case 'messageChatAddedToCommunity':
+        case 'messageChatRemovedFromCommunity':
+          _resolveCommunityServiceText(message);
+        case 'messageChatAddMembers':
+        case 'messageChatJoinByLink':
+        case 'messageChatJoinByRequest':
+          if (message.serviceUserIds.isNotEmpty) {
+            _resolveJoinServiceText(message);
+          }
+        case 'messageChatBoost':
+          if (message.serviceUserIds.isNotEmpty) {
+            _resolveBoostServiceText(message);
+          }
+        case 'messageChatDeleteMember':
+          if (message.serviceUserIds.isNotEmpty) {
+            _resolveDeleteMemberServiceText(message);
+          }
+      }
+    }
+  }
+
+  Future<void> _resolveCommunityServiceText(ChatMessage message) async {
+    _ensureMessageIndexes();
+    final target = _messagesById[message.id] ?? message;
+    var changed = _hydrateCommunityPreviewFromCache(target);
+    var actorName = '';
+    if (message.serviceUserIds.isNotEmpty) {
+      final userId = message.serviceUserIds.first;
+      try {
+        final user =
+            TdUserIndex.shared.userFor(_client.activeSlot, userId) ??
+            await _client.query({'@type': 'getUser', 'user_id': userId});
+        actorName = TDParse.userName(user);
+      } catch (_) {}
+    }
+    final text = resolvedCommunityServiceText(
+      contentType: message.contentType ?? '',
+      actorName: actorName,
+      communityName: target.communityPreview?.name ?? '',
+    );
+    if (target.text != text) {
+      target.text = text;
+      changed = true;
+    }
+    if (changed) _scheduleCoalescedNotify();
+  }
+
+  bool _hydrateCommunityPreviewFromCache(ChatMessage message) {
+    final preview = message.communityPreview;
+    if (preview == null || preview.id == 0) return false;
+    for (final update in _client.latestCommunityUpdates) {
+      final community = update.obj('community');
+      if (community?.int64('id') != preview.id) continue;
+      var changed = false;
+      final name = community?.str('name') ?? community?.str('title') ?? '';
+      if (preview.name.isEmpty && name.isNotEmpty) {
+        preview.name = name;
+        changed = true;
+      }
+      final photo = TDParse.smallPhoto(community?.obj('photo'));
+      if (preview.photo == null && photo != null) {
+        preview.photo = photo;
+        changed = true;
+      }
+      return changed;
+    }
+    return false;
+  }
+
+  Future<void> _resolveJoinServiceText(ChatMessage message) async {
+    final names = <String>[];
+    for (final userId in message.serviceUserIds.take(5)) {
+      try {
+        final user =
+            TdUserIndex.shared.userFor(_client.activeSlot, userId) ??
+            await _client.query({'@type': 'getUser', 'user_id': userId});
+        final name = TDParse.userName(user);
+        if (name.isNotEmpty) names.add(name);
+      } catch (_) {}
+    }
+    if (names.isEmpty) return;
+    final suffix = message.serviceUserIds.length > names.length
+        ? AppStrings.t(AppStringKeys.chatAndOthersCount, {
+            // The string reads "and N others" — N is the remainder beyond
+            // the listed names, not the total joiner count.
+            'value1': message.serviceUserIds.length - names.length,
+          })
+        : '';
+    final text = AppStrings.t(AppStringKeys.chatUsersJoinedGroup, {
+      'value1': names.join(AppStrings.t(AppStringKeys.listSeparator)),
+      'value2': suffix,
+    });
+    _ensureMessageIndexes();
+    final target = _messagesById[message.id];
+    if (target == null || target.text == text) return;
+    target.text = text;
+    _scheduleCoalescedNotify();
+  }
+
+  Future<void> _resolveBoostServiceText(ChatMessage message) async {
+    if (message.serviceUserIds.isEmpty) return;
+    final userId = message.serviceUserIds.first;
+    try {
+      final user =
+          TdUserIndex.shared.userFor(_client.activeSlot, userId) ??
+          await _client.query({'@type': 'getUser', 'user_id': userId});
+      final name = TDParse.userName(user);
+      if (name.isEmpty) return;
+      final text = AppStrings.t(AppStringKeys.chatUserBoostedGroup, {
+        'value1': name,
+      });
+      _ensureMessageIndexes();
+      final target = _messagesById[message.id];
+      if (target == null || target.text == text) return;
+      target.text = text;
+      _scheduleCoalescedNotify();
+    } catch (_) {}
+  }
+
+  Future<void> _resolveDeleteMemberServiceText(ChatMessage message) async {
+    if (message.serviceUserIds.isEmpty) return;
+    try {
+      final user = await _client.query({
+        '@type': 'getUser',
+        'user_id': message.serviceUserIds.first,
+      });
+      final name = TDParse.userName(user);
+      if (name.isEmpty) return;
+      final text = AppStrings.t(AppStringKeys.chatUserLeftGroup, {
+        'value1': name,
+      });
+      _ensureMessageIndexes();
+      final target = _messagesById[message.id];
+      if (target == null || target.text == text) return;
+      target.text = text;
+      _scheduleCoalescedNotify();
+    } catch (_) {}
+  }
+
+  Future<void> _resolveSender(int senderId) async {
+    try {
+      _SenderInfo info;
+      if (senderId > 0) {
+        Map<String, dynamic>? user = TdUserIndex.shared.userFor(
+          _client.activeSlot,
+          senderId,
+        );
+        if (user == null) {
+          try {
+            user = await _client.query({
+              '@type': 'getUser',
+              'user_id': senderId,
+            });
+          } catch (_) {
+            // A discovery update can still be in flight. Do not permanently
+            // cache a placeholder; updateUser will patch the sender when it
+            // arrives, and a later batch remains free to retry resolution.
+            return;
+          }
+        }
+        final existing = _senderCache[senderId];
+        final immediate = _senderInfoFromUser(
+          user,
+          role: existing?.role ?? MemberRole.member,
+          title: existing?.title,
+        );
+        if (_isDisposed) return;
+        _senderCache[senderId] = immediate;
+        _patchSender(immediate, senderId);
+        final role = isChannel
+            ? (MemberRole.member, null)
+            : await _resolveRole(senderId);
+        final latestUser =
+            TdUserIndex.shared.userFor(_client.activeSlot, senderId) ?? user;
+        info = _senderInfoFromUser(latestUser, role: role.$1, title: role.$2);
+      } else {
+        try {
+          final chat = await _client.query({
+            '@type': 'getChat',
+            'chat_id': senderId,
+          });
+          info = _SenderInfo(
+            chat.str('title') ??
+                AppStrings.t(AppStringKeys.chatInfoGroupMembers),
+            TDParse.smallPhoto(chat.obj('photo')),
+            MemberRole.channel,
+            null,
+          );
+        } catch (_) {
+          info = _SenderInfo(
+            AppStrings.t(AppStringKeys.chatInfoGroupMembers),
+            null,
+            MemberRole.channel,
+            null,
+          );
+        }
+      }
+      if (_isDisposed) return;
+      _senderCache[senderId] = info;
+      _resolvedSenderDetails.add(senderId);
+      final activeAction = _chatActions[senderId];
+      if (activeAction != null && activeAction.name.isEmpty) {
+        _chatActions[senderId] = _ChatActionInfo(
+          info.name,
+          activeAction.actionType,
+        );
+      }
+      _patchSender(info, senderId);
+    } finally {
+      _resolvingSenders.remove(senderId);
+    }
+  }
+
+  Future<(MemberRole, String?)> _resolveRole(int userId) async {
+    try {
+      final member = await _client.query({
+        '@type': 'getChatMember',
+        'chat_id': chatId,
+        'member_id': {'@type': 'messageSenderUser', 'user_id': userId},
+      });
+      final status = member.obj('status');
+      final cleanTitle = _memberTitle(member, status);
+      switch (status?.type) {
+        case 'chatMemberStatusCreator':
+          return (MemberRole.owner, cleanTitle);
+        case 'chatMemberStatusAdministrator':
+          return (MemberRole.admin, cleanTitle);
+        default:
+          return (MemberRole.member, cleanTitle);
+      }
+    } catch (_) {
+      return (MemberRole.member, null);
+    }
+  }
+
+  String? _memberTitle(
+    Map<String, dynamic> member,
+    Map<String, dynamic>? status,
+  ) {
+    final raw =
+        status?.str('custom_title') ??
+        member.str('custom_title') ??
+        member.str('tag') ??
+        status?.str('title') ??
+        member.str('title');
+    final title = raw?.trim();
+    return title == null || title.isEmpty ? null : title;
+  }
+}

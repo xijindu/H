@@ -1,8 +1,38 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    id("com.google.gms.google-services") apply false
 }
+
+// Firebase is optional for local contributors. Apply Google Services only for
+// a real config; missing or placeholder files must not make debug builds fail.
+val googleServicesFile = file("google-services.json")
+val hasFirebaseConfig = googleServicesFile.isFile && Regex(
+    "\\\"mobilesdk_app_id\\\"\\s*:\\s*\\\"1:[0-9]+:android:[0-9a-fA-F]+\\\"",
+).containsMatchIn(googleServicesFile.readText()) && Regex(
+    "\\\"package_name\\\"\\s*:\\s*\\\"org\\.handy\\.app\\\"",
+).containsMatchIn(googleServicesFile.readText())
+if (hasFirebaseConfig) {
+    apply(plugin = "com.google.gms.google-services")
+} else {
+    logger.lifecycle("Firebase config not found; building without Firebase Analytics")
+}
+
+// Release signing (Nekoko LLC). Credentials live in android/key.properties
+// (git-ignored). When absent, release falls back to debug signing so CI and
+// fresh clones still build.
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
+val sentryDsn = providers.environmentVariable("SENTRY_DSN").orNull.orEmpty()
+val sentryEnvironment = providers.environmentVariable("SENTRY_ENVIRONMENT").orNull ?: "production"
 
 android {
     namespace = "org.handy.app"
@@ -12,28 +42,60 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "org.handy.app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = maxOf(26, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
-        // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
-        // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
-        // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
-        // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["sentryDsn"] = sentryDsn
+        manifestPlaceholders["sentryEnvironment"] = sentryEnvironment
+        ndk {
+            abiFilters.clear()
+            abiFilters.addAll(mutableSetOf("arm64-v8a"))
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // The APK is distributed directly from CI. Store native libraries
+            // compressed so the arm64 APK is small enough for Telegram upload;
+            // Android will extract them at install time.
+            useLegacyPackaging = true
+        }
+    }
+
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Signed with the Nekoko LLC release key when android/key.properties
+            // is present; otherwise debug-signed so CI / fresh clones still build.
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+            // ntgcalls (and other native plugins) resolve their Java classes by name
+            // from native code via JNI (GetStaticMethodID); R8 obfuscation renames
+            // those classes → JniAbort/SIGABRT at runtime in release (debug doesn't
+            // minify, so it ran fine). The Java/Kotlin surface here is tiny — the APK
+            // is almost entirely native .so + Dart AOT, which R8 can't shrink — so
+            // disabling minification costs ~nothing and avoids release-only JNI crashes.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
@@ -46,4 +108,28 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    // FlutterFragmentActivity and the local_auth launch theme require AppCompat.
+    implementation("androidx.appcompat:appcompat:1.8.0")
+    // Edge-to-edge: WindowCompat.setDecorFitsSystemWindows.
+    implementation("androidx.core:core-ktx:1.18.0")
+    // MediaSession + MediaStyle notification for the system music controls.
+    implementation("androidx.media:media:1.7.1")
+    // Android's system passkey picker. The Play Services adapter keeps the
+    // same Credential Manager API working on pre-Android 14 devices.
+    implementation("androidx.credentials:credentials:1.6.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
+    // Mithka Pro subscriptions. Product prices and billing periods are owned by
+    // Play Console; the client always displays the localized ProductDetails.
+    implementation("com.android.billingclient:billing:9.1.0")
+    // ntgcalls — a from-scratch C++ Telegram-calls engine (WebRTC + opus + libvpx
+    // statically bundled inside a self-contained libntgcalls.so per ABI). This is
+    // the real media transport behind the CallMediaEngine seam; CallMediaPlugin
+    // drives its 1:1 P2P API from the TDLib callStateReady payload.
+    implementation("io.github.pytgcalls:ntgcalls:2.2.5")
+    implementation("com.google.mlkit:language-id:17.0.6")
+    implementation("com.google.mlkit:translate:17.0.3")
 }

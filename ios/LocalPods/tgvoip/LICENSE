@@ -1,0 +1,8 @@
+TgVoipWebrtc is built from Telegram's Telegram-iOS and tgcalls sources.
+
+The tgcalls sources are licensed under the GNU Lesser General Public License,
+version 3. The corresponding source and full license are available at:
+https://github.com/TelegramMessenger/tgcalls
+
+The exact Telegram-iOS source revision used by Mithka's build script is
+recorded in docs/group-calls-ios.md.

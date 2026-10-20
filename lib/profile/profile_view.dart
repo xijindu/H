@@ -1,0 +1,836 @@
+//
+//  profile_view.dart
+//
+//  The "我" side menu (slides in from the left, ~88% width). Redesigned to match
+//  the reference app's drawer: a themed avatar banner → a vertical list
+//  of rows (Calls / Saved Messages / Files / Videos) → account switcher →
+//  an icon-only bottom
+//  bar. Backed by real TDLib via ProfileViewModel + AccountStore.
+//
+
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:handy/l10n/app_localizations.dart';
+import 'package:provider/provider.dart';
+
+import '../app/ipad_window_chrome.dart';
+import '../app/primary_chat_launcher.dart';
+import '../auth/account_store.dart';
+import '../auth/auth_manager.dart';
+import '../call/calls_view.dart';
+import '../chat/chat_wallpaper.dart';
+import '../chat/custom_emoji.dart';
+import '../chat/shared_media_view.dart';
+import '../components/app_icons.dart';
+import '../components/confirm_dialog.dart';
+import '../components/photo_avatar.dart';
+import '../components/ui_components.dart';
+import '../components/vip_badge.dart';
+import '../settings/edit_profile_view.dart';
+import '../settings/settings_view.dart';
+import '../tdlib/json_helpers.dart';
+import '../tdlib/td_client.dart';
+import '../tdlib/td_models.dart';
+import '../theme/app_theme.dart';
+import '../theme/theme_controller.dart';
+import 'emoji_status_picker.dart';
+import 'profile_detail_view.dart';
+import 'profile_theme_backdrop.dart';
+import 'profile_username_pill.dart';
+import 'profile_username_summary.dart';
+
+class ProfileViewModel extends ChangeNotifier {
+  CurrentUser? user;
+  List<String> usernames = const [];
+  int? savedChatId;
+  bool _loaded = false;
+  StreamSubscription? _sub;
+
+  void onAppear() {
+    if (_loaded) return;
+    _loaded = true;
+    // Keep the profile (and the "我" drawer, which is this same view) live: when
+    // our own user changes — e.g. after editing the name — TDLib emits updateUser
+    // for us, so re-parse instead of waiting for an app restart.
+    _sub = TdClient.shared.updatesOf('updateUser').listen((u) {
+      final usr = u.obj('user');
+      if (usr != null && usr.int64('id') == user?.id) _applyUser(usr);
+    });
+    _getMe();
+  }
+
+  void _applyUser(Map<String, dynamic> me) {
+    usernames = TDParse.activeUsernames(me);
+    user = CurrentUser(
+      id: me.int64('id') ?? user?.id ?? 0,
+      name: TDParse.userName(me),
+      phoneNumber: TDParse.formatPhone(me.str('phone_number')),
+      username: usernames.isEmpty ? null : usernames.first,
+      photo: TDParse.smallPhoto(me.obj('profile_photo')),
+      emojiStatusId: TDParse.emojiStatusCustomEmojiId(me.obj('emoji_status')),
+      isPremium: me.boolean('is_premium') ?? false,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _getMe() async {
+    try {
+      final me = await TdClient.shared.query({'@type': 'getMe'});
+      _applyUser(me);
+      final chat = await TdClient.shared.query({
+        '@type': 'createPrivateChat',
+        'user_id': user?.id ?? me.int64('id') ?? 0,
+        'force': false,
+      });
+      savedChatId = chat.int64('id') ?? user?.id;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  /// Default emoji-status suggestions (custom_emoji_ids), resolved on demand
+  /// for the status picker.
+  Future<List<int>> statusOptions() async {
+    final ids = <int>[];
+    for (final type in const [
+      'getThemedEmojiStatuses',
+      'getDefaultEmojiStatuses',
+    ]) {
+      try {
+        final res = await TdClient.shared.query({'@type': type});
+        // Newer TDLib: { emoji_statuses: [emojiStatusTypeCustomEmoji{custom_emoji_id}] };
+        // older: { custom_emoji_ids: [int64] }.
+        for (final s
+            in res.objects('emoji_statuses') ??
+                const <Map<String, dynamic>>[]) {
+          final id =
+              s.int64('custom_emoji_id') ??
+              s.obj('type')?.int64('custom_emoji_id');
+          if (id != null && id != 0) ids.add(id);
+        }
+        for (final id in res.int64Array('custom_emoji_ids') ?? const <int>[]) {
+          if (id != 0) ids.add(id);
+        }
+      } catch (_) {}
+      if (ids.isNotEmpty) break;
+    }
+    return ids.toSet().toList();
+  }
+
+  /// Sets (id != 0) or clears (id == 0) the current user's emoji status.
+  Future<bool> setEmojiStatus(int id) async {
+    try {
+      await TdClient.shared.query({
+        '@type': 'setEmojiStatus',
+        // Current TDLib: emojiStatus.type = emojiStatusTypeCustomEmoji{...}.
+        // (Sending custom_emoji_id at the top level is silently ignored, so the
+        // status never actually changes.)
+        'emoji_status': id == 0
+            ? null
+            : {
+                '@type': 'emojiStatus',
+                'type': {
+                  '@type': 'emojiStatusTypeCustomEmoji',
+                  'custom_emoji_id': id,
+                },
+                'expiration_date': 0,
+              },
+      });
+      user?.emojiStatusId = id;
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+class ProfileView extends StatefulWidget {
+  const ProfileView({super.key});
+
+  @override
+  State<ProfileView> createState() => _ProfileViewState();
+}
+
+class _ProfileViewState extends State<ProfileView> {
+  final _vm = ProfileViewModel();
+  final _wallpaperController = ChatWallpaperController.shared;
+
+  @override
+  void initState() {
+    super.initState();
+    _vm.addListener(() {
+      if (mounted) setState(() {});
+    });
+    _vm.onAppear();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // Loading global themes notifies every open chat. Starting that work
+      // from initState can synchronously dirty an ancestor while this profile
+      // subtree is still being built, so begin it after the frame is complete.
+      unawaited(_wallpaperController.loadGlobalChatThemes());
+      unawaited(_wallpaperController.loadDefaultWallpaper(dark: false));
+      unawaited(_wallpaperController.loadDefaultWallpaper(dark: true));
+      context.read<AccountStore>().refresh();
+    });
+  }
+
+  @override
+  void dispose() {
+    _vm.dispose();
+    super.dispose();
+  }
+
+  NavigatorState get _root => Navigator.of(context, rootNavigator: true);
+
+  void _openSaved(String title) {
+    final cid = _vm.savedChatId ?? _vm.user?.id ?? 0;
+    unawaited(openChatFromCurrentWindow(context, chatId: cid, title: title));
+  }
+
+  void _openStatusPicker() {
+    showEmojiStatusPicker(
+      context,
+      currentStatusId: _vm.user?.emojiStatusId ?? 0,
+    );
+  }
+
+  void _openMyProfile() {
+    final user = _vm.user;
+    if (user == null || user.id <= 0) return;
+    _root.push(
+      MaterialPageRoute(
+        builder: (_) => ProfileDetailView(userId: user.id, name: user.name),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Container(
+      color: c.card,
+      child: Column(
+        children: [
+          _banner(),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.only(),
+              children: [
+                _rowsCard(),
+                const SizedBox(height: 12),
+                _accountsCard(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // MARK: - Themed profile banner
+
+  Widget _banner() => AnimatedBuilder(
+    animation: _wallpaperController,
+    builder: (context, _) => _themedBanner(),
+  );
+
+  Widget _themedBanner() {
+    final user = _vm.user;
+    final colors = context.colors;
+    final foreground = colors.textPrimary;
+    final brightness = Theme.of(context).brightness;
+    final dark = brightness == Brightness.dark;
+    final themeController = context.watch<ThemeController>();
+    final selectedWallpaper = selectProfileThemeWallpaper(
+      themingEnabled: themeController.themingEnabled,
+      defaultWallpaper: _wallpaperController.defaultWallpaper(dark: dark),
+      globalThemeWallpaper: _wallpaperController.globalThemeWallpaperFor(
+        dark: dark,
+      ),
+    );
+    final wallpaper = selectedWallpaper == null
+        ? null
+        : _wallpaperController.resolvedWallpaper(selectedWallpaper);
+    final hidePhone = context.watch<ThemeController>().hideSidebarPhone;
+    final identities = _vm.usernames.isNotEmpty
+        ? compactProfileUsernameLabels(_vm.usernames)
+        : [
+            if (!hidePhone && (user?.phoneNumber ?? '').isNotEmpty)
+              user!.phoneNumber,
+          ];
+    return Stack(
+      children: [
+        Positioned.fill(child: ProfileThemeBackdrop(wallpaper: wallpaper)),
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            MediaQuery.of(context).padding.top +
+                iPadWindowChromeInsetOf(context) +
+                8,
+            16,
+            20,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Top controls: theme toggle + profile + settings.
+              Row(
+                children: [
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => _root.push(
+                      MaterialPageRoute(builder: (_) => const SettingsView()),
+                    ),
+                    child: AppIcon(
+                      HeroAppIcons.gear,
+                      size: 22,
+                      color: foreground,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _openMyProfile,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: colors.divider, width: 2),
+                      ),
+                      child: PhotoAvatar(
+                        title:
+                            user?.name ??
+                            AppStrings.t(AppStringKeys.chatMeLabel),
+                        photo: user?.photo,
+                        size: 64,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                user?.name ??
+                                    AppStrings.t(AppStringKeys.contactsLoading),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w600,
+                                  color: foreground,
+                                ),
+                              ),
+                            ),
+                            _nameStatusIcon(user),
+                            if (user?.isPremium ?? false) ...[
+                              const SizedBox(width: 6),
+                              const VipBadge(),
+                            ],
+                          ],
+                        ),
+                        if (identities.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 2,
+                            children: [
+                              for (final identity in identities)
+                                identity.startsWith('@')
+                                    ? ProfileUsernamePill(username: identity)
+                                    : Text(
+                                        identity,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          height: 1.25,
+                                          color: colors.textSecondary,
+                                        ),
+                                      ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Edit profile — replaces the old duplicate 编辑资料 card.
+                  GestureDetector(
+                    key: const ValueKey('profile-banner-edit'),
+                    onTap: () => _root.push(
+                      MaterialPageRoute(
+                        builder: (_) => const EditProfileView(),
+                      ),
+                    ),
+                    child: AppIcon(
+                      HeroAppIcons.penToSquare,
+                      size: 22,
+                      color: foreground,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _nameStatusIcon(CurrentUser? user) {
+    final foreground = context.colors.textPrimary;
+    final hasStatus = (user?.emojiStatusId ?? 0) != 0;
+    final premium = user?.isPremium ?? false;
+    if (!hasStatus && !premium) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(left: 6),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _openStatusPicker,
+        child: hasStatus
+            ? StatusEmojiView(
+                id: user!.emojiStatusId,
+                size: 24,
+                color: foreground,
+              )
+            : Container(
+                width: 24,
+                height: 24,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: foreground.withValues(alpha: 0.16),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: foreground.withValues(alpha: 0.5)),
+                ),
+                child: AppIcon(
+                  HeroAppIcons.plus,
+                  size: 16,
+                  color: foreground.withValues(alpha: 0.9),
+                ),
+              ),
+      ),
+    );
+  }
+
+  // MARK: - custom vertical rows
+
+  Widget _rowsCard() {
+    return Container(
+      decoration: BoxDecoration(color: context.colors.card),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          _row(
+            HeroAppIcons.phone,
+            const Color(0xFF34C759),
+            AppStrings.t(AppStringKeys.callsTitle),
+            () {
+              _root.push(MaterialPageRoute(builder: (_) => const CallsView()));
+            },
+          ),
+          _row(
+            HeroAppIcons.thumbtack,
+            const Color(0xFFFF9D2E),
+            AppStrings.t(AppStringKeys.savedMessages),
+            () => _openSaved(AppStrings.t(AppStringKeys.savedMessages)),
+          ),
+          _row(
+            HeroAppIcons.folder,
+            const Color(0xFF3C8CF0),
+            AppStrings.t(AppStringKeys.topicPostContentFile),
+            () {
+              _root.push(
+                MaterialPageRoute(
+                  builder: (_) => SharedMediaView(
+                    chatId: 0,
+                    title: AppStrings.t(AppStringKeys.topicPostContentFile),
+                    initialTab: 1,
+                    displayTitle: AppStringKeys.topicPostContentFile,
+                  ),
+                ),
+              );
+            },
+          ),
+          _row(
+            HeroAppIcons.video,
+            const Color(0xFF7B61FF),
+            AppStrings.t(AppStringKeys.sharedMediaVideos),
+            () {
+              _root.push(
+                MaterialPageRoute(
+                  builder: (_) => SharedMediaView(
+                    chatId: 0,
+                    title: AppStrings.t(AppStringKeys.sharedMediaVideos),
+                    initialTab: 4,
+                    displayTitle: AppStringKeys.sharedMediaVideos,
+                    lockedTab: true,
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _row(AppIconData icon, Color color, String label, VoidCallback onTap) {
+    final c = context.colors;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        height: 54,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 8, right: 18),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 32,
+                alignment: Alignment.center,
+                child: AppIcon(icon, size: 20, color: color),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 15, color: c.textPrimary),
+                ),
+              ),
+              const SizedBox(width: 12),
+              AppIcon(
+                HeroAppIcons.chevronRight,
+                size: 15,
+                color: c.textTertiary,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // MARK: - Account switcher
+
+  Widget _accountsCard() {
+    final c = context.colors;
+    final accounts = context.watch<AccountStore>();
+    final hidePhone = context.watch<ThemeController>().hideSidebarPhone;
+    return Container(
+      margin: const EdgeInsets.symmetric(),
+      decoration: BoxDecoration(
+        color: c.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          const InsetDivider(leadingInset: 0),
+          for (final s in accounts.summaries) ...[
+            AccountActionRow(
+              onTap: () =>
+                  accounts.switchTo(s.slot, context.read<AuthManager>()),
+              onLongPress: () => _confirmRemoveAccount(accounts, s),
+              onRemove: () => _confirmRemoveAccount(accounts, s),
+              onLogout: () => _confirmLogOutAccount(accounts, s),
+              child: _accountRow(
+                s.name,
+                hidePhone ? '' : s.phone,
+                s.avatarPath,
+                selected: s.slot == accounts.activeSlot,
+              ),
+            ),
+            const InsetDivider(leadingInset: 64),
+          ],
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => accounts.addAccount(context.read<AuthManager>()),
+            child: SizedBox(
+              height: 54,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: AppTheme.brand.withValues(alpha: 0.12),
+                      ),
+                      child: AppIcon(
+                        HeroAppIcons.plus,
+                        size: 18,
+                        color: AppTheme.brand,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        AppStrings.t(AppStringKeys.profileAddAccount),
+                        style: TextStyle(fontSize: 15, color: AppTheme.brand),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _accountLabel(AccountSummary s) =>
+      s.phone.isNotEmpty ? '${s.name}（${s.phone}）' : s.name;
+
+  /// Long-press or swipe an account row to remove it from this device only.
+  Future<void> _confirmRemoveAccount(
+    AccountStore accounts,
+    AccountSummary s,
+  ) async {
+    final ok = await confirmDialog(
+      context,
+      title: AppStrings.t(AppStringKeys.profileRemoveAccount),
+      message: AppStrings.t(AppStringKeys.profileRemoveAccountConfirm, {
+        'value1': _accountLabel(s),
+      }),
+      confirmText: AppStrings.t(AppStringKeys.chatInfoRemove),
+      destructive: true,
+    );
+    if (!ok || !mounted) return;
+    await accounts.removeAccount(s.slot, context.read<AuthManager>());
+  }
+
+  Future<void> _confirmLogOutAccount(
+    AccountStore accounts,
+    AccountSummary s,
+  ) async {
+    final ok = await confirmDialog(
+      context,
+      title: AppStrings.t(AppStringKeys.profileLogOutAccount),
+      message: AppStrings.t(AppStringKeys.profileLogOutAccountConfirm, {
+        'value1': _accountLabel(s),
+      }),
+      confirmText: AppStrings.t(AppStringKeys.settingsLogOut),
+      destructive: true,
+    );
+    if (!ok || !mounted) return;
+    await accounts.logOutAccount(s.slot, context.read<AuthManager>());
+  }
+
+  Widget _accountRow(
+    String name,
+    String phone,
+    String? avatarPath, {
+    required bool selected,
+  }) {
+    final c = context.colors;
+    final avatarCacheSize = (36 * MediaQuery.devicePixelRatioOf(context))
+        .ceil();
+    return ConstrainedBox(
+      // A minimum rather than a fixed height: the two stacked lines grow with
+      // the text scale and would otherwise clip out of the row.
+      constraints: const BoxConstraints(minHeight: 56),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          children: [
+            if (avatarPath != null && avatarPath.isNotEmpty)
+              ClipOval(
+                child: Image.file(
+                  File(avatarPath),
+                  width: 36,
+                  height: 36,
+                  fit: BoxFit.cover,
+                  cacheWidth: avatarCacheSize,
+                  cacheHeight: avatarCacheSize,
+                ),
+              )
+            else
+              PhotoAvatar(title: name, size: 36),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 15, color: c.textPrimary),
+                  ),
+                  if (phone.isNotEmpty)
+                    Text(
+                      phone,
+                      style: TextStyle(fontSize: 12, color: c.textSecondary),
+                    ),
+                ],
+              ),
+            ),
+            if (selected)
+              AppIcon(HeroAppIcons.check, size: 16, color: AppTheme.brand),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AccountActionRow extends StatefulWidget {
+  const AccountActionRow({
+    super.key,
+    required this.child,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onRemove,
+    required this.onLogout,
+  });
+
+  final Widget child;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final VoidCallback onRemove;
+  final VoidCallback onLogout;
+
+  @override
+  State<AccountActionRow> createState() => _AccountActionRowState();
+}
+
+class _AccountActionRowState extends State<AccountActionRow> {
+  static const double _actionWidth = 78;
+  static const double _actionsWidth = _actionWidth * 2;
+  double _offset = 0;
+
+  // The swipe actions sit behind the row, so the row has to be a bounded box
+  // rather than one that sizes to its content. Grow it with the name and
+  // phone lines it holds instead.
+  double _rowExtent(BuildContext context) =>
+      AppMetric.rowExtentFor(context, base: 56, lines: const [15, 12]);
+
+  void _close() {
+    if (_offset == 0) return;
+    setState(() => _offset = 0);
+  }
+
+  void _run(VoidCallback action) {
+    _close();
+    action();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return SizedBox(
+      height: _rowExtent(context),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _SwipeActionButton(
+                    label: AppStrings.t(AppStringKeys.chatInfoRemove),
+                    color: const Color(0xFFFF9500),
+                    onTap: () => _run(widget.onRemove),
+                  ),
+                  _SwipeActionButton(
+                    label: AppStrings.t(AppStringKeys.settingsLogOut),
+                    color: AppTheme.tagRed,
+                    onTap: () => _run(widget.onLogout),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            left: _offset,
+            right: -_offset,
+            top: 0,
+            bottom: 0,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _offset < 0 ? _close : widget.onTap,
+              onLongPress: widget.onLongPress,
+              onHorizontalDragUpdate: (details) {
+                final next = (_offset + details.delta.dx).clamp(
+                  -_actionsWidth,
+                  0.0,
+                );
+                if (next != _offset) setState(() => _offset = next);
+              },
+              onHorizontalDragEnd: (_) {
+                setState(() {
+                  _offset = _offset.abs() > _actionsWidth * 0.35
+                      ? -_actionsWidth
+                      : 0;
+                });
+              },
+              child: ColoredBox(color: c.card, child: widget.child),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SwipeActionButton extends StatelessWidget {
+  const _SwipeActionButton({
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        width: _AccountActionRowState._actionWidth,
+        height: double.infinity,
+        alignment: Alignment.center,
+        color: color,
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: readableForeground(color),
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}

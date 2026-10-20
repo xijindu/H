@@ -1,0 +1,88 @@
+minimum_ios_version = '15.0'
+platform :ios, minimum_ios_version
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  use_frameworks!
+
+  tgvoip_framework = File.expand_path(
+    'LocalPods/tgvoip/TgVoipWebrtc.xcframework',
+    __dir__
+  )
+  if File.directory?(tgvoip_framework)
+    pod 'TgVoipWebrtc', :path => 'LocalPods/tgvoip'
+  end
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  tgvoip_framework = File.expand_path(
+    'LocalPods/tgvoip/TgVoipWebrtc.xcframework',
+    __dir__
+  )
+  tgvoip_installed = File.directory?(tgvoip_framework)
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = minimum_ios_version
+      if tgvoip_installed
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'x86_64'
+      end
+      definitions = config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
+        '$(inherited)',
+      ]
+      [
+        'PERMISSION_CAMERA=1',
+        'PERMISSION_MICROPHONE=1',
+        'PERMISSION_PHOTOS=1',
+        'PERMISSION_LOCATION=1',
+        'PERMISSION_NOTIFICATIONS=1',
+      ].each do |definition|
+        definitions << definition unless definitions.include?(definition)
+      end
+    end
+  end
+  # Telegram's current iOS Bazel dependency graph no longer builds the Intel
+  # simulator (dav1d rejects ios_x86_64). Its official arm64 simulator slice
+  # is sufficient for current Apple-silicon Xcode hosts.
+  installer.aggregate_targets.map(&:user_project).uniq.each do |project|
+    project.native_targets.each do |target|
+      target.build_configurations.each do |config|
+        if tgvoip_installed
+          config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'x86_64'
+        elsif config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] == 'x86_64'
+          config.build_settings.delete('EXCLUDED_ARCHS[sdk=iphonesimulator*]')
+        end
+      end
+    end
+    project.save
+  end
+end

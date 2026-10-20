@@ -1,0 +1,688 @@
+﻿import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_math_fork/flutter_math.dart';
+import 'package:provider/provider.dart';
+
+import '../components/toast.dart';
+import '../l10n/app_localizations.dart';
+import '../tdlib/td_models.dart';
+import '../theme/app_theme.dart';
+import '../theme/theme_controller.dart';
+import 'custom_emoji.dart';
+import 'link_handler.dart';
+
+class TelegramRichText extends StatefulWidget {
+  const TelegramRichText({
+    super.key,
+    required this.text,
+    this.entities = const [],
+    this.style,
+    this.linkColor,
+    this.underlineLinks = false,
+    this.maxLines,
+    this.overflow = TextOverflow.clip,
+    this.onBotCommandTap,
+    this.onHashtagTap,
+    this.onMentionTap,
+    this.quoteBackgroundColor,
+  });
+
+  final String text;
+  final List<MessageTextEntity> entities;
+  final TextStyle? style;
+  final Color? linkColor;
+  final bool underlineLinks;
+  final int? maxLines;
+  final TextOverflow overflow;
+  final ValueChanged<String>? onBotCommandTap;
+  final ValueChanged<String>? onHashtagTap;
+  final void Function(int userId, String name)? onMentionTap;
+  final Color? quoteBackgroundColor;
+
+  @override
+  State<TelegramRichText> createState() => _TelegramRichTextState();
+}
+
+class _TelegramRichTextState extends State<TelegramRichText> {
+  static final _linkRegExp = RegExp(
+    r'((?:https?:\/\/|www\.|t\.me\/|telegram\.me\/|tg:\/\/)[^\s]+)|(?<![\w@])(@[A-Za-z0-9_]{4,32})|(?<![\w#])(#[A-Za-z0-9_\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+)',
+    caseSensitive: false,
+    unicode: true,
+  );
+
+  final _recognizers = <GestureRecognizer>[];
+  final Set<String> _revealedSpoilers = {};
+
+  List<InlineSpan>? _spanCache;
+  String? _spanCacheText;
+  List<MessageTextEntity>? _spanCacheEntities;
+  TextStyle? _spanCacheBaseStyle;
+  Color? _spanCacheLinkColor;
+  bool _spanCacheUnderlineLinks = false;
+  bool _spanCacheHashtagTap = false;
+  bool _spanCacheMentionTap = false;
+
+  @override
+  void dispose() {
+    _disposeRecognizers();
+    super.dispose();
+  }
+
+  void _disposeRecognizers() {
+    // The cached spans hold these, so they die together.
+    _spanCache = null;
+    for (final recognizer in _recognizers) {
+      recognizer.dispose();
+    }
+    _recognizers.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle =
+        widget.style ??
+        DefaultTextStyle.of(
+          context,
+        ).style.copyWith(color: context.colors.textPrimary);
+    final linkColor = widget.linkColor ?? context.colors.linkBlue;
+    if (widget.quoteBackgroundColor != null && _hasBlockQuote()) {
+      _disposeRecognizers();
+      return _richTextWithQuoteBlocks(context, baseStyle, linkColor);
+    }
+    return RichText(
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: widget.maxLines,
+      overflow: widget.overflow,
+      text: TextSpan(
+        style: baseStyle,
+        children: _memoizedSpans(context, baseStyle, linkColor),
+      ),
+      selectionRegistrar: SelectionContainer.maybeOf(context),
+      selectionColor:
+          Theme.of(context).textSelectionTheme.selectionColor ??
+          AppTheme.brand.withValues(alpha: 0.28),
+    );
+  }
+
+  /// Every rebuild otherwise mints fresh `TapGestureRecognizer`s, and
+  /// `TextSpan.==` folds in the recognizer — so the paragraph never compares
+  /// equal and `RenderParagraph` lays the whole thing out again.
+  List<InlineSpan> _memoizedSpans(
+    BuildContext context,
+    TextStyle baseStyle,
+    Color linkColor,
+  ) {
+    final hashtagTap = widget.onHashtagTap != null;
+    final mentionTap = widget.onMentionTap != null;
+    // A code span resolves the monospace family and the inline-code fill from
+    // the ambient theme, which no key below can see — leave those uncached.
+    final cacheable = !widget.entities.any(_isCodeEntity);
+    if (cacheable &&
+        _spanCache != null &&
+        _spanCacheText == widget.text &&
+        identical(_spanCacheEntities, widget.entities) &&
+        _spanCacheBaseStyle == baseStyle &&
+        _spanCacheLinkColor == linkColor &&
+        _spanCacheUnderlineLinks == widget.underlineLinks &&
+        _spanCacheHashtagTap == hashtagTap &&
+        _spanCacheMentionTap == mentionTap) {
+      return _spanCache!;
+    }
+    _disposeRecognizers();
+    final spans = _spans(context, baseStyle, linkColor);
+    if (!cacheable) return spans;
+    _spanCache = spans;
+    _spanCacheText = widget.text;
+    _spanCacheEntities = widget.entities;
+    _spanCacheBaseStyle = baseStyle;
+    _spanCacheLinkColor = linkColor;
+    _spanCacheUnderlineLinks = widget.underlineLinks;
+    _spanCacheHashtagTap = hashtagTap;
+    _spanCacheMentionTap = mentionTap;
+    return spans;
+  }
+
+  static bool _isCodeEntity(MessageTextEntity entity) =>
+      entity.type == 'textEntityTypeCode' ||
+      entity.type == 'textEntityTypePre' ||
+      entity.type == 'textEntityTypePreCode';
+
+  static bool _isEntityInRange(MessageTextEntity entity, int textLength) =>
+      entity.length > 0 &&
+      entity.offset >= 0 &&
+      entity.offset < textLength &&
+      entity.end <= textLength;
+
+  bool _hasBlockQuote() {
+    final textLength = widget.text.length;
+    return widget.entities.any(
+      (entity) => entity.isBlockQuote && _isEntityInRange(entity, textLength),
+    );
+  }
+
+  Widget _richTextWithQuoteBlocks(
+    BuildContext context,
+    TextStyle baseStyle,
+    Color linkColor,
+  ) {
+    final text = widget.text;
+    final entities = _validEntities(text.length);
+    final blocks = entities.where((entity) => entity.isBlockQuote).toList()
+      ..sort((a, b) => a.offset.compareTo(b.offset));
+    final children = <Widget>[];
+    var cursor = 0;
+    for (final block in blocks) {
+      final start = block.offset.clamp(0, text.length).toInt();
+      final end = block.end.clamp(start, text.length).toInt();
+      if (end <= cursor) continue;
+      if (start > cursor) {
+        children.add(
+          _richTextSegment(text, cursor, start, entities, baseStyle, linkColor),
+        );
+      }
+      children.add(
+        Padding(
+          padding: EdgeInsets.only(
+            top: children.isEmpty ? 0 : 6,
+            bottom: end < text.length ? 6 : 0,
+          ),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
+            decoration: BoxDecoration(
+              color: widget.quoteBackgroundColor,
+              borderRadius: BorderRadius.circular(AppRadius.control),
+            ),
+            child: _richTextSegment(
+              text,
+              start,
+              end,
+              entities.where((entity) => !entity.isBlockQuote).toList(),
+              baseStyle,
+              linkColor,
+            ),
+          ),
+        ),
+      );
+      cursor = end;
+    }
+    if (cursor < text.length) {
+      children.add(
+        _richTextSegment(
+          text,
+          cursor,
+          text.length,
+          entities,
+          baseStyle,
+          linkColor,
+        ),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+
+  Widget _richTextSegment(
+    String source,
+    int start,
+    int end,
+    List<MessageTextEntity> sourceEntities,
+    TextStyle baseStyle,
+    Color linkColor,
+  ) {
+    final text = source.substring(start, end);
+    return TelegramRichText(
+      text: text,
+      entities: _sliceEntities(sourceEntities, start, end),
+      style: baseStyle,
+      linkColor: linkColor,
+      underlineLinks: widget.underlineLinks,
+      maxLines: widget.maxLines,
+      overflow: widget.overflow,
+      onBotCommandTap: widget.onBotCommandTap,
+      onHashtagTap: widget.onHashtagTap,
+      onMentionTap: widget.onMentionTap,
+    );
+  }
+
+  List<MessageTextEntity> _sliceEntities(
+    List<MessageTextEntity> source,
+    int start,
+    int end,
+  ) {
+    final sliced = <MessageTextEntity>[];
+    for (final entity in source) {
+      if (entity.end <= start || entity.offset >= end || entity.isBlockQuote) {
+        continue;
+      }
+      final nextStart = entity.offset.clamp(start, end).toInt();
+      final nextEnd = entity.end.clamp(nextStart, end).toInt();
+      if (nextEnd <= nextStart) continue;
+      sliced.add(
+        MessageTextEntity(
+          offset: nextStart - start,
+          length: nextEnd - nextStart,
+          type: entity.type,
+          url: entity.url,
+          userId: entity.userId,
+          customEmojiId: entity.customEmojiId,
+          language: entity.language,
+          typeData: entity.typeData,
+        ),
+      );
+    }
+    return sliced;
+  }
+
+  List<InlineSpan> _spans(
+    BuildContext context,
+    TextStyle baseStyle,
+    Color linkColor,
+  ) {
+    final text = widget.text;
+    if (text.isEmpty) return const [];
+    final entities = _validEntities(text.length);
+    if (entities.isEmpty) {
+      return _autoLinkSpans(context, text, baseStyle, linkColor);
+    }
+
+    final cuts = <int>{0, text.length};
+    for (final entity in entities) {
+      cuts.add(entity.offset);
+      cuts.add(entity.end);
+    }
+    final orderedCuts = cuts.toList()..sort();
+    final spans = <InlineSpan>[];
+    for (var i = 0; i < orderedCuts.length - 1; i++) {
+      final start = orderedCuts[i];
+      final end = orderedCuts[i + 1];
+      if (start >= end) continue;
+      final segment = text.substring(start, end);
+      final active = entities
+          .where((entity) => entity.offset < end && entity.end > start)
+          .toList(growable: false);
+      spans.addAll(
+        _entitySpans(context, segment, active, baseStyle, linkColor),
+      );
+    }
+    return spans;
+  }
+
+  List<MessageTextEntity> _validEntities(int textLength) {
+    return widget.entities
+        .where((entity) => _isEntityInRange(entity, textLength))
+        .toList()
+      ..sort((a, b) {
+        final start = a.offset.compareTo(b.offset);
+        return start != 0 ? start : b.length.compareTo(a.length);
+      });
+  }
+
+  List<InlineSpan> _entitySpans(
+    BuildContext context,
+    String segment,
+    List<MessageTextEntity> active,
+    TextStyle baseStyle,
+    Color linkColor,
+  ) {
+    final spoilerKey = _spoilerKey(active);
+    if (spoilerKey != null && !_revealedSpoilers.contains(spoilerKey)) {
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () {
+          if (!mounted) return;
+          setState(() {
+            _revealedSpoilers.add(spoilerKey);
+            _spanCache = null;
+          });
+        };
+      _recognizers.add(recognizer);
+      return [
+        TextSpan(
+          text: segment,
+          style: _entityStyle(context, active, baseStyle, linkColor),
+          recognizer: recognizer,
+        ),
+      ];
+    }
+    final effectiveActive = spoilerKey == null
+        ? active
+        : active
+              .where((entity) => entity.type != 'textEntityTypeSpoiler')
+              .toList(growable: false);
+    final style = _entityStyle(context, effectiveActive, baseStyle, linkColor);
+    final customEmojiId = _customEmojiId(effectiveActive);
+    if (customEmojiId != null) {
+      final ambientScaler = MediaQuery.textScalerOf(context);
+      return [
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: SelectableCustomEmojiView(
+            id: customEmojiId,
+            fallbackText: segment,
+            size:
+                (style.fontSize ?? baseStyle.fontSize ?? 16) *
+                ambientScaler.scale(1.0) *
+                1.25,
+            color: style.color,
+          ),
+        ),
+      ];
+    }
+    if (_hasMath(effectiveActive)) return [_mathSpan(segment, style)];
+    if (_hasCode(effectiveActive)) return [_codeSpan(segment, style)];
+
+    final mentionUserId = _mentionUserId(effectiveActive);
+    if (mentionUserId != null) {
+      if (widget.onMentionTap == null) {
+        return [TextSpan(text: segment, style: style)];
+      }
+      // Read through `widget` at tap time, so a memoized span still reaches the
+      // current callback.
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () => widget.onMentionTap?.call(mentionUserId, segment);
+      _recognizers.add(recognizer);
+      return [TextSpan(text: segment, style: style, recognizer: recognizer)];
+    }
+
+    final target = _entityTapTarget(segment, effectiveActive);
+    if (target == '__bot_command__') {
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () => widget.onBotCommandTap?.call(segment.trim());
+      _recognizers.add(recognizer);
+      return [TextSpan(text: segment, style: style, recognizer: recognizer)];
+    }
+    if (target == '__hashtag__') {
+      if (widget.onHashtagTap == null) {
+        return [TextSpan(text: segment, style: style)];
+      }
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () => widget.onHashtagTap?.call(_normalizeHashtag(segment));
+      _recognizers.add(recognizer);
+      return [TextSpan(text: segment, style: style, recognizer: recognizer)];
+    }
+    if (target != null) {
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () => openLink(context, target);
+      _recognizers.add(recognizer);
+      return [TextSpan(text: segment, style: style, recognizer: recognizer)];
+    }
+
+    return _autoLinkSpans(context, segment, style, linkColor);
+  }
+
+  InlineSpan _codeSpan(String segment, TextStyle style) {
+    return WidgetSpan(
+      alignment: PlaceholderAlignment.baseline,
+      baseline: TextBaseline.alphabetic,
+      child: GestureDetector(
+        key: const ValueKey('telegram-rich-inline-code'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _copyMonospaceText(segment),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+          decoration: BoxDecoration(
+            color: _codeBackgroundColor,
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+          ),
+          child: Text(segment, style: style),
+        ),
+      ),
+    );
+  }
+
+  InlineSpan _mathSpan(String segment, TextStyle style) {
+    return WidgetSpan(
+      alignment: PlaceholderAlignment.baseline,
+      baseline: TextBaseline.alphabetic,
+      child: _LatexInline(expression: segment, style: style),
+    );
+  }
+
+  Color get _codeBackgroundColor {
+    return (Theme.of(context).brightness == Brightness.dark
+            ? Colors.white
+            : Colors.black)
+        .withValues(alpha: 0.10);
+  }
+
+  void _copyMonospaceText(String text) {
+    if (text.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: text)).then((_) {
+      if (mounted) {
+        showToast(context, AppStringKeys.topicPostContentCopied);
+      }
+    });
+  }
+
+  TextStyle _entityStyle(
+    BuildContext context,
+    List<MessageTextEntity> active,
+    TextStyle baseStyle,
+    Color linkColor,
+  ) {
+    var style = baseStyle;
+    final decorations = <TextDecoration>[];
+    var fontFeatures = const <FontFeature>[];
+    var useCodeFont = false;
+    var isLink = false;
+    for (final entity in active) {
+      switch (entity.type) {
+        case 'textEntityTypeBold':
+          style = style.copyWith(fontWeight: FontWeight.w600);
+        case 'textEntityTypeItalic':
+          style = style.copyWith(fontStyle: FontStyle.italic);
+        case 'textEntityTypeUnderline':
+          decorations.add(TextDecoration.underline);
+        case 'textEntityTypeStrikethrough':
+          decorations.add(TextDecoration.lineThrough);
+        case 'textEntityTypeCode':
+        case 'textEntityTypePre':
+        case 'textEntityTypePreCode':
+          useCodeFont = true;
+        case 'textEntityTypeSpoiler':
+          final color = style.color ?? Colors.black;
+          style = style.copyWith(
+            color: color.withValues(alpha: 0.08),
+            backgroundColor: color.withValues(alpha: 0.28),
+          );
+        case 'textEntityTypeMarked':
+          style = style.copyWith(
+            backgroundColor: Colors.amber.withValues(alpha: 0.32),
+          );
+        case 'textEntityTypeSubscript':
+          fontFeatures = const [FontFeature.subscripts()];
+        case 'textEntityTypeSuperscript':
+          fontFeatures = const [FontFeature.superscripts()];
+        case 'textEntityTypeTextUrl':
+        case 'textEntityTypeUrl':
+        case 'textEntityTypeMention':
+        case 'textEntityTypeMentionName':
+        case 'textEntityTypeHashtag':
+        case 'textEntityTypeCashtag':
+        case 'textEntityTypeBotCommand':
+        case 'textEntityTypeEmailAddress':
+        case 'textEntityTypePhoneNumber':
+        case 'textEntityTypeBankCardNumber':
+        case 'textEntityTypeMediaTimestamp':
+        case 'textEntityTypeDateTime':
+          style = style.copyWith(color: linkColor);
+          isLink = true;
+      }
+    }
+    if (isLink &&
+        widget.underlineLinks &&
+        !active.any((entity) => entity.type == 'textEntityTypeSpoiler')) {
+      decorations.add(TextDecoration.underline);
+    }
+    if (decorations.isNotEmpty) {
+      style = style.copyWith(
+        decoration: TextDecoration.combine(decorations),
+        decorationColor: style.color,
+        decorationThickness: isLink && widget.underlineLinks ? 1.0 : null,
+      );
+    }
+    if (fontFeatures.isNotEmpty) {
+      style = style.copyWith(fontFeatures: fontFeatures);
+    }
+    return useCodeFont
+        ? context.read<ThemeController>().codeTextStyle(style)
+        : style;
+  }
+
+  int? _customEmojiId(List<MessageTextEntity> active) {
+    for (final entity in active.reversed) {
+      if (entity.isCustomEmoji && entity.customEmojiId != null) {
+        return entity.customEmojiId;
+      }
+    }
+    return null;
+  }
+
+  String? _spoilerKey(List<MessageTextEntity> active) {
+    for (final entity in active) {
+      if (entity.type == 'textEntityTypeSpoiler') {
+        return '${entity.offset}:${entity.length}';
+      }
+    }
+    return null;
+  }
+
+  bool _hasCode(List<MessageTextEntity> active) {
+    return active.any(
+      (entity) =>
+          entity.type == 'textEntityTypeCode' ||
+          entity.type == 'textEntityTypePre' ||
+          entity.type == 'textEntityTypePreCode',
+    );
+  }
+
+  bool _hasMath(List<MessageTextEntity> active) {
+    return active.any((entity) => entity.isMathematicalExpression);
+  }
+
+  int? _mentionUserId(List<MessageTextEntity> active) {
+    for (final entity in active.reversed) {
+      if (entity.type == 'textEntityTypeMentionName' && entity.userId != null) {
+        return entity.userId;
+      }
+    }
+    return null;
+  }
+
+  String? _entityTapTarget(String segment, List<MessageTextEntity> active) {
+    for (final entity in active.reversed) {
+      switch (entity.type) {
+        case 'textEntityTypeTextUrl':
+          return entity.url;
+        case 'textEntityTypeUrl':
+          return segment;
+        case 'textEntityTypeMention':
+          return segment.startsWith('@')
+              ? 'https://t.me/${segment.substring(1)}'
+              : null;
+        case 'textEntityTypeHashtag':
+          return '__hashtag__';
+        case 'textEntityTypeBotCommand':
+          return '__bot_command__';
+        case 'textEntityTypeEmailAddress':
+          return 'mailto:$segment';
+        case 'textEntityTypePhoneNumber':
+          return 'tel:${segment.replaceAll(RegExp(r'[^0-9+]'), '')}';
+      }
+    }
+    return null;
+  }
+
+  List<InlineSpan> _autoLinkSpans(
+    BuildContext context,
+    String text,
+    TextStyle baseStyle,
+    Color linkColor,
+  ) {
+    final spans = <InlineSpan>[];
+    var last = 0;
+    for (final match in _linkRegExp.allMatches(text)) {
+      if (match.start > last) {
+        spans.add(
+          TextSpan(text: text.substring(last, match.start), style: baseStyle),
+        );
+      }
+      final matched = text.substring(match.start, match.end);
+      final isMention = match.group(2) != null;
+      final isHashtag = match.group(3) != null;
+      final target = isMention
+          ? 'https://t.me/${matched.substring(1)}'
+          : matched;
+      if (isHashtag && widget.onHashtagTap == null) {
+        spans.add(
+          TextSpan(text: matched, style: _autoLinkStyle(baseStyle, linkColor)),
+        );
+        last = match.end;
+        continue;
+      }
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () {
+          if (isHashtag) {
+            widget.onHashtagTap?.call(_normalizeHashtag(matched));
+          } else {
+            openLink(context, target);
+          }
+        };
+      _recognizers.add(recognizer);
+      spans.add(
+        TextSpan(
+          text: matched,
+          style: _autoLinkStyle(baseStyle, linkColor),
+          recognizer: recognizer,
+        ),
+      );
+      last = match.end;
+    }
+    if (last < text.length) {
+      spans.add(TextSpan(text: text.substring(last), style: baseStyle));
+    }
+    return spans;
+  }
+
+  TextStyle _autoLinkStyle(TextStyle base, Color link) => base.copyWith(
+    color: link,
+    decoration: widget.underlineLinks
+        ? TextDecoration.combine([
+            if (base.decoration != null) base.decoration!,
+            TextDecoration.underline,
+          ])
+        : base.decoration,
+    decorationColor: widget.underlineLinks ? link : base.decorationColor,
+    decorationThickness: widget.underlineLinks ? 1.0 : base.decorationThickness,
+  );
+
+  String _normalizeHashtag(String tag) {
+    final trimmed = tag.trim();
+    return trimmed.startsWith('#') ? trimmed : '#$trimmed';
+  }
+}
+
+class _LatexInline extends StatelessWidget {
+  const _LatexInline({required this.expression, required this.style});
+
+  final String expression;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      return Math.tex(
+        expression,
+        textStyle: style,
+        mathStyle: MathStyle.text,
+        onErrorFallback: (error) => Text(expression, style: style),
+      );
+    } catch (_) {
+      return Text(expression, style: style);
+    }
+  }
+}

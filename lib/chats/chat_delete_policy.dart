@@ -1,0 +1,69 @@
+﻿import '../tdlib/json_helpers.dart';
+import '../tdlib/td_models.dart';
+
+enum ChatDeleteScope { self, allUsers }
+
+class ChatDeleteCapabilities {
+  const ChatDeleteCapabilities({
+    required this.canDeleteForSelf,
+    required this.canDeleteForAllUsers,
+  });
+
+  const ChatDeleteCapabilities.selfOnly()
+    : canDeleteForSelf = true,
+      canDeleteForAllUsers = false;
+
+  const ChatDeleteCapabilities.none()
+    : canDeleteForSelf = false,
+      canDeleteForAllUsers = false;
+
+  final bool canDeleteForSelf;
+  final bool canDeleteForAllUsers;
+
+  bool get canDelete => canDeleteForSelf || canDeleteForAllUsers;
+}
+
+ChatDeleteCapabilities chatDeleteCapabilities(Map<String, dynamic> chat) {
+  final self = chat.boolean('can_be_deleted_only_for_self');
+  final allUsers = chat.boolean('can_be_deleted_for_all_users');
+  // Missing capabilities must not grant permission to delete history.
+  return ChatDeleteCapabilities(
+    canDeleteForSelf: self ?? false,
+    canDeleteForAllUsers: allUsers ?? false,
+  );
+}
+
+/// The list's self action leaves groups/channels; it does not clear their
+/// shared history. History-deletion permissions must not block that action.
+ChatDeleteCapabilities chatListDeleteCapabilities(Map<String, dynamic> chat) {
+  final history = chatDeleteCapabilities(chat);
+  final type = chat.obj('type')?.type;
+  return ChatDeleteCapabilities(
+    canDeleteForSelf:
+        type == 'chatTypeBasicGroup' ||
+        type == 'chatTypeSupergroup' ||
+        history.canDeleteForSelf,
+    canDeleteForAllUsers: history.canDeleteForAllUsers,
+  );
+}
+
+Map<String, dynamic> deleteChatHistoryRequest({
+  required int chatId,
+  required ChatDeleteScope scope,
+  bool removeFromChatList = true,
+}) => {
+  '@type': 'deleteChatHistory',
+  'chat_id': chatId,
+  'remove_from_chat_list': removeFromChatList,
+  'revoke': scope == ChatDeleteScope.allUsers,
+};
+
+bool shouldLeaveBeforeDeletingChat(ChatKind kind, ChatDeleteScope scope) {
+  return scope == ChatDeleteScope.self &&
+      (kind == ChatKind.group || kind == ChatKind.channel);
+}
+
+Map<String, dynamic> chatLeftLocalUpdate(int chatId) => {
+  '@type': 'handyChatLeft',
+  'chat_id': chatId,
+};

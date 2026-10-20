@@ -14,8 +14,20 @@
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER).deeplink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>mk</string>
+				<string>mithka</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleName</key>
-	<string>handy</string>
+	<string>Handy</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -24,8 +36,39 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Handy uses the camera for photos and videos you choose to send, Telegram video calls, and login QR codes.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Handy uses Face ID to unlock the app and when you approve biometric access for a Telegram Mini App.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Handy needs your location to share where you are.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Handy needs your location to share where you are.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Handy uses the microphone for voice messages and Telegram voice or video calls.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Handy uses device motion to animate wallpapers when Motion is enabled.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Handy needs photo access to send and save images and videos.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Handy needs permission to save images and videos to Photos.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+	</array>
+	<key>SentryDSNEncoded</key>
+	<string>$(SENTRY_DSN_ENCODED)</string>
+	<key>SentryEnvironment</key>
+	<string>$(SENTRY_ENVIRONMENT)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -49,13 +92,23 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+	<key>UIStatusBarHidden</key>
+	<false/>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
@@ -66,5 +119,21 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconName</key>
+			<string>Pengram</string>
+		</dict>
+	</dict>
+	<key>CFBundleIcons~ipad</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconName</key>
+			<string>Pengram</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

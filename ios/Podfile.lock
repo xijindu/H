@@ -1,0 +1,46 @@
+PODS:
+  - apple_maps_flutter (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+  - flutter_sound (9.28.0):
+    - Flutter
+    - flutter_sound_core (= 9.28.0)
+  - flutter_sound_core (9.28.0)
+  - open_filex (0.0.2):
+    - Flutter
+  - TgVoipWebrtc (1.0.0)
+
+DEPENDENCIES:
+  - apple_maps_flutter (from `.symlinks/plugins/apple_maps_flutter/ios`)
+  - Flutter (from `Flutter`)
+  - flutter_sound (from `.symlinks/plugins/flutter_sound/ios`)
+  - open_filex (from `.symlinks/plugins/open_filex/ios`)
+  - TgVoipWebrtc (from `LocalPods/tgvoip`)
+
+SPEC REPOS:
+  trunk:
+    - flutter_sound_core
+
+EXTERNAL SOURCES:
+  apple_maps_flutter:
+    :path: ".symlinks/plugins/apple_maps_flutter/ios"
+  Flutter:
+    :path: Flutter
+  flutter_sound:
+    :path: ".symlinks/plugins/flutter_sound/ios"
+  open_filex:
+    :path: ".symlinks/plugins/open_filex/ios"
+  TgVoipWebrtc:
+    :path: LocalPods/tgvoip
+
+SPEC CHECKSUMS:
+  apple_maps_flutter: 2237d66a8e242082a2d88134af372f7b3375d7a6
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  flutter_sound: b9236a5875299aaa4cef1690afd2f01d52a3f890
+  flutter_sound_core: 427465f72d07ab8c3edbe8ffdde709ddacd3763c
+  open_filex: 432f3cd11432da3e39f47fcc0df2b1603854eff1
+  TgVoipWebrtc: f652492658e07add6d04f559286fc59ed7664b6c
+
+PODFILE CHECKSUM: 10b4a1ba12b8d4f035dfcfd84902dc2ec7709515
+
+COCOAPODS: 1.17.0

@@ -1,0 +1,710 @@
+﻿//
+//  call_manager.dart
+//
+//  Drives TDLib's 1:1 call lifecycle. Subscribes to the update stream, maps each
+//  `updateCall` state onto a UI-facing `CallPhase`, and exposes a single `call`
+//  model the call screen observes. Signaling (createCall / acceptCall /
+//  discardCall / key exchange / emoji verification) is handled here; the actual
+//  audio/video transport is delegated to a `CallMediaEngine` (a
+//  `NoopCallMediaEngine` by default). Port of the Swift `CallManager`.
+//
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import '../tdlib/json_helpers.dart';
+import '../tdlib/td_client.dart';
+import '../tdlib/td_models.dart';
+import 'call_media_engine.dart';
+import 'group_call_controller.dart';
+import 'live_communication_bridge.dart';
+import 'tgcalls_media_engine.dart';
+
+enum CallPhase {
+  requesting, // outgoing, createCall sent, awaiting TDLib's call id
+  ringingIncoming, // incoming pending, awaiting accept
+  ringingOutgoing, // outgoing pending, peer's phone is ringing
+  exchangingKeys, // both sides agreed, deriving the shared key
+  active, // media flowing (callStateReady)
+  ending, // hanging up / discarded
+}
+
+enum CallStartResult { started, unsupported, busy }
+
+@visibleForTesting
+String? selectCallLibraryVersion({
+  required List<String> localVersions,
+  required List<String> remoteVersions,
+}) {
+  final remote = remoteVersions.toSet();
+  for (final version in localVersions) {
+    if (remote.contains(version)) return version;
+  }
+  return null;
+}
+
+class ActiveCall {
+  ActiveCall({
+    required this.callId,
+    required this.peerUserId,
+    this.accountSlot = 0,
+    this.clientId = 0,
+    this.peerName = '',
+    this.peerPhoto,
+    required this.isOutgoing,
+    required this.isVideo,
+    required this.phase,
+    this.emojis = const [],
+    this.startedAt,
+    String? systemUuid,
+  }) : systemUuid = systemUuid ?? LiveCommunicationBridge.newUuid();
+  int callId;
+  final int peerUserId;
+
+  /// Stable account identity captured when this call was created or received.
+  final int accountSlot;
+
+  /// Concrete TDLib client that owns [callId] and [peerUserId].
+  final int clientId;
+  String peerName;
+  TdFileRef? peerPhoto;
+  final bool isOutgoing;
+  bool isVideo;
+  CallPhase phase;
+  List<String> emojis;
+  DateTime? startedAt;
+  final String systemUuid;
+  bool systemConversationStarted = false;
+}
+
+class CallManager extends ChangeNotifier {
+  CallManager({CallMediaEngine? engine, GroupCallController? groups})
+    : _engine = engine ?? _defaultEngine(),
+      groups = groups ?? GroupCallController() {
+    this.groups.addListener(_groupCallChanged);
+    final liveCommunication = LiveCommunicationBridge.instance;
+    liveCommunication.installHandler();
+    liveCommunication.onSystemMuted = _handleSystemMuted;
+    liveCommunication.onSystemEnded = _handleSystemEnded;
+  }
+
+  /// Android and iOS both ship a native Telegram call engine. Other platforms
+  /// keep the signaling-only fallback until they gain a media implementation.
+  static CallMediaEngine _defaultEngine() =>
+      Platform.isAndroid || Platform.isIOS
+      ? TgcallsMediaEngine()
+      : NoopCallMediaEngine();
+
+  final TdClient _client = TdClient.shared;
+  final CallMediaEngine _engine;
+  final GroupCallController groups;
+  StreamSubscription? _sub;
+  TdAccountLease? _callLease;
+  bool _started = false;
+  Future<void> _protocolReady = Future<void>.value();
+
+  ActiveCall? call;
+  bool isMuted = false;
+  bool isSpeaker = false;
+  bool isVideoEnabled = false;
+  bool useFrontCamera = true; // last-selected lens (front by default)
+
+  /// False on builds that do not bundle a real 1:1 call media transport.
+  bool get supportsMediaCalls => _engine is! NoopCallMediaEngine;
+
+  // Protocol advertised in createCall/acceptCall. Defaults are overwritten at
+  // start() with the media engine's own supported protocol (so TDLib negotiates
+  // a version ntgcalls actually implements).
+  int _minLayer = 65;
+  int _maxLayer = 92;
+  List<String> _libraryVersions = const ['4.0.0', '3.0.0'];
+
+  Map<String, dynamic> get _callProtocol => {
+    '@type': 'callProtocol',
+    'udp_p2p': true,
+    'udp_reflector': true,
+    'min_layer': _minLayer,
+    'max_layer': _maxLayer,
+    'library_versions': _libraryVersions,
+  };
+
+  // MARK: - Lifecycle
+
+  /// Subscribes to TDLib updates and starts dispatching `updateCall`. Idempotent.
+  void start() {
+    if (_started) return;
+    _started = true;
+    groups.start();
+    // A call must not be created/accepted until this resolves. Otherwise a fast
+    // tap can send the stale fallback protocol while the native engine is still
+    // reporting its actual versions, leaving the peers unable to bring up media.
+    // Asking the engine for its protocol is what dlopens libntgcalls.so (~20 MB
+    // of WebRTC), so it waits for a gap in the scheduler rather than competing
+    // with the rest of the launch for I/O — create/accept still await it.
+    _protocolReady = _warmProtocol();
+    // Outbound media signaling → TDLib. (v3/v4 calls negotiate WebRTC over this.)
+    _engine.onSignalingData = _sendSignaling;
+    _sub = _client
+        .updatesOfAny(const [
+          'updateCall',
+          'updateNewCallSignalingData',
+        ], allAccounts: true)
+        .listen((update) {
+          final clientId = update.integer('@client_id');
+          if (clientId == null) return;
+          switch (update.type) {
+            case 'updateCall':
+              final c = update.obj('call');
+              final accountSlot = _client.slotForClient(clientId);
+              if (c != null && accountSlot != null) {
+                _handle(c, accountSlot: accountSlot, clientId: clientId);
+              }
+            case 'updateNewCallSignalingData':
+              final active = call;
+              if (active == null || active.clientId != clientId) return;
+              final signalingCallId = update.integer('call_id');
+              if (signalingCallId != null &&
+                  active.callId != 0 &&
+                  signalingCallId != active.callId) {
+                return;
+              }
+              // Inbound media signaling → the engine. `data` is base64 in TDLib JSON.
+              final d = update.str('data');
+              if (d != null) {
+                try {
+                  _engine.receiveSignaling(base64.decode(d));
+                } catch (_) {}
+              }
+          }
+        });
+  }
+
+  void _sendSignaling(Uint8List data) {
+    final active = call;
+    if (active == null || active.callId == 0 || active.clientId == 0) return;
+    _client.sendTo({
+      '@type': 'sendCallSignalingData',
+      'call_id': active.callId,
+      'data': base64.encode(data),
+    }, active.clientId);
+  }
+
+  void _ignoreSystemError(Future<void> operation) {
+    unawaited(operation.catchError((Object _) {}));
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    unawaited(_releaseCallLease());
+    groups.removeListener(_groupCallChanged);
+    groups.dispose();
+    super.dispose();
+  }
+
+  // MARK: - User actions
+
+  /// Places an outgoing call. Sets a `.requesting` placeholder immediately and
+  /// resolves the peer's name/photo in the background.
+  CallStartResult startCall(int userId, bool isVideo) {
+    if (!supportsMediaCalls) return CallStartResult.unsupported;
+    if (call != null || groups.session != null) return CallStartResult.busy;
+    final accountSlot = _client.activeSlot;
+    final lease = _client.retainAccountSlot(accountSlot);
+    if (lease == null) return CallStartResult.busy;
+    isMuted = false;
+    isSpeaker = false;
+    isVideoEnabled = isVideo;
+    _callLease = lease;
+    call = ActiveCall(
+      callId: 0,
+      peerUserId: userId,
+      accountSlot: accountSlot,
+      clientId: lease.clientId,
+      isOutgoing: true,
+      isVideo: isVideo,
+      phase: CallPhase.requesting,
+    );
+    notifyListeners();
+    unawaited(_ensureSystemConversation(call!));
+    _resolvePeer(call!);
+    unawaited(_createCall(call!));
+    return CallStartResult.started;
+  }
+
+  Future<void> startGroupCall({
+    required int chatId,
+    required String title,
+    required bool isVideo,
+    String inviteHash = '',
+  }) {
+    if (call != null) {
+      return Future.error(StateError('Another call is already active'));
+    }
+    return groups.startOrJoin(
+      chatId: chatId,
+      title: title,
+      isVideo: isVideo,
+      inviteHash: inviteHash,
+    );
+  }
+
+  Future<void> joinUnboundGroupCall({
+    required String inviteLink,
+    String title = 'Group call',
+    bool isVideo = true,
+  }) {
+    if (call != null) {
+      return Future.error(StateError('Another call is already active'));
+    }
+    return groups.joinUnbound(
+      inviteLink: inviteLink,
+      title: title,
+      isVideo: isVideo,
+    );
+  }
+
+  bool accept() {
+    final active = call;
+    if (!supportsMediaCalls || active == null || active.callId == 0) {
+      return false;
+    }
+    unawaited(_acceptCall(active));
+    return true;
+  }
+
+  /// Loads the protocol in a gap in the scheduler, with a timed backstop.
+  /// An idle task is declined for as long as any transient frame callback is
+  /// pending, so on a screen that animates without stopping it can sit in the
+  /// queue for a long time — and `_createCall`/`_acceptCall` await this future,
+  /// so the wait has to be bounded. Whichever arm arrives first performs the
+  /// load; the other joins the same one rather than querying twice.
+  Future<void> _warmProtocol() {
+    Future<void>? load;
+    Future<void> loadOnce() => load ??= _loadProtocol();
+    return Future.any<void>([
+      SchedulerBinding.instance.scheduleTask<void>(loadOnce, Priority.idle),
+      Future<void>.delayed(const Duration(seconds: 3), loadOnce),
+    ]);
+  }
+
+  Future<void> _loadProtocol() async {
+    Map<String, dynamic>? protocol;
+    try {
+      protocol = await _engine.queryProtocol().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
+    } catch (_) {
+      return;
+    }
+    if (protocol == null) return;
+    final versions = (protocol['versions'] as List?)
+        ?.whereType<String>()
+        .toList();
+    if (versions != null && versions.isNotEmpty) {
+      _libraryVersions = versions;
+    }
+    if (protocol['min'] is int) _minLayer = protocol['min'] as int;
+    if (protocol['max'] is int) _maxLayer = protocol['max'] as int;
+    debugPrint(
+      '📞 call protocol versions=$_libraryVersions '
+      'min=$_minLayer max=$_maxLayer',
+    );
+  }
+
+  Future<void> _createCall(ActiveCall requestedCall) async {
+    await Future.wait<void>([
+      _ensureCallPermissions(requestedCall.isVideo),
+      _protocolReady,
+    ]);
+    if (!identical(call, requestedCall)) return;
+    if (requestedCall.isVideo && isVideoEnabled) {
+      _engine.setVideoEnabled(true, front: useFrontCamera);
+    }
+    try {
+      await _client.queryTo({
+        '@type': 'createCall',
+        'user_id': requestedCall.peerUserId,
+        'protocol': _callProtocol,
+        'is_video': requestedCall.isVideo,
+      }, requestedCall.clientId);
+    } catch (error, stackTrace) {
+      debugPrint('Failed to create Telegram call: $error\n$stackTrace');
+      if (identical(call, requestedCall)) _end(reportSystem: true);
+    }
+  }
+
+  Future<void> _acceptCall(ActiveCall requestedCall) async {
+    await Future.wait<void>([
+      _ensureCallPermissions(requestedCall.isVideo),
+      _protocolReady,
+    ]);
+    if (!identical(call, requestedCall)) return;
+    if (requestedCall.isVideo && isVideoEnabled) {
+      _engine.setVideoEnabled(true, front: useFrontCamera);
+    }
+    try {
+      await _client.queryTo({
+        '@type': 'acceptCall',
+        'call_id': requestedCall.callId,
+        'protocol': _callProtocol,
+      }, requestedCall.clientId);
+    } catch (error, stackTrace) {
+      debugPrint('Failed to accept Telegram call: $error\n$stackTrace');
+      if (identical(call, requestedCall)) _end(reportSystem: true);
+    }
+  }
+
+  /// Ensures mic (and camera, for video) permission before placing/answering a
+  /// call — ntgcalls opens the devices itself, so the runtime grant must precede
+  /// createCall/acceptCall. Best-effort: proceeds even if denied (audio-only).
+  Future<void> _ensureCallPermissions(bool video) async {
+    try {
+      await <Permission>[
+        Permission.microphone,
+        if (video) Permission.camera,
+      ].request();
+    } catch (_) {}
+  }
+
+  void end() => _end(reportSystem: true);
+
+  void _end({required bool reportSystem}) {
+    final current = call;
+    if (current == null) return;
+    final duration = current.startedAt == null
+        ? 0
+        : DateTime.now().difference(current.startedAt!).inSeconds;
+    final callId = current.callId;
+    final isVideo = current.isVideo;
+    current.phase = CallPhase.ending;
+    notifyListeners();
+
+    if (callId != 0) {
+      _client
+          .queryTo({
+            '@type': 'discardCall',
+            'call_id': callId,
+            'is_disconnected': false,
+            'invite_link': '',
+            'duration': duration,
+            'is_video': isVideo,
+            'connection_id': 0,
+          }, current.clientId)
+          .catchError((_) => <String, dynamic>{});
+    }
+    _engine.stop();
+    if (reportSystem) {
+      _ignoreSystemError(
+        LiveCommunicationBridge.instance.end(current.systemUuid),
+      );
+    }
+    _clear();
+  }
+
+  void toggleMute() => _setMuted(!isMuted, reportSystem: true);
+
+  void _setMuted(bool muted, {required bool reportSystem}) {
+    if (isMuted == muted) return;
+    isMuted = muted;
+    _engine.setMuted(isMuted);
+    final active = call;
+    if (active != null && reportSystem) {
+      _ignoreSystemError(
+        LiveCommunicationBridge.instance.setMuted(active.systemUuid, isMuted),
+      );
+    }
+    notifyListeners();
+  }
+
+  void toggleSpeaker() {
+    isSpeaker = !isSpeaker;
+    _engine.setSpeaker(isSpeaker);
+    notifyListeners();
+  }
+
+  /// Turn the outgoing camera on with the chosen lens. The UI reuses the last
+  /// selected lens, while its rotate action can switch cameras after video is
+  /// active. `call.isVideo` remains the original Telegram call type; the live
+  /// call surface follows [isVideoEnabled].
+  void enableVideo(bool front) {
+    isVideoEnabled = true;
+    useFrontCamera = front;
+    _engine.setVideoEnabled(true, front: front);
+    notifyListeners();
+  }
+
+  /// Turn the outgoing camera off and return to the voice-call surface. The call
+  /// stays up and video can be re-enabled at any time.
+  void disableVideo() {
+    isVideoEnabled = false;
+    _engine.setVideoEnabled(false);
+    notifyListeners();
+  }
+
+  /// Flip the front/back camera during a video call.
+  void switchCamera() {
+    useFrontCamera = !useFrontCamera;
+    _engine.switchCamera();
+    notifyListeners();
+  }
+
+  // MARK: - Update handling
+
+  void _handle(
+    Map<String, dynamic> tdCall, {
+    required int accountSlot,
+    required int clientId,
+  }) {
+    final callId = tdCall.integer('id');
+    if (callId == null) return;
+    final peerUserId = tdCall.int64('user_id') ?? 0;
+    final isOutgoing = tdCall.boolean('is_outgoing') ?? false;
+    final isVideo = tdCall.boolean('is_video') ?? false;
+    final state = tdCall.obj('state');
+    final current = call;
+    if (current != null) {
+      if (current.clientId != clientId) return;
+      if (current.callId != 0 && current.callId != callId) return;
+      if (current.callId == 0 && current.isOutgoing != isOutgoing) return;
+    }
+    debugPrint(
+      '📞 TDLib call id=$callId state=${state?.type ?? "unknown"} '
+      'outgoing=$isOutgoing video=$isVideo',
+    );
+
+    switch (state?.type) {
+      case 'callStatePending':
+        final isReceived = state?.boolean('is_received') ?? false;
+        if (isOutgoing) {
+          _bindCallId(callId);
+          _updatePhase(
+            isReceived ? CallPhase.ringingOutgoing : CallPhase.requesting,
+            callId,
+          );
+        } else if (call == null) {
+          final lease = _client.retainAccountSlot(accountSlot);
+          if (lease == null || lease.clientId != clientId) {
+            unawaited(lease?.release());
+            break;
+          }
+          _callLease = lease;
+          call = ActiveCall(
+            callId: callId,
+            peerUserId: peerUserId,
+            accountSlot: accountSlot,
+            clientId: clientId,
+            isOutgoing: false,
+            isVideo: isVideo,
+            phase: CallPhase.ringingIncoming,
+          );
+          isMuted = false;
+          isSpeaker = false;
+          isVideoEnabled = isVideo;
+          notifyListeners();
+          unawaited(_ensureSystemConversation(call!));
+          _resolvePeer(call!);
+        } else {
+          _updatePhase(CallPhase.ringingIncoming, callId);
+        }
+
+      case 'callStateExchangingKeys':
+        _bindCallId(callId);
+        _updatePhase(CallPhase.exchangingKeys, callId);
+
+      case 'callStateReady':
+        _bindCallId(callId);
+        final active = call;
+        if (active == null || active.callId != callId) break;
+        active.phase = CallPhase.active;
+        active.startedAt ??= DateTime.now();
+        final emojis = state?['emojis'];
+        active.emojis = emojis is List
+            ? emojis.whereType<String>().toList()
+            : const [];
+        notifyListeners();
+
+        final remoteVersions = () {
+          final versions = state?.obj('protocol')?['library_versions'];
+          return versions is List
+              ? versions.whereType<String>().toList()
+              : <String>[];
+        }();
+        final selectedVersion = selectCallLibraryVersion(
+          localVersions: _libraryVersions,
+          remoteVersions: remoteVersions,
+        );
+        if (selectedVersion == null) {
+          debugPrint(
+            '📞 no common tgcalls version; '
+            'local=$_libraryVersions remote=$remoteVersions',
+          );
+          _engine.stop();
+          _client
+              .queryTo({
+                '@type': 'discardCall',
+                'call_id': callId,
+                'is_disconnected': true,
+                'invite_link': '',
+                'duration': 0,
+                'is_video': active.isVideo,
+                'connection_id': 0,
+              }, active.clientId)
+              .catchError((_) => <String, dynamic>{});
+          active.phase = CallPhase.ending;
+          notifyListeners();
+          break;
+        }
+        debugPrint(
+          '📞 call ready version=$selectedVersion '
+          'remoteVersions=$remoteVersions servers=${state?.objects("servers")?.length ?? 0}',
+        );
+
+        _engine.start(
+          CallReadyConfig(
+            callId: callId,
+            servers:
+                state?.objects('servers') ?? const <Map<String, dynamic>>[],
+            encryptionKey: _decodeKey(state?.str('encryption_key')),
+            config: state?.str('config') ?? '',
+            customParameters: state?.str('custom_parameters') ?? '',
+            // `callStateReady.protocol` describes the peer. Pass one mutually
+            // supported version to the native engine, matching Telegram's own
+            // first-local-preference selection.
+            libraryVersions: [selectedVersion],
+            maxLayer: state?.obj('protocol')?.integer('max_layer') ?? _maxLayer,
+            isOutgoing: active.isOutgoing,
+            isVideo: isVideoEnabled,
+            allowP2p: state?.boolean('allow_p2p') ?? true,
+          ),
+        );
+        unawaited(
+          _ensureSystemConversation(active)
+              .then<void>((_) async {
+                if (!active.systemConversationStarted) return;
+                await LiveCommunicationBridge.instance.connected(
+                  active.systemUuid,
+                );
+              })
+              .catchError((Object _) {}),
+        );
+
+      case 'callStateHangingUp':
+        _updatePhase(CallPhase.ending, callId);
+
+      case 'callStateDiscarded':
+      case 'callStateError':
+        _engine.stop();
+        final active = call;
+        if (active != null) {
+          _ignoreSystemError(
+            LiveCommunicationBridge.instance.end(active.systemUuid),
+          );
+        }
+        _clear();
+    }
+  }
+
+  // MARK: - Helpers
+
+  Uint8List _decodeKey(String? b64) {
+    if (b64 == null || b64.isEmpty) return Uint8List(0);
+    try {
+      return base64.decode(b64);
+    } catch (_) {
+      return Uint8List(0);
+    }
+  }
+
+  void _bindCallId(int callId) {
+    final active = call;
+    if (active == null || active.callId != 0) return;
+    active.callId = callId;
+    notifyListeners();
+  }
+
+  void _updatePhase(CallPhase phase, int callId) {
+    if (call?.callId != callId) return;
+    call?.phase = phase;
+    notifyListeners();
+  }
+
+  void _clear() {
+    call = null;
+    unawaited(_releaseCallLease());
+    isMuted = false;
+    isSpeaker = false;
+    isVideoEnabled = false;
+    notifyListeners();
+  }
+
+  Future<void> _releaseCallLease() async {
+    final lease = _callLease;
+    _callLease = null;
+    await lease?.release();
+  }
+
+  Future<void> _resolvePeer(ActiveCall requestedCall) async {
+    try {
+      final user = await _client.queryTo({
+        '@type': 'getUser',
+        'user_id': requestedCall.peerUserId,
+      }, requestedCall.clientId);
+      if (!identical(call, requestedCall)) return;
+      requestedCall.peerName = TDParse.userName(user);
+      requestedCall.peerPhoto = TDParse.smallPhoto(user.obj('profile_photo'));
+      if (identical(call, requestedCall)) {
+        _ignoreSystemError(
+          LiveCommunicationBridge.instance.updateMembers(
+            requestedCall.systemUuid,
+            [requestedCall.peerName],
+          ),
+        );
+      }
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _ensureSystemConversation(ActiveCall active) async {
+    if (active.systemConversationStarted) return;
+    active.systemConversationStarted = true;
+    try {
+      await LiveCommunicationBridge.instance.start(
+        uuid: active.systemUuid,
+        title: active.peerName.isEmpty ? 'Telegram' : active.peerName,
+        isVideo: active.isVideo,
+        memberHandles: [active.peerUserId.toString()],
+      );
+    } catch (_) {
+      active.systemConversationStarted = false;
+    }
+  }
+
+  void _groupCallChanged() => notifyListeners();
+
+  void _handleSystemMuted(String uuid, bool muted) {
+    if (call?.systemUuid == uuid) {
+      _setMuted(muted, reportSystem: false);
+      return;
+    }
+    if (groups.session?.systemUuid == uuid) {
+      groups.setMutedFromSystem(muted);
+    }
+  }
+
+  void _handleSystemEnded(String uuid) {
+    if (call?.systemUuid == uuid) {
+      _end(reportSystem: false);
+      return;
+    }
+    if (groups.session?.systemUuid == uuid) {
+      unawaited(groups.endFromSystem());
+    }
+  }
+}

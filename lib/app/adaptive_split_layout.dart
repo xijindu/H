@@ -1,0 +1,56 @@
+﻿import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+
+const double splitSidebarMinWidth = 300;
+const double splitSidebarDefaultMinWidth = 320;
+const double splitSidebarDefaultMaxWidth = 420;
+const double splitDetailMinWidth = 440;
+const double splitResizeHandleWidth = 8;
+
+/// Wide-layout group context pane. The width leaves enough room for member
+/// names while avoiding a visually empty trailing gutter beside the chat.
+const double wideInfoPaneWidth = 224;
+const double wideInfoPaneHandleWidth = 1;
+
+bool usesSplitSelectionLayout(
+  Size size, {
+  TargetPlatform? platform,
+  bool isWeb = kIsWeb,
+}) => usesAdaptiveSplitLayout(size, platform: platform, isWeb: isWeb);
+
+bool usesAdaptiveSplitLayout(
+  Size size, {
+  TargetPlatform? platform,
+  bool isWeb = kIsWeb,
+}) {
+  final target = platform ?? defaultTargetPlatform;
+  final hasSplitWidth =
+      size.width >= splitSidebarMinWidth + splitDetailMinWidth;
+  // An opened iPhone can provide enough room for two panes in either
+  // orientation. Use the current window's space, not its aspect ratio.
+  if (!isWeb && target == TargetPlatform.iOS) {
+    return hasSplitWidth && size.height >= 600;
+  }
+  return hasSplitWidth &&
+      size.width > size.height &&
+      math.min(size.width, size.height) >= 600;
+}
+
+double defaultSplitSidebarWidth(double totalWidth) {
+  return (totalWidth * 0.32)
+      .clamp(splitSidebarDefaultMinWidth, splitSidebarDefaultMaxWidth)
+      .toDouble();
+}
+
+double constrainSplitSidebarWidth({
+  required double requestedWidth,
+  required double totalWidth,
+}) {
+  final maxWidth = math.max(
+    splitSidebarMinWidth,
+    totalWidth - splitDetailMinWidth,
+  );
+  return requestedWidth.clamp(splitSidebarMinWidth, maxWidth).toDouble();
+}

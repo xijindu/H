@@ -1,0 +1,5 @@
+framework module tdjson {
+  umbrella header "tdjson.h"
+  export *
+  module * { export * }
+}

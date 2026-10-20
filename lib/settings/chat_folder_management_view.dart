@@ -1,0 +1,1584 @@
+﻿import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+
+import '../chat/chat_picker_view.dart';
+import '../chats/chat_folder_tag_controller.dart';
+import '../components/app_confirm_dialog.dart';
+import '../components/app_icons.dart';
+import '../components/app_interactive_surface.dart';
+import '../components/chat_folder_icons.dart';
+import '../components/toast.dart';
+import '../components/ui_components.dart';
+import '../l10n/app_localizations.dart';
+import '../tdlib/json_helpers.dart';
+import '../tdlib/td_client.dart';
+import '../tdlib/td_models.dart';
+import '../theme/app_theme.dart';
+import 'chat_folder_service.dart';
+
+/// Stand-in title for a chat whose real title has not been resolved yet.
+String _chatFallbackTitle(int id) =>
+    AppStrings.t(AppStringKeys.chatFolderManagementChatValue1, {'value1': id});
+
+class ChatFolderManagementView extends StatefulWidget {
+  const ChatFolderManagementView({super.key, this.service, this.updates});
+
+  final ChatFolderService? service;
+  final Stream<Map<String, dynamic>>? updates;
+
+  @override
+  State<ChatFolderManagementView> createState() =>
+      _ChatFolderManagementViewState();
+}
+
+class _ChatFolderManagementViewState extends State<ChatFolderManagementView> {
+  late final ChatFolderService _service = widget.service ?? ChatFolderService();
+  StreamSubscription<Map<String, dynamic>>? _updates;
+  List<ChatFolderRecord> _folders = const [];
+  List<RecommendedFolder> _recommended = const [];
+  bool _loading = true;
+  int _mainListPosition = 0;
+  int _generation = 0;
+
+  /// Null only in a harness with no provider above it; the toggle then simply
+  /// has nowhere to write.
+  ChatFolderTagController? get _tags =>
+      context.read<ChatFolderTagController?>();
+  bool get _tagsEnabled => _tags?.enabled ?? false;
+
+  @override
+  void initState() {
+    super.initState();
+    final updates =
+        widget.updates ??
+        (widget.service == null ? TdClient.shared.subscribe() : null);
+    _updates = updates?.listen(_handleUpdate);
+    _load(
+      widget.service == null
+          ? TdClient.shared.latestChatFoldersUpdate
+          : const <String, dynamic>{},
+    );
+  }
+
+  @override
+  void dispose() {
+    _updates?.cancel();
+    super.dispose();
+  }
+
+  void _handleUpdate(Map<String, dynamic> update) {
+    if (update.type == 'updateChatFolders') {
+      unawaited(_load(update));
+      return;
+    }
+  }
+
+  Future<void> _load(Map<String, dynamic>? update) async {
+    final generation = ++_generation;
+    if (mounted && _folders.isEmpty) setState(() => _loading = true);
+    try {
+      final values = await Future.wait<Object>([
+        _service.load(update),
+        _service.recommended(),
+      ]);
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _folders = values[0] as List<ChatFolderRecord>;
+        _recommended = values[1] as List<RecommendedFolder>;
+        _mainListPosition =
+            update?.integer('main_chat_list_position') ?? _mainListPosition;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted || generation != _generation) return;
+      setState(() => _loading = false);
+      showToast(
+        context,
+        AppStrings.t(
+          AppStringKeys.chatFolderManagementCouldnTLoadChatFoldersValue1,
+          {'value1': error},
+        ),
+      );
+    }
+  }
+
+  Future<void> _refresh() => _load(
+    widget.service == null
+        ? TdClient.shared.latestChatFoldersUpdate
+        : const <String, dynamic>{},
+  );
+
+  Future<void> _create({RecommendedFolder? recommendation}) async {
+    final result = await Navigator.of(context).push<ChatFolderDraft>(
+      MaterialPageRoute(
+        builder: (_) => ChatFolderEditorView(
+          initial: recommendation?.draft ?? const ChatFolderDraft(title: ''),
+          service: _service,
+          tagsEnabled: _tagsEnabled,
+        ),
+      ),
+    );
+    if (result == null) return;
+    try {
+      await _service.create(result);
+      await _refresh();
+    } catch (error) {
+      if (mounted) {
+        showToast(
+          context,
+          AppStrings.t(
+            AppStringKeys.chatFolderManagementCouldnTCreateFolderValue1,
+            {'value1': error},
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _edit(ChatFolderRecord folder) async {
+    final result = await Navigator.of(context).push<ChatFolderDraft>(
+      MaterialPageRoute(
+        builder: (_) => ChatFolderEditorView(
+          folderId: folder.id,
+          initial: folder.draft,
+          service: _service,
+          tagsEnabled: _tagsEnabled,
+        ),
+      ),
+    );
+    if (result == null) return;
+    try {
+      await _service.edit(folder.id, result);
+      await _refresh();
+    } catch (error) {
+      if (mounted) {
+        showToast(
+          context,
+          AppStrings.t(
+            AppStringKeys.chatFolderManagementCouldnTUpdateFolderValue1,
+            {'value1': error},
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _delete(ChatFolderRecord folder) async {
+    final confirmed = await showAppConfirmDialog(
+      context,
+      title: AppStrings.t(AppStringKeys.passkeysDeleteMessage, {
+        'value1': folder.title,
+      }),
+      confirmText: AppStringKeys.chatInfoRemove,
+    );
+    if (!confirmed) return;
+    try {
+      var leaveChatIds = const <int>[];
+      try {
+        final suggested = await _service.chatsToLeave(folder.id);
+        if (suggested.isNotEmpty && mounted) {
+          final leave = await showAppConfirmDialog(
+            context,
+            title: AppStrings.t(
+              suggested.length == 1
+                  ? AppStringKeys.chatFolderManagementAlsoLeaveOneChat
+                  : AppStringKeys.chatFolderManagementAlsoLeaveChats,
+              {'value1': suggested.length},
+            ),
+            confirmText: AppStringKeys.chatInfoLeaveGroup,
+            cancelText: AppStrings.t(
+              AppStringKeys.chatFolderManagementKeepChats,
+            ),
+          );
+          if (leave) leaveChatIds = suggested;
+        }
+      } catch (_) {
+        // Ordinary folders don't have chats suggested for leaving.
+      }
+      await _service.delete(folder.id, leaveChatIds: leaveChatIds);
+      await _refresh();
+    } catch (error) {
+      if (mounted) {
+        showToast(
+          context,
+          AppStrings.t(
+            AppStringKeys.chatFolderManagementCouldnTDeleteFolderValue1,
+            {'value1': error},
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _reorder(int oldIndex, int newIndex) async {
+    final previous = _folders;
+    final previousMainPosition = _mainListPosition;
+    final ordered = _orderedEntries();
+    ordered.insert(newIndex, ordered.removeAt(oldIndex));
+    final updated = ordered.whereType<ChatFolderRecord>().toList();
+    final mainListPosition = ordered.indexWhere((folder) => folder == null);
+    setState(() {
+      _folders = updated;
+      _mainListPosition = mainListPosition;
+    });
+    try {
+      await _service.reorder(
+        updated.map((folder) => folder.id).toList(),
+        mainListPosition,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _folders = previous;
+        _mainListPosition = previousMainPosition;
+      });
+      showToast(
+        context,
+        AppStrings.t(
+          AppStringKeys.chatFolderManagementCouldnTReorderFoldersValue1,
+          {'value1': error},
+        ),
+      );
+    }
+  }
+
+  List<ChatFolderRecord?> _orderedEntries() {
+    final entries = <ChatFolderRecord?>[..._folders];
+    entries.insert(_mainListPosition.clamp(0, entries.length), null);
+    return entries;
+  }
+
+  /// 文件夹标签 is a Premium setting on the server, so the controller writes it
+  /// there only for a Premium account and keeps everyone else's choice on this
+  /// device. Drawing the tags is local either way.
+  Future<void> _toggleTags(bool enabled) async => _tags?.setEnabled(enabled);
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    // The switch follows the controller, so a change made anywhere — here, or
+    // a Premium account's own server update — lands on this row.
+    final tagsEnabled =
+        context.watch<ChatFolderTagController?>()?.enabled ?? false;
+    return SettingsPageScaffold(
+      title: AppStrings.t(AppStringKeys.appearanceChatFolders),
+      onBack: () => Navigator.of(context).pop(),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _loading ? null : _refresh,
+            child: const Padding(
+              padding: EdgeInsets.all(AppSpacing.xs),
+              child: AppIcon(HeroAppIcons.arrowsRotate, size: 21),
+            ),
+          ),
+          GestureDetector(
+            key: const ValueKey('folder-create'),
+            behavior: HitTestBehavior.opaque,
+            onTap: _loading ? null : _create,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.xs),
+              child: AppIcon(
+                HeroAppIcons.plus,
+                size: 24,
+                color: _loading ? c.textTertiary : AppTheme.brand,
+              ),
+            ),
+          ),
+        ],
+      ),
+      child: _loading && _folders.isEmpty
+          ? const Center(child: AppActivityIndicator())
+          : SettingsListView(
+              children: [
+                _sectionTitle(
+                  AppStrings.t(AppStringKeys.chatFolderManagementFolders),
+                  key: const ValueKey('title'),
+                ),
+                _folderOrderCard(),
+                const SizedBox(
+                  key: ValueKey('gap-tags'),
+                  height: AppSpacing.xl,
+                ),
+                _sectionTitle(
+                  AppStrings.t(AppStringKeys.chatFolderManagementFolderTags),
+                  key: const ValueKey('tags-title'),
+                ),
+                _card(
+                  key: const ValueKey('folder-tags'),
+                  children: [
+                    _switchRow(
+                      AppStrings.t(
+                        AppStringKeys
+                            .chatFolderManagementShowFolderTagsInChatList,
+                      ),
+                      tagsEnabled,
+                      _toggleTags,
+                    ),
+                  ],
+                ),
+                if (_recommended.isNotEmpty) ...[
+                  const SizedBox(
+                    key: ValueKey('gap-recommended'),
+                    height: AppSpacing.xl,
+                  ),
+                  _sectionTitle(
+                    AppStrings.t(AppStringKeys.chatFolderManagementRecommended),
+                    key: const ValueKey('recommended-title'),
+                  ),
+                  _card(
+                    key: const ValueKey('recommended-list'),
+                    children: [
+                      for (var i = 0; i < _recommended.length; i++) ...[
+                        if (i > 0) _divider(),
+                        _recommendedRow(_recommended[i]),
+                      ],
+                    ],
+                  ),
+                ],
+              ],
+            ),
+    );
+  }
+
+  Widget _folderOrderCard() {
+    final entries = _orderedEntries();
+    return SettingsPanel(
+      key: const ValueKey('folder-list'),
+      clipBehavior: Clip.antiAlias,
+      child: ReorderableListView(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        buildDefaultDragHandles: false,
+        onReorderItem: _reorder,
+        children: [
+          for (var index = 0; index < entries.length; index++)
+            entries[index] == null
+                ? _mainListRow(index, showDivider: index < entries.length - 1)
+                : _folderRow(
+                    entries[index]!,
+                    index,
+                    showDivider: index < entries.length - 1,
+                  ),
+        ],
+      ),
+    );
+  }
+
+  /// The grip that starts a reorder. It leads the row — the thing you grab
+  /// sits where you reach for it, ahead of the folder it moves — and draws as
+  /// three bars, the drag-handle glyph, rather than the 2x2 squares it used to
+  /// borrow, which read as a menu button.
+  Widget _dragHandle(int index) => ReorderableDragStartListener(
+    index: index,
+    child: const Padding(
+      // Vertical padding keeps the grab target a comfortable size on the
+      // compact row, where the row itself is only 42 tall.
+      padding: EdgeInsets.fromLTRB(
+        0,
+        AppSpacing.sm,
+        AppSpacing.md,
+        AppSpacing.sm,
+      ),
+      child: AppIcon(HeroAppIcons.bars, size: 19, color: Color(0xFF9CA3AF)),
+    ),
+  );
+
+  /// The inset [SettingsRow] applies, so these hand-rolled rows line up with
+  /// the settings rows elsewhere on the page while still spanning the card.
+  static EdgeInsets get _rowInset => const EdgeInsets.only(
+    left: AppMetric.settingsLeadingInset,
+    right: AppMetric.settingsTrailingInset,
+  );
+
+  Widget _mainListRow(int index, {required bool showDivider}) {
+    final c = context.colors;
+    return Container(
+      key: const ValueKey('folder-main-list'),
+      height: SettingsRow.resolveHeight(),
+      padding: _rowInset,
+      decoration: BoxDecoration(
+        border: showDivider
+            ? Border(bottom: BorderSide(color: c.divider, width: 0.5))
+            : null,
+      ),
+      child: Row(
+        children: [
+          _dragHandle(index),
+          AppIcon(HeroAppIcons.inbox, size: 23, color: AppTheme.brand),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Text(
+              AppStrings.t(AppStringKeys.chatFolderManagementAllChats),
+              style: AppTextStyle.bodyLarge(c.textPrimary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _folderRow(
+    ChatFolderRecord folder,
+    int index, {
+    required bool showDivider,
+  }) {
+    final c = context.colors;
+    return Container(
+      key: ValueKey('folder-${folder.id}'),
+      height: SettingsRow.resolveHeight(),
+      padding: _rowInset,
+      decoration: BoxDecoration(
+        border: showDivider
+            ? Border(bottom: BorderSide(color: c.divider, width: 0.5))
+            : null,
+      ),
+      child: Row(
+        children: [
+          _dragHandle(index),
+          AppIcon(HeroAppIcons.folder, size: 23, color: AppTheme.brand),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _edit(folder),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  folder.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyle.bodyLarge(c.textPrimary),
+                ),
+              ),
+            ),
+          ),
+          if (folder.hasInviteLinks)
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.sm),
+              child: AppIcon(HeroAppIcons.link, size: 17, color: c.linkBlue),
+            ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _delete(folder),
+            child: const Padding(
+              padding: EdgeInsets.only(left: AppSpacing.sm),
+              child: AppIcon(
+                HeroAppIcons.trash,
+                size: 19,
+                color: Color(0xFFFF3B30),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _recommendedRow(RecommendedFolder folder) {
+    final c = context.colors;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _create(recommendation: folder),
+      child: Container(
+        constraints: BoxConstraints(minHeight: SettingsRow.resolveHeight()),
+        padding: _rowInset.copyWith(top: AppSpacing.sm, bottom: AppSpacing.sm),
+        child: Row(
+          children: [
+            AppIcon(HeroAppIcons.plus, size: 21, color: AppTheme.brand),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    folder.draft.title,
+                    style: AppTextStyle.bodyLarge(c.textPrimary),
+                  ),
+                  if (folder.description.isNotEmpty) ...[
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      folder.description,
+                      style: AppTextStyle.footnote(c.textSecondary),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _switchRow(String label, bool value, ValueChanged<bool> onChanged) =>
+      SettingsSwitchRow(
+        title: label,
+        value: value,
+        leading: const SettingsLeadingIcon(icon: HeroAppIcons.hashtag),
+        onChanged: onChanged,
+      );
+
+  Widget _sectionTitle(String text, {required Key key}) =>
+      SettingsSectionHeader.text(text, key: key);
+
+  /// No horizontal padding: a settings row draws its own leading and trailing
+  /// insets and its tap surface has to reach the card's edges. Padding here
+  /// left the highlight floating in the middle of the card.
+  Widget _card({required Key key, required List<Widget> children}) =>
+      SettingsCard(key: key, children: children);
+
+  Widget _divider() => Container(height: 0.5, color: context.colors.divider);
+}
+
+class ChatFolderEditorView extends StatefulWidget {
+  const ChatFolderEditorView({
+    super.key,
+    required this.initial,
+    required this.service,
+    required this.tagsEnabled,
+    this.folderId,
+    this.appearanceOnly = false,
+  });
+
+  final int? folderId;
+  final bool appearanceOnly;
+  final ChatFolderDraft initial;
+  final ChatFolderService service;
+  final bool tagsEnabled;
+
+  @override
+  State<ChatFolderEditorView> createState() => _ChatFolderEditorViewState();
+}
+
+class _ChatFolderEditorViewState extends State<ChatFolderEditorView> {
+  static const _folderColors = <Color>[
+    Color(0xFFE85D5D),
+    Color(0xFFF09A44),
+    Color(0xFF8C6AD8),
+    Color(0xFF57A957),
+    Color(0xFF45AEB8),
+    Color(0xFF4B8CD8),
+    Color(0xFFD85C9D),
+  ];
+
+  late final TextEditingController _title = TextEditingController(
+    text: widget.initial.title,
+  );
+  late ChatFolderDraft _draft = widget.initial;
+  final Map<int, String> _chatTitles = {};
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.appearanceOnly) _loadChatTitles();
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadChatTitles() async {
+    final ids = {
+      ..._draft.includedChatIds,
+      ..._draft.excludedChatIds,
+      ..._draft.pinnedChatIds,
+    };
+
+    Future<void> resolve(int id) async {
+      try {
+        final chat = await widget.service.getChat(id);
+        _chatTitles[id] = chat.str('title') ?? _chatFallbackTitle(id);
+      } catch (_) {
+        _chatTitles[id] = _chatFallbackTitle(id);
+      }
+    }
+
+    // Serializing these left every row on its numeric fallback title until the
+    // last of N round trips landed.
+    await Future.wait([for (final id in ids) resolve(id)]);
+    if (mounted) setState(() {});
+  }
+
+  void _save() {
+    final title = _title.text.trim();
+    if (title.isEmpty || title.characters.length > 12) {
+      showToast(
+        context,
+        AppStrings.t(
+          AppStringKeys.chatFolderManagementFolderNamesMustContain112Characters,
+        ),
+      );
+      return;
+    }
+    Navigator.of(context).pop(_draft.copyWith(title: title));
+  }
+
+  Future<void> _pickChat({required bool included}) async {
+    final result = await Navigator.of(context).push<ChatSummary>(
+      MaterialPageRoute(
+        builder: (_) => ChatPickerView(
+          title: AppStrings.t(
+            included
+                ? AppStringKeys.chatFolderManagementAddIncludedChat
+                : AppStringKeys.chatFolderManagementAddExcludedChat,
+          ),
+        ),
+      ),
+    );
+    if (result == null) return;
+    final includes = {..._draft.includedChatIds};
+    final excludes = {..._draft.excludedChatIds};
+    if (included) {
+      includes.add(result.id);
+      excludes.remove(result.id);
+    } else {
+      excludes.add(result.id);
+      includes.remove(result.id);
+    }
+    final pinned = {..._draft.pinnedChatIds}..remove(result.id);
+    setState(() {
+      _chatTitles[result.id] = result.title;
+      _draft = _draft.copyWith(
+        includedChatIds: includes,
+        excludedChatIds: excludes,
+        pinnedChatIds: included ? _draft.pinnedChatIds : pinned,
+      );
+    });
+  }
+
+  void _removeChat(int id, {required bool included}) {
+    final values = {
+      ...(included ? _draft.includedChatIds : _draft.excludedChatIds),
+    }..remove(id);
+    setState(() {
+      _draft = included
+          ? _draft.copyWith(
+              includedChatIds: values,
+              pinnedChatIds: {..._draft.pinnedChatIds}..remove(id),
+            )
+          : _draft.copyWith(excludedChatIds: values);
+    });
+  }
+
+  void _togglePinned(int id) {
+    final pinned = {..._draft.pinnedChatIds};
+    final included = {..._draft.includedChatIds};
+    if (!pinned.remove(id)) {
+      pinned.add(id);
+      included.add(id);
+    }
+    setState(
+      () => _draft = _draft.copyWith(
+        pinnedChatIds: pinned,
+        includedChatIds: included,
+      ),
+    );
+  }
+
+  void _setColor(int colorId) {
+    if (!widget.tagsEnabled && colorId >= 0) {
+      showToast(
+        context,
+        AppStrings.t(
+          AppStringKeys
+              .chatFolderManagementEnableFolderTagsBeforeChoosingAFolderColor,
+        ),
+      );
+      return;
+    }
+    setState(() => _draft = _draft.copyWith(colorId: colorId));
+  }
+
+  Future<void> _openLinks() async {
+    final id = widget.folderId;
+    if (id == null) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ChatFolderInviteLinksView(
+          folderId: id,
+          folderTitle: _title.text.trim(),
+          service: widget.service,
+        ),
+      ),
+    );
+    try {
+      final links = await widget.service.inviteLinks(id);
+      if (mounted) {
+        setState(() => _draft = _draft.copyWith(isShareable: links.isNotEmpty));
+      }
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return SettingsPageScaffold(
+      title: AppStrings.t(
+        widget.folderId == null
+            ? AppStringKeys.chatFolderManagementNewFolder
+            : AppStringKeys.chatFolderManagementEditFolder,
+      ),
+      onBack: () => Navigator.of(context).pop(),
+      trailing: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _save,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xs),
+          child: Text(
+            AppStrings.t(AppStringKeys.accentColorPickerSave),
+            style: AppTextStyle.bodyLarge(
+              AppTheme.brand,
+              weight: AppTextWeight.semibold,
+            ),
+          ),
+        ),
+      ),
+      child: SettingsListView(
+        children: [
+          _section(AppStrings.t(AppStringKeys.chatFolderManagementSectionName)),
+          _card([
+            TextField(
+              key: const ValueKey('folder-name'),
+              controller: _title,
+              maxLength: 12,
+              style: AppTextStyle.bodyLarge(c.textPrimary),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                hintText: AppStrings.t(AppStringKeys.chatInfoFolderNameLabel),
+                counterText: '',
+              ),
+            ),
+          ]),
+          const SizedBox(height: AppSpacing.xl),
+          _section(AppStrings.t(AppStringKeys.chatFolderManagementSectionIcon)),
+          _card([
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+              child: Wrap(
+                spacing: AppSpacing.sm,
+                runSpacing: AppSpacing.sm,
+                children: [
+                  for (final name in chatFolderIconNames) _iconChoice(name),
+                ],
+              ),
+            ),
+          ]),
+          if (!widget.appearanceOnly) ...[
+            const SizedBox(height: AppSpacing.xl),
+            _section(
+              AppStrings.t(AppStringKeys.chatFolderManagementSectionTagColor),
+            ),
+            _card([
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _colorChoice(-1, c.textTertiary),
+                    for (var id = 0; id < _folderColors.length; id++)
+                      _colorChoice(id, _folderColors[id]),
+                  ],
+                ),
+              ),
+            ]),
+            const SizedBox(height: AppSpacing.xl),
+            _section(
+              AppStrings.t(AppStringKeys.chatFolderManagementSectionInclude),
+            ),
+            _card([
+              _toggle(
+                AppStrings.t(AppStringKeys.chatFolderManagementIncludeContacts),
+                _draft.includeContacts,
+                (value) {
+                  setState(
+                    () => _draft = _draft.copyWith(includeContacts: value),
+                  );
+                },
+              ),
+              _divider(),
+              _toggle(
+                AppStrings.t(
+                  AppStringKeys.chatFolderManagementIncludeNonContacts,
+                ),
+                _draft.includeNonContacts,
+                (value) {
+                  setState(
+                    () => _draft = _draft.copyWith(includeNonContacts: value),
+                  );
+                },
+              ),
+              _divider(),
+              _toggle(
+                AppStrings.t(AppStringKeys.chatFolderManagementIncludeGroups),
+                _draft.includeGroups,
+                (value) {
+                  setState(
+                    () => _draft = _draft.copyWith(includeGroups: value),
+                  );
+                },
+              ),
+              _divider(),
+              _toggle(
+                AppStrings.t(AppStringKeys.chatFolderManagementIncludeChannels),
+                _draft.includeChannels,
+                (value) {
+                  setState(
+                    () => _draft = _draft.copyWith(includeChannels: value),
+                  );
+                },
+              ),
+              _divider(),
+              _toggle(
+                AppStrings.t(AppStringKeys.chatFolderManagementIncludeBots),
+                _draft.includeBots,
+                (value) {
+                  setState(() => _draft = _draft.copyWith(includeBots: value));
+                },
+              ),
+              for (final id in _sortedIds(_draft.includedChatIds)) ...[
+                _divider(),
+                _chatRow(id, included: true),
+              ],
+              _divider(),
+              _actionRow(
+                AppStrings.t(AppStringKeys.chatFolderManagementAddChat),
+                HeroAppIcons.plus,
+                () => _pickChat(included: true),
+              ),
+            ]),
+            const SizedBox(height: AppSpacing.xl),
+            _section(
+              AppStrings.t(AppStringKeys.chatFolderManagementSectionExclude),
+            ),
+            _card([
+              _toggle(
+                AppStrings.t(
+                  AppStringKeys.chatFolderManagementExcludeMutedChats,
+                ),
+                _draft.excludeMuted,
+                (value) {
+                  setState(() => _draft = _draft.copyWith(excludeMuted: value));
+                },
+              ),
+              _divider(),
+              _toggle(
+                AppStrings.t(
+                  AppStringKeys.chatFolderManagementExcludeReadChats,
+                ),
+                _draft.excludeRead,
+                (value) {
+                  setState(() => _draft = _draft.copyWith(excludeRead: value));
+                },
+              ),
+              _divider(),
+              _toggle(
+                AppStrings.t(
+                  AppStringKeys.chatFolderManagementExcludeArchivedChats,
+                ),
+                _draft.excludeArchived,
+                (value) {
+                  setState(
+                    () => _draft = _draft.copyWith(excludeArchived: value),
+                  );
+                },
+              ),
+              for (final id in _sortedIds(_draft.excludedChatIds)) ...[
+                _divider(),
+                _chatRow(id, included: false),
+              ],
+              _divider(),
+              _actionRow(
+                AppStrings.t(AppStringKeys.chatFolderManagementAddChat),
+                HeroAppIcons.plus,
+                () => _pickChat(included: false),
+              ),
+            ]),
+            if (widget.folderId != null) ...[
+              const SizedBox(height: AppSpacing.xl),
+              _section(
+                AppStrings.t(AppStringKeys.chatFolderManagementSectionSharing),
+              ),
+              _card([
+                _actionRow(
+                  AppStrings.t(
+                    AppStringKeys.chatFolderManagementInviteLinksRow,
+                  ),
+                  HeroAppIcons.link,
+                  _openLinks,
+                ),
+              ]),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _chatRow(int id, {required bool included}) {
+    final c = context.colors;
+    return SizedBox(
+      height: 52,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              _chatTitles[id] ?? _chatFallbackTitle(id),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyle.bodyLarge(c.textPrimary),
+            ),
+          ),
+          if (included)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _togglePinned(id),
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.sm),
+                child: AppIcon(
+                  _draft.pinnedChatIds.contains(id)
+                      ? HeroAppIcons.solidStar
+                      : HeroAppIcons.star,
+                  size: 18,
+                  color: _draft.pinnedChatIds.contains(id)
+                      ? AppTheme.brand
+                      : c.textTertiary,
+                ),
+              ),
+            ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _removeChat(id, included: included),
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              child: AppIcon(
+                HeroAppIcons.xmark,
+                size: 18,
+                color: c.textTertiary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toggle(String label, bool value, ValueChanged<bool> onChanged) =>
+      SizedBox(
+        height: 52,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: AppTextStyle.bodyLarge(context.colors.textPrimary),
+              ),
+            ),
+            AppSwitch(value: value, onChanged: onChanged),
+          ],
+        ),
+      );
+
+  Widget _iconChoice(String name) {
+    final c = context.colors;
+    final selected = _draft.iconName == name;
+    return AppInteractiveSurface(
+      key: ValueKey('folder-icon-$name'),
+      semanticLabel: name,
+      selected: selected,
+      onTap: () => setState(() => _draft = _draft.copyWith(iconName: name)),
+      child: Container(
+        width: 66,
+        height: 54,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.brand.withValues(alpha: 0.13) : c.card,
+          border: Border.all(
+            color: selected ? AppTheme.brand : c.divider,
+            width: selected ? 1.5 : 1,
+          ),
+          borderRadius: BorderRadius.circular(AppRadius.card),
+        ),
+        child: ChatFolderIcon(
+          name,
+          size: 22,
+          color: selected ? AppTheme.brand : c.textSecondary,
+        ),
+      ),
+    );
+  }
+
+  Widget _colorChoice(int id, Color color) {
+    final selected = _draft.colorId == id;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _setColor(id),
+      child: Container(
+        width: 30,
+        height: 30,
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: selected ? context.colors.textPrimary : Colors.transparent,
+            width: 2,
+          ),
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          child: id == -1
+              ? AppIcon(
+                  HeroAppIcons.xmark,
+                  size: 14,
+                  color: context.colors.card,
+                )
+              : null,
+        ),
+      ),
+    );
+  }
+
+  List<int> _sortedIds(Set<int> values) => values.toList()..sort();
+
+  Widget _actionRow(String label, AppIconData icon, VoidCallback onTap) =>
+      GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: SizedBox(
+          height: 52,
+          child: Row(
+            children: [
+              AppIcon(icon, size: 20, color: AppTheme.brand),
+              const SizedBox(width: AppSpacing.md),
+              Text(label, style: AppTextStyle.bodyLarge(AppTheme.brand)),
+            ],
+          ),
+        ),
+      );
+
+  Widget _section(String label) => Padding(
+    padding: const EdgeInsets.only(left: AppSpacing.md, bottom: AppSpacing.sm),
+    child: Text(
+      label,
+      style: AppTextStyle.footnote(context.colors.textTertiary),
+    ),
+  );
+
+  Widget _card(List<Widget> children) => SettingsPanel(
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+    child: Column(children: children),
+  );
+
+  Widget _divider() => Container(height: 0.5, color: context.colors.divider);
+}
+
+class ChatFolderInviteLinksView extends StatefulWidget {
+  const ChatFolderInviteLinksView({
+    super.key,
+    required this.folderId,
+    required this.folderTitle,
+    required this.service,
+  });
+
+  final int folderId;
+  final String folderTitle;
+  final ChatFolderService service;
+
+  @override
+  State<ChatFolderInviteLinksView> createState() =>
+      _ChatFolderInviteLinksViewState();
+}
+
+class _ChatFolderInviteLinksViewState extends State<ChatFolderInviteLinksView> {
+  List<Map<String, dynamic>> _links = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final links = await widget.service.inviteLinks(widget.folderId);
+      if (mounted) {
+        setState(() {
+          _links = links;
+          _loading = false;
+        });
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      showToast(
+        context,
+        AppStrings.t(
+          AppStringKeys.groupAdministrationCouldnTLoadInviteLinksValue1,
+          {'value1': error},
+        ),
+      );
+    }
+  }
+
+  Future<void> _create() async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ChatFolderInviteLinkEditorView(
+          folderId: widget.folderId,
+          initialName: widget.folderTitle,
+          service: widget.service,
+        ),
+      ),
+    );
+    if (changed ?? false) await _load();
+  }
+
+  Future<void> _edit(Map<String, dynamic> item) async {
+    final link = item.str('invite_link');
+    if (link == null || link.isEmpty) return;
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ChatFolderInviteLinkEditorView(
+          folderId: widget.folderId,
+          initialName: item.str('name') ?? '',
+          initialChatIds: item.int64Array('chat_ids') ?? const <int>[],
+          inviteLink: link,
+          service: widget.service,
+        ),
+      ),
+    );
+    if (changed ?? false) await _load();
+  }
+
+  Future<void> _delete(Map<String, dynamic> item) async {
+    final link = item.str('invite_link');
+    if (link == null) return;
+    final confirmed = await showAppConfirmDialog(
+      context,
+      title: AppStrings.t(
+        AppStringKeys.chatFolderManagementDeleteThisInviteLink,
+      ),
+      confirmText: AppStringKeys.chatInfoRemove,
+    );
+    if (!confirmed) return;
+    try {
+      await widget.service.deleteInviteLink(
+        folderId: widget.folderId,
+        inviteLink: link,
+      );
+      await _load();
+    } catch (error) {
+      if (mounted) {
+        showToast(
+          context,
+          AppStrings.t(
+            AppStringKeys.chatFolderManagementCouldnTDeleteInviteLinkValue1,
+            {'value1': error},
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _copy(String link) async {
+    await Clipboard.setData(ClipboardData(text: link));
+    if (mounted) {
+      showToast(
+        context,
+        AppStrings.t(AppStringKeys.groupAdministrationInviteLinkCopied),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return SettingsPageScaffold(
+      title: AppStrings.t(AppStringKeys.chatFolderManagementFolderInviteLinks),
+      onBack: () => Navigator.of(context).pop(),
+      trailing: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _loading ? null : _create,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xs),
+          child: AppIcon(
+            HeroAppIcons.plus,
+            size: 24,
+            color: _loading ? c.textTertiary : AppTheme.brand,
+          ),
+        ),
+      ),
+      child: _loading
+          ? const Center(child: AppActivityIndicator())
+          : _links.isEmpty
+          ? Center(
+              child: Text(
+                AppStrings.t(
+                  AppStringKeys.chatFolderManagementNoInviteLinksYet,
+                ),
+                style: AppTextStyle.body(c.textSecondary),
+              ),
+            )
+          : ListView.separated(
+              padding: AppInsets.screen,
+              itemCount: _links.length,
+              separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
+              itemBuilder: (_, index) => _linkRow(_links[index]),
+            ),
+    );
+  }
+
+  Widget _linkRow(Map<String, dynamic> item) {
+    final c = context.colors;
+    final link = item.str('invite_link') ?? '';
+    final name = item.str('name') ?? '';
+    final count = item.int64Array('chat_ids')?.length ?? 0;
+    return SettingsPanel(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      child: Row(
+        children: [
+          AppIcon(HeroAppIcons.link, size: 22, color: AppTheme.brand),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _copy(link),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name.isEmpty ? link : name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTextStyle.bodyLarge(c.textPrimary),
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    AppStrings.t(
+                      AppStringKeys.chatFolderManagementValue1ChatsTapToCopy,
+                      {'value1': count},
+                    ),
+                    style: AppTextStyle.footnote(c.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _edit(item),
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              child: AppIcon(
+                HeroAppIcons.pen,
+                size: 18,
+                color: c.textSecondary,
+              ),
+            ),
+          ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _edit(item),
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              child: AppIcon(
+                HeroAppIcons.pen,
+                size: 19,
+                color: c.textSecondary,
+              ),
+            ),
+          ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _delete(item),
+            child: const Padding(
+              padding: EdgeInsets.all(AppSpacing.sm),
+              child: AppIcon(
+                HeroAppIcons.trash,
+                size: 19,
+                color: Color(0xFFFF3B30),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ChatFolderInviteLinkEditorView extends StatefulWidget {
+  const ChatFolderInviteLinkEditorView({
+    super.key,
+    required this.folderId,
+    required this.initialName,
+    required this.service,
+    this.initialChatIds = const <int>[],
+    this.inviteLink,
+  });
+
+  final int folderId;
+  final String initialName;
+  final List<int> initialChatIds;
+  final String? inviteLink;
+  final ChatFolderService service;
+
+  @override
+  State<ChatFolderInviteLinkEditorView> createState() =>
+      _ChatFolderInviteLinkEditorViewState();
+}
+
+class _ChatFolderInviteLinkEditorViewState
+    extends State<ChatFolderInviteLinkEditorView> {
+  late final TextEditingController _name = TextEditingController(
+    text: widget.initialName,
+  );
+  final Map<int, String> _titles = {};
+  List<int> _available = const [];
+  Set<int> _selected = const {};
+  bool _loading = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final shareable = await widget.service.shareableChats(widget.folderId);
+      final ids = {...shareable, ...widget.initialChatIds}.toList()..sort();
+      await Future.wait([
+        for (final id in ids)
+          widget.service
+              .getChat(id)
+              .then(
+                (chat) =>
+                    _titles[id] = chat.str('title') ?? _chatFallbackTitle(id),
+                onError: (_) => _titles[id] = _chatFallbackTitle(id),
+              ),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _available = ids;
+        _selected = widget.inviteLink == null
+            ? shareable.toSet()
+            : widget.initialChatIds.toSet();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      showToast(
+        context,
+        AppStrings.t(
+          AppStringKeys.chatFolderManagementCouldnTLoadShareableChatsValue1,
+          {'value1': error},
+        ),
+      );
+    }
+  }
+
+  void _toggle(int id) {
+    final selected = {..._selected};
+    if (!selected.remove(id)) selected.add(id);
+    setState(() => _selected = selected);
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    if (_name.text.characters.length > 32) {
+      showToast(
+        context,
+        AppStrings.t(
+          AppStringKeys.chatFolderManagementInviteLinkNamesCanContainUpTo32,
+        ),
+      );
+      return;
+    }
+    if (_selected.isEmpty) {
+      showToast(
+        context,
+        AppStrings.t(
+          AppStringKeys.chatFolderManagementSelectAtLeastOneGroupOrChannel,
+        ),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final chatIds = _selected.toList()..sort();
+      final inviteLink = widget.inviteLink;
+      if (inviteLink == null) {
+        await widget.service.createInviteLink(
+          folderId: widget.folderId,
+          name: _name.text,
+          chatIds: chatIds,
+        );
+      } else {
+        await widget.service.editInviteLink(
+          folderId: widget.folderId,
+          inviteLink: inviteLink,
+          name: _name.text,
+          chatIds: chatIds,
+        );
+      }
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showToast(
+        context,
+        AppStrings.t(
+          AppStringKeys.groupAdministrationCouldnTSaveInviteLinkValue1,
+          {'value1': error},
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return SettingsPageScaffold(
+      title: AppStrings.t(
+        widget.inviteLink == null
+            ? AppStringKeys.chatFolderManagementNewInviteLink
+            : AppStringKeys.chatFolderManagementEditInviteLink,
+      ),
+      onBack: () => Navigator.of(context).pop(),
+      trailing: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _loading || _saving ? null : _save,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xs),
+          child: _saving
+              ? const AppActivityIndicator(size: 20)
+              : Text(
+                  AppStrings.t(AppStringKeys.accentColorPickerSave),
+                  style: AppTextStyle.bodyLarge(
+                    _loading ? c.textTertiary : AppTheme.brand,
+                    weight: AppTextWeight.semibold,
+                  ),
+                ),
+        ),
+      ),
+      child: _loading
+          ? const Center(child: AppActivityIndicator())
+          : SettingsListView(
+              children: [
+                _section(
+                  AppStrings.t(AppStringKeys.chatFolderManagementSectionName),
+                ),
+                _card([
+                  TextField(
+                    controller: _name,
+                    maxLength: 32,
+                    style: AppTextStyle.bodyLarge(c.textPrimary),
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      hintText: AppStrings.t(
+                        AppStringKeys.chatFolderManagementOptionalLinkName,
+                      ),
+                      counterText: '',
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: AppSpacing.xl),
+                _section(
+                  AppStrings.t(
+                    AppStringKeys
+                        .chatFolderManagementSectionIncludedGroupsAndChannels,
+                  ),
+                ),
+                _card(
+                  _available.isEmpty
+                      ? [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: AppSpacing.xl,
+                            ),
+                            child: Text(
+                              AppStrings.t(
+                                AppStringKeys
+                                    .chatFolderManagementThisFolderHasNoChatsThatCanBe,
+                              ),
+                              textAlign: TextAlign.center,
+                              style: AppTextStyle.body(c.textSecondary),
+                            ),
+                          ),
+                        ]
+                      : [
+                          for (
+                            var index = 0;
+                            index < _available.length;
+                            index++
+                          ) ...[
+                            if (index > 0) _divider(),
+                            _chatChoice(_available[index]),
+                          ],
+                        ],
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _chatChoice(int id) {
+    final c = context.colors;
+    final selected = _selected.contains(id);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _toggle(id),
+      child: SizedBox(
+        height: 54,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                _titles[id] ?? _chatFallbackTitle(id),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTextStyle.bodyLarge(c.textPrimary),
+              ),
+            ),
+            AppIcon(
+              selected ? HeroAppIcons.circleCheck : HeroAppIcons.circle,
+              size: 22,
+              color: selected ? AppTheme.brand : c.textTertiary,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _section(String label) => Padding(
+    padding: const EdgeInsets.only(left: AppSpacing.md, bottom: AppSpacing.sm),
+    child: Text(
+      label,
+      style: AppTextStyle.footnote(context.colors.textTertiary),
+    ),
+  );
+
+  Widget _card(List<Widget> children) => SettingsPanel(
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+    child: Column(children: children),
+  );
+
+  Widget _divider() => Container(height: 0.5, color: context.colors.divider);
+}
