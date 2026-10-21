@@ -5,7 +5,7 @@
   <key>CFBundleExecutable</key>
   <string>tdjson</string>
   <key>CFBundleIdentifier</key>
-  <string>org.tdlib.tdjson</string>
+  <string>ad.neko.tdjson</string>
   <key>CFBundleName</key>
   <string>tdjson</string>
   <key>CFBundlePackageType</key>
