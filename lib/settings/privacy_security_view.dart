@@ -1,12 +1,4 @@
-﻿//
-//  privacy_security_view.dart
-//
-//  隐私与安全 — grouped nav rows whose trailing values are read live from TDLib
-//  (privacy rules + password state) and which push the real detail screens.
-//  Port of the Swift `PrivacySecurityView`.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -189,9 +181,7 @@ class _PrivacySecurityViewState extends State<PrivacySecurityView> {
           _passkeyRevision == revision) {
         setState(() => _passkeyCount = passkeys.length);
       }
-    } catch (_) {
-      // Older TDLib builds and unsupported providers simply omit the row.
-    }
+    } catch (_) {}
   }
 
   Future<void> _loadRule(String setting) async {

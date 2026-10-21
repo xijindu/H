@@ -1,16 +1,9 @@
-﻿/// An immutable message-ID cutoff used to split transcript entries.
-///
-/// The cutoff is deliberately independent of the message that originally
-/// supplied it. Removing that message later therefore does not move the
-/// partition boundary.
-class TranscriptPivot {
+﻿class TranscriptPivot {
   const TranscriptPivot(this.cutoffMessageId);
 
   final int cutoffMessageId;
 }
 
-/// Keeps an existing pivot, but does not let a provisional seed message create
-/// one before the first complete history window has loaded.
 TranscriptPivot? resolveTranscriptPivot({
   required TranscriptPivot? currentPivot,
   required bool initialWindowLoaded,
@@ -21,12 +14,6 @@ TranscriptPivot? resolveTranscriptPivot({
   return TranscriptPivot(firstMessageId);
 }
 
-/// Whether a provisional pending-only cutoff must be replaced now that a
-/// server-assigned message ID exists.
-///
-/// Pending messages use a synthetic ID at the latest edge. Keeping that
-/// synthetic cutoff after TDLib replaces a pending message would otherwise
-/// leave every real message in the before-center sliver.
 bool shouldRebasePendingTranscriptPivot({
   required TranscriptPivot? pivot,
   required int pendingOrderId,
@@ -35,13 +22,6 @@ bool shouldRebasePendingTranscriptPivot({
   return pivot?.cutoffMessageId == pendingOrderId && hasServerMessage;
 }
 
-/// Whether the transcript is still tracking its own latest edge.
-///
-/// A pending message target owns the viewport: selecting it already cancelled
-/// bottom-follow and anchor maintenance, and staging it rebases the pivot onto
-/// that row. Reporting "following latest" during that window lets an ordinary
-/// view-model notification — sender hydration, a read receipt, file progress —
-/// rebase the pivot straight back and strand the jump at the latest edge.
 bool transcriptFollowsLatestEdge({
   required bool preservesViewport,
   required bool maintainsSessionAnchor,
@@ -53,13 +33,6 @@ bool transcriptFollowsLatestEdge({
     !viewportClaimedByUser &&
     !hasPendingMessageTarget;
 
-/// Lets an older page fill a short visible transcript even when a touch froze
-/// its previous pivot while the request was in flight. Full transcripts retain
-/// their fixed pivot so ordinary pagination does not move the viewport.
-///
-/// [hasPendingMessageTarget] holds the reveal back for the same reason
-/// [transcriptFollowsLatestEdge] does: a hydrating older page must not discard
-/// a staged jump target before it has been aligned.
 bool shouldRebaseForHydratedOlderPage({
   required bool prependedOlder,
   required bool latestArmWasShort,
@@ -72,13 +45,6 @@ bool shouldRebaseForHydratedOlderPage({
     !hasPendingMessageTarget &&
     (historyFillInFlight || revealRequested);
 
-/// Whether the after-center arm is still too thin to treat as a filled
-/// transcript.
-///
-/// [maxScrollExtent] alone is not enough: a single tall media bubble can push
-/// extent past [extentThreshold] while older history remains off-screen in the
-/// before-center sliver. A low [afterCenterEntryCount] keeps short-fill and
-/// pivot rebase alive in that case.
 bool isLatestTranscriptArmShort({
   required double maxScrollExtent,
   required int afterCenterEntryCount,
@@ -89,17 +55,11 @@ bool isLatestTranscriptArmShort({
   return maxScrollExtent <= extentThreshold;
 }
 
-/// Freeze only once the latest arm fills the viewport (or older history is
-/// exhausted). Freezing a one-message after-center arm parks older pages above
-/// the center forever.
 bool shouldFreezeTranscriptPivot({
   required bool latestArmIsShort,
   required bool canLoadOlder,
 }) => !latestArmIsShort || !canLoadOlder;
 
-/// A restored pivot pinned to the newest known message leaves only that
-/// bubble in the after-center arm. When reopening at the latest edge, discard
-/// it so short-fill can rebuild a fuller cutoff.
 bool shouldDiscardRestoredTranscriptPivot({
   required int? pivotMessageId,
   required int? newestMessageId,
@@ -110,11 +70,6 @@ bool shouldDiscardRestoredTranscriptPivot({
     newestMessageId != null &&
     pivotMessageId == newestMessageId;
 
-/// Whether a scroll-snapshot pivot may be applied when opening a chat.
-///
-/// Orphan snapshots (pivot without a matching session transcript) must not be
-/// restored: the view-model then starts from a single seed message, freezes the
-/// newest cutoff, and parks every later hydrate in the before-center sliver.
 bool shouldRestoreTranscriptPivot({
   required int? pivotMessageId,
   required bool hasSessionTranscript,
@@ -129,12 +84,6 @@ bool shouldRestoreTranscriptPivot({
   );
 }
 
-/// Force a pivot reset when the after-center arm is thin but older messages
-/// are already present below the cutoff.
-///
-/// This is the open-chat failure mode where history is loaded yet invisible
-/// until the user scrolls toward [ScrollPosition.minScrollExtent]. It must not
-/// wait for another network page: `loadOlder` may already be exhausted.
 bool shouldRebaseParkedShortTranscriptPivot({
   required int? pivotCutoffMessageId,
   required bool latestArmIsShort,
@@ -143,10 +92,6 @@ bool shouldRebaseParkedShortTranscriptPivot({
   bool hasExplicitMessageTarget = false,
   bool viewportClaimedByUser = false,
 }) {
-  // An explicit message target (for example, "open original" from the
-  // shared-files view) owns the initial viewport. Re-basing a short arm in
-  // that case would immediately discard the target and return to the latest
-  // messages before the user can inspect it.
   if (hasExplicitMessageTarget ||
       viewportClaimedByUser ||
       !followingLatest ||
@@ -156,8 +101,6 @@ bool shouldRebaseParkedShortTranscriptPivot({
   return latestArmIsShort && hasMessageOlderThanPivot;
 }
 
-/// First window expansion after a seed/restored pivot: message identity changed
-/// while the latest arm is still short and older IDs already exist.
 bool shouldRebaseForExpandedInitialWindow({
   required bool transcriptChanged,
   required bool latestArmIsShort,
@@ -171,17 +114,10 @@ bool shouldRebaseForExpandedInitialWindow({
     followingLatest &&
     !viewportClaimedByUser;
 
-/// Keeps the first-contact card at the absolute start of non-empty history.
-///
-/// An empty centered transcript is the only exception: placing the card after
-/// the center keeps that otherwise blank screen visible. As soon as a message
-/// exists, the card returns to the far end of the before-center sliver and can
-/// never split chronological history.
 bool shouldPlaceFirstContactCardAtCenter({
   required bool hasTranscriptEntries,
 }) => !hasTranscriptEntries;
 
-/// Whether the card and the complete short transcript can share one viewport.
 bool firstContactHistoryFitsViewport({
   required double cardTop,
   required double latestBottom,
@@ -194,7 +130,6 @@ bool firstContactHistoryFitsViewport({
   return latestBottom - cardTop + outerSpacing <= viewportExtent + 0.5;
 }
 
-/// Whether [currentMessageId] starts the fixed pivot-and-after section.
 bool startsTranscriptPivotSection({
   required TranscriptPivot? pivot,
   required int previousMessageId,
@@ -205,28 +140,17 @@ bool startsTranscriptPivotSection({
       currentMessageId >= pivot.cutoffMessageId;
 }
 
-/// Whole transcript entries on either side of a fixed [TranscriptPivot].
 class TranscriptPivotPartition<Entry> {
   const TranscriptPivotPartition({
     required this.beforePivot,
     required this.pivotAndAfter,
   });
 
-  /// Entries whose message IDs are all below the pivot cutoff.
   final List<Entry> beforePivot;
 
-  /// Entries containing the cutoff, crossing it, or entirely above it.
   final List<Entry> pivotAndAfter;
 }
 
-/// Partitions ordered transcript [entries] without splitting an entry.
-///
-/// An entry belongs to [TranscriptPivotPartition.beforePivot] only when every
-/// ID returned by [messageIdsOf] is lower than the immutable cutoff. An entry
-/// that straddles the cutoff is kept whole in
-/// [TranscriptPivotPartition.pivotAndAfter].
-///
-/// Every transcript entry must contain at least one message ID.
 TranscriptPivotPartition<Entry> partitionTranscriptAtPivot<Entry>({
   required Iterable<Entry> entries,
   required TranscriptPivot pivot,

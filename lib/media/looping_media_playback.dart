@@ -7,16 +7,11 @@ import 'package:video_player/video_player.dart';
 
 import '../tdlib/td_client.dart';
 
-/// Whether a permanently looping media surface is allowed to own a native
-/// player right now. Hidden tabs and backgrounded apps keep their thumbnail
-/// instead of retaining decoder threads.
 bool loopingMediaPlaybackIsEligible({
   required bool tickerEnabled,
   required bool appIsActive,
 }) => tickerEnabled && appIsActive;
 
-/// A small, process-wide budget for muted GIF, WebM sticker, and custom-emoji
-/// playback. Animated avatars intentionally use their own separate budget.
 final LoopingMediaPlayerPool loopingMediaPlayerPool = LoopingMediaPlayerPool(
   maximumPlayers: 4,
 );
@@ -24,11 +19,6 @@ final LoopingMediaPlayerPool loopingMediaPlayerPool = LoopingMediaPlayerPool(
 final Set<VoidCallback> _playbackContextListeners = <VoidCallback>{};
 StreamSubscription<int>? _activeSlotSubscription;
 
-/// Registers a looping-media surface for rare process-wide context changes.
-///
-/// Account changes use one shared TDLib subscription regardless of how many
-/// animated tiles are mounted. Availability is handled separately by the
-/// pool's bounded FIFO so it never wakes every waiting tile at once.
 void addLoopingMediaPlaybackContextListener(VoidCallback listener) {
   _playbackContextListeners.add(listener);
   _activeSlotSubscription ??= TdClient.shared
@@ -48,7 +38,6 @@ void removeLoopingMediaPlaybackContextListener(VoidCallback listener) {
   _playbackContextListeners.remove(listener);
 }
 
-/// Pure FIFO lease pool used to cap native looping-media players.
 class LoopingMediaPlayerPool {
   LoopingMediaPlayerPool({required this.maximumPlayers})
     : assert(maximumPlayers > 0);
@@ -66,9 +55,6 @@ class LoopingMediaPlayerPool {
     return _reserveLease();
   }
 
-  /// Waits fairly for one lease. A released slot is reserved before its single
-  /// callback is scheduled, so another widget cannot steal it or create a
-  /// thundering herd of file-resolution work.
   LoopingMediaPlayerWaiter waitForLease(
     ValueChanged<LoopingMediaPlayerLease> onGranted,
   ) {
@@ -155,20 +141,11 @@ class LoopingMediaPlayerLease {
   }
 }
 
-/// Muted looping media never needs an audio decoder. FVP exposes track
-/// selection beyond video_player's portable API; official platform players
-/// throw here and safely retain the volume-zero fallback.
-///
-/// Android's [video_player] backend otherwise enables audio focus for every
-/// player, including a muted avatar or sticker. That pauses music from another
-/// app as soon as a chat containing one of these surfaces is opened.
 VideoPlayerOptions mutedLoopingVideoPlayerOptions() =>
     VideoPlayerOptions(mixWithOthers: true);
 
 void disableLoopingMediaAudioTracks(VideoPlayerController controller) {
   try {
     controller.setAudioTracks(const <int>[]);
-  } catch (_) {
-    // The active video_player backend is not FVP.
-  }
+  } catch (_) {}
 }

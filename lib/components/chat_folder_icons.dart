@@ -37,7 +37,6 @@ const chatFolderIconNames = [
   'Palette',
 ];
 
-/// TDLib folder icon names rendered with the app's owned icon vocabulary.
 AppIconData chatFolderIcon(String name) => switch (name) {
   'All' => HeroAppIcons.inbox,
   'Unread' => HeroAppIcons.message,
@@ -67,7 +66,6 @@ AppIconData chatFolderIcon(String name) => switch (name) {
   _ => HeroAppIcons.folder,
 };
 
-/// Folder-specific glyphs missing from the shared font are drawn as owned paths.
 class ChatFolderIcon extends StatelessWidget {
   const ChatFolderIcon(
     this.name, {

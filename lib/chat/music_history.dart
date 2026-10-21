@@ -1,7 +1,5 @@
 import 'dart:convert';
 
-/// Cap for the persisted recently-played chats list; older entries beyond
-/// this many are dropped on every update.
 const playedMusicChatsLimit = 20;
 
 class PlayedMusicChat {

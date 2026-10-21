@@ -20,11 +20,6 @@ import 'data_storage_service.dart';
 import 'downloads_view.dart';
 import 'network_usage_view.dart';
 
-/// A normalized, immutable view of TDLib's fast and detailed storage reports.
-///
-/// The dashboard deliberately reports only storage TDLib owns. It does not
-/// manufacture device-capacity values or imply that application databases can
-/// be deleted through the media-cache optimizer.
 class StorageSnapshot {
   const StorageSnapshot({
     required this.cacheSize,
@@ -316,7 +311,6 @@ class _StorageUsageViewState extends State<StorageUsageView> {
         );
       });
     } catch (_) {
-      // Cache rows can still be managed safely using their stable chat IDs.
     }
   }
 

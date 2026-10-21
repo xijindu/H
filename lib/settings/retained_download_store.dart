@@ -7,8 +7,6 @@ import 'package:path_provider/path_provider.dart';
 import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 
-/// An independent, complete copy. Neither its payload nor its metadata lives
-/// in TDLib's cache. Paths are reconstructed from validated local filenames.
 class RetainedDownload {
   const RetainedDownload({
     required this.id,
@@ -29,9 +27,6 @@ class RetainedDownload {
   final bool isVideo;
 }
 
-/// User-selected retained downloads, not an automatic download/cache policy.
-/// One directory per Telegram user avoids leaking copies when a slot is reused
-/// for a different account. An account switch never redirects an in-flight save.
 class RetainedDownloadStore {
   RetainedDownloadStore(this.directory);
 
@@ -79,8 +74,6 @@ class RetainedDownloadStore {
     }
   }
 
-  /// Copies into a hidden staging directory, then publishes the directory in
-  /// one rename. An interrupted/failed copy is never listed as retained.
   Future<RetainedDownload> keep({
     required Map<String, dynamic> file,
     required String title,
@@ -100,8 +93,6 @@ class RetainedDownloadStore {
       throw StateError('The complete download is no longer available');
     }
     await directory.create(recursive: true);
-    // unique_id survives TDLib restarts; numeric file IDs can be reused after
-    // signing in again. Without a stable remote identity, keep a fresh copy.
     final uniqueId = file.obj('remote')?.str('unique_id') ?? '';
     final pending = await directory.createTemp('.pending-');
     final id = sha256
@@ -111,7 +102,6 @@ class RetainedDownloadStore {
     try {
       final existing = await _read(id);
       if (existing != null) return existing;
-      // Do not replace a prior copy whose metadata cannot be read.
       if (await FileSystemEntity.type(destination.path, followLinks: false) !=
           FileSystemEntityType.notFound) {
         throw StateError('A retained copy needs attention');
@@ -147,8 +137,6 @@ class RetainedDownloadStore {
       try {
         await pending.rename(destination.path);
       } on FileSystemException {
-        // Two UI surfaces may retain the same file concurrently. Keep the
-        // first complete copy, never overwrite it with the second operation.
         final concurrent = await _read(id);
         if (concurrent != null) return concurrent;
         rethrow;
@@ -177,8 +165,6 @@ class RetainedDownloadStore {
     return entries;
   }
 
-  /// Called only after explicit confirmation; this does not touch the source
-  /// message or TDLib cache. Never accepts a path supplied by the UI/metadata.
   Future<void> remove(String id) async {
     if (!_entryId.hasMatch(id)) throw ArgumentError.value(id, 'id');
     final entry = await _read(id);
@@ -258,7 +244,6 @@ class RetainedDownloadStore {
     final dot = name.lastIndexOf('.');
     final extension = dot > 0 ? name.substring(dot) : '';
     final suffix = extension.length <= 16 ? extension : '';
-    // Bound UTF-8 bytes as well as code points for cross-platform filenames.
     final stem = dot > 0 ? name.substring(0, dot) : name;
     final buffer = StringBuffer();
     var bytes = 0;

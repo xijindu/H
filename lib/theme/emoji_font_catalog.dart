@@ -1,11 +1,4 @@
-﻿//
-//  emoji_font_catalog.dart
-//
-//  Runtime emoji font catalog backed by iebb/emojifonts' release manifest.
-//  Font binaries are downloaded on demand and loaded with Flutter's FontLoader.
-//
-
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -136,9 +129,6 @@ class EmojiFontCatalog {
 
   static final shared = EmojiFontCatalog._();
 
-  /// Bump whenever release font binaries change without changing their keys.
-  /// A new namespace prevents old glyph data from being loaded and forces the
-  /// selected font to be downloaded again.
   static const cacheRevision = 2;
   static const cacheDirectoryName = 'emoji_fonts_v$cacheRevision';
 
@@ -148,10 +138,6 @@ class EmojiFontCatalog {
   final Set<String> _loadedFamilies = {};
   final Map<String, Future<String>> _inFlightFontLoads = {};
 
-  /// Returns the deterministic runtime family once this process has registered
-  /// it with Flutter. New ThemeController instances can therefore retain the
-  /// selected emoji face synchronously instead of flashing the platform face
-  /// until another asynchronous cache read completes.
   String? loadedFamilyForKey(String key) {
     if (key == EmojiFontChoice.system.key) return null;
     final family = EmojiFontChoice.runtimeFamilyForKey(key);

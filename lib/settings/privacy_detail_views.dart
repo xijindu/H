@@ -1,13 +1,4 @@
-﻿//
-//  privacy_detail_views.dart
-//
-//  Real-TDLib detail screens behind 隐私与安全: a privacy-rule chooser
-//  (getUserPrivacySettingRules / setUserPrivacySettingRules), active sessions
-//  (getActiveSessions / terminateSession) and the block list
-//  (getBlockedMessageSenders / setMessageSenderBlockList).
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -32,7 +23,6 @@ import 'keyword_blocker.dart';
 import 'privacy_rule_options.dart';
 import 'qr_login_scanner_view.dart';
 
-// MARK: - Privacy rule chooser (所有人 / 我的联系人 / 没有人)
 
 class PrivacyRuleView extends StatefulWidget {
   const PrivacyRuleView({
@@ -41,7 +31,7 @@ class PrivacyRuleView extends StatefulWidget {
     required this.setting,
   });
   final String title;
-  final String setting; // e.g. userPrivacySettingShowStatus
+  final String setting;
 
   @override
   State<PrivacyRuleView> createState() => _PrivacyRuleViewState();
@@ -519,7 +509,6 @@ class _PrivacyRuleViewState extends State<PrivacyRuleView> {
       });
       unawaited(_resolveAndApplyExceptions(canonical, revision, clientId));
     } catch (_) {
-      // The write succeeded; keep the optimistic state if verification fails.
     }
   }
 
@@ -672,8 +661,6 @@ class _PrivacyRuleViewState extends State<PrivacyRuleView> {
       }
     }
 
-    // Every entry is its own FFI round trip; awaiting them one by one kept the
-    // exception rows blank until the last one landed.
     final entries = await Future.wait([
       for (final id in userIds) resolveUser(id),
       for (final id in chatIds) resolveChat(id),
@@ -1496,7 +1483,6 @@ class _PrivacyException {
       id == other.id && isUser == other.isUser;
 }
 
-// MARK: - Active sessions
 
 class ActiveSessionsView extends StatefulWidget {
   const ActiveSessionsView({super.key});
@@ -1768,7 +1754,6 @@ class _ActiveSessionsViewState extends State<ActiveSessionsView> {
   }
 }
 
-// MARK: - Block list
 
 class BlockedUsersView extends StatefulWidget {
   const BlockedUsersView({super.key});

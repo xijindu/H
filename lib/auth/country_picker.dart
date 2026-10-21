@@ -1,12 +1,3 @@
-//
-//  country_picker.dart
-//
-//  Country/region model + picker sheet for the Telegram-style phone login.
-//  Dial-code matching uses a bundled offline table. Display names are replaced
-//  at runtime by Telegram's localized `getCountries` response, matching the
-//  official clients while keeping phone login available offline.
-//
-
 import 'dart:async';
 
 import 'package:dlibphonenumber/dlibphonenumber.dart';
@@ -19,25 +10,19 @@ import 'telegram_country_names.dart';
 
 class Country {
   const Country(this.name, this.iso, this.dial);
-  final String name; // Offline localized display-name key
-  final String iso; // ISO 3166-1 alpha-2
-  final String dial; // dial code, digits only
+  final String name;
+  final String iso;
+  final String dial;
 
   String displayName(Map<String, String> telegramNames) {
     final localized = AppStrings.t(name);
-    // Prefer app-localized names (respects the user's chosen language).
-    // Fall back to Telegram names only when the app has no translation.
     if (localized != name && localized.isNotEmpty) return localized;
     return telegramNames[iso] ?? localized;
   }
 
   static const Country china = Country(AppStringKeys.countryCN, 'CN', '86');
 
-  /// Every geographical region in the bundled libphonenumber metadata.
-  /// Shared calling codes use libphonenumber leading-digit metadata before
-  /// falling back to a canonical display country.
   static const List<Country> all = [
-    // East Asia
     Country(AppStringKeys.countryCN, 'CN', '86'),
     Country(AppStringKeys.countryHK, 'HK', '852'),
     Country(AppStringKeys.countryMO, 'MO', '853'),
@@ -46,7 +31,6 @@ class Country {
     Country(AppStringKeys.countryKR, 'KR', '82'),
     Country(AppStringKeys.countryKP, 'KP', '850'),
     Country(AppStringKeys.countryMN, 'MN', '976'),
-    // Southeast Asia
     Country(AppStringKeys.countrySG, 'SG', '65'),
     Country(AppStringKeys.countryMY, 'MY', '60'),
     Country(AppStringKeys.countryTH, 'TH', '66'),
@@ -58,7 +42,6 @@ class Country {
     Country(AppStringKeys.countryLA, 'LA', '856'),
     Country(AppStringKeys.countryBN, 'BN', '673'),
     Country(AppStringKeys.countryTL, 'TL', '670'),
-    // South Asia
     Country(AppStringKeys.countryIN, 'IN', '91'),
     Country(AppStringKeys.countryPK, 'PK', '92'),
     Country(AppStringKeys.countryBD, 'BD', '880'),
@@ -67,13 +50,11 @@ class Country {
     Country(AppStringKeys.countryBT, 'BT', '975'),
     Country(AppStringKeys.countryMV, 'MV', '960'),
     Country(AppStringKeys.countryAF, 'AF', '93'),
-    // Central Asia
     Country(AppStringKeys.countryKZ, 'KZ', '7'),
     Country(AppStringKeys.countryUZ, 'UZ', '998'),
     Country(AppStringKeys.countryTM, 'TM', '993'),
     Country(AppStringKeys.countryTJ, 'TJ', '992'),
     Country(AppStringKeys.countryKG, 'KG', '996'),
-    // Middle East
     Country(AppStringKeys.countryAE, 'AE', '971'),
     Country(AppStringKeys.countrySA, 'SA', '966'),
     Country(AppStringKeys.countryIL, 'IL', '972'),
@@ -92,7 +73,6 @@ class Country {
     Country(AppStringKeys.countryGE, 'GE', '995'),
     Country(AppStringKeys.countryAM, 'AM', '374'),
     Country(AppStringKeys.countryAZ, 'AZ', '994'),
-    // Europe
     Country(AppStringKeys.countryGB, 'GB', '44'),
     Country(AppStringKeys.countryIE, 'IE', '353'),
     Country(AppStringKeys.countryFR, 'FR', '33'),
@@ -138,7 +118,6 @@ class Country {
     Country(AppStringKeys.countryMC, 'MC', '377'),
     Country(AppStringKeys.countrySM, 'SM', '378'),
     Country(AppStringKeys.countryLI, 'LI', '423'),
-    // Africa
     Country(AppStringKeys.countryEG, 'EG', '20'),
     Country(AppStringKeys.countryZA, 'ZA', '27'),
     Country(AppStringKeys.countryMA, 'MA', '212'),
@@ -178,7 +157,6 @@ class Country {
     Country(AppStringKeys.countryGN, 'GN', '224'),
     Country(AppStringKeys.countryMR, 'MR', '222'),
     Country(AppStringKeys.countryMU, 'MU', '230'),
-    // North & Central America
     Country(AppStringKeys.countryUS, 'US', '1'),
     Country(AppStringKeys.countryCA, 'CA', '1'),
     Country(AppStringKeys.countryMX, 'MX', '52'),
@@ -191,7 +169,6 @@ class Country {
     Country(AppStringKeys.countryPA, 'PA', '507'),
     Country(AppStringKeys.countryCU, 'CU', '53'),
     Country(AppStringKeys.countryHT, 'HT', '509'),
-    // South America
     Country(AppStringKeys.countryBR, 'BR', '55'),
     Country(AppStringKeys.countryAR, 'AR', '54'),
     Country(AppStringKeys.countryCL, 'CL', '56'),
@@ -204,7 +181,6 @@ class Country {
     Country(AppStringKeys.countryUY, 'UY', '598'),
     Country(AppStringKeys.countryGY, 'GY', '592'),
     Country(AppStringKeys.countrySR, 'SR', '597'),
-    // Oceania
     Country(AppStringKeys.countryAU, 'AU', '61'),
     Country(AppStringKeys.countryNZ, 'NZ', '64'),
     Country(AppStringKeys.countryFJ, 'FJ', '679'),
@@ -213,7 +189,6 @@ class Country {
     Country(AppStringKeys.countryTO, 'TO', '676'),
     Country(AppStringKeys.countryVU, 'VU', '678'),
     Country(AppStringKeys.countrySB, 'SB', '677'),
-    // Remaining geographical regions from the bundled libphonenumber metadata.
     Country(AppStringKeys.countryAC, 'AC', '247'),
     Country(AppStringKeys.countryAG, 'AG', '1'),
     Country(AppStringKeys.countryAI, 'AI', '1'),
@@ -295,16 +270,10 @@ class Country {
     Country(AppStringKeys.countryYT, 'YT', '262'),
   ];
 
-  /// `all`, sorted by localized display name for presentation.
   static List<Country> get sorted =>
       [...all]
         ..sort((a, b) => AppStrings.t(a.name).compareTo(AppStrings.t(b.name)));
 
-  /// Best country whose dial code is a prefix of [digits].
-  ///
-  /// Longest dial wins. Shared codes use libphonenumber's leading-digit
-  /// metadata, which matches Telegram's country detection behavior for ranges
-  /// such as +76/+77 Kazakhstan under the shared +7 country code.
   static const _mainForCode = {
     '1': 'US',
     '7': 'RU',
@@ -350,13 +319,8 @@ class Country {
       final region = PhoneNumberUtil.instance.getRegionCodeForNumber(parsed);
       final match = _byIso(region, candidates);
       if (match != null) return match;
-    } catch (_) {
-      // Keep login typing resilient; fall through to short-prefix metadata.
-    }
+    } catch (_) {}
 
-    // libphonenumber metadata marks Kazakhstan under +7 with national prefixes
-    // 6 and 7. Keep this explicit so the UI flips to KZ immediately at "+77",
-    // even if parsing rejects the very short partial number on some platforms.
     if (digits.startsWith('76') || digits.startsWith('77')) {
       return _byIso('KZ', candidates);
     }
@@ -398,9 +362,7 @@ class _CountryPickerViewState extends State<CountryPickerView> {
       if (mounted && names.isNotEmpty) {
         setState(() => _telegramNames = names);
       }
-    } catch (_) {
-      // The bundled names remain available before authorization or offline.
-    }
+    } catch (_) {}
   }
 
   String _displayName(Country country) => country.displayName(_telegramNames);

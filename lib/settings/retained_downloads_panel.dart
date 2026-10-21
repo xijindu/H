@@ -12,8 +12,6 @@ import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import 'retained_download_store.dart';
 
-/// Embedded in Downloads. The independent index remains usable even after
-/// TDLib evicts its cache or removes old entries from the download task list.
 class RetainedDownloadsPanel extends StatefulWidget {
   const RetainedDownloadsPanel({
     super.key,

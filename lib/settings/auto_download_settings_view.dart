@@ -29,7 +29,6 @@ class _AutoDownloadSettingsViewState extends State<AutoDownloadSettingsView> {
     2147483647,
   ];
 
-  // Byte units are written the same way in every locale; only "Never" is copy.
   static String _sizeLabel(int bytes) => switch (bytes) {
     0 => AppStrings.t(AppStringKeys.autoDownloadSettingsSizeNever),
     1048576 => '1 MB',

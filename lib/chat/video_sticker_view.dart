@@ -1,12 +1,4 @@
-﻿//
-//  video_sticker_view.dart
-//
-//  Plays a Telegram `.webm` (VP9 + alpha) video sticker, looping + muted.
-//  Android 14+ renders the supplied static thumbnail instead of loading FVP's
-//  MDK decoder: native surface creation is unstable on those releases.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -21,9 +13,6 @@ import '../tdlib/td_client.dart';
 import '../tdlib/td_image_loader.dart';
 import '../tdlib/td_models.dart';
 
-/// FVP's Android MDK decoder can crash while creating a native video surface
-/// on Android 14 and later. Video stickers always include a static thumbnail,
-/// so prefer that safe representation there rather than risking the process.
 @visibleForTesting
 bool shouldUseStaticAndroidVideoStickerFallback(int? sdkInt) =>
     sdkInt == null || sdkInt >= 34;
@@ -310,7 +299,6 @@ class _VideoStickerViewState extends State<VideoStickerView>
     try {
       await controller.dispose();
     } catch (_) {
-      // Native teardown failures must not become uncaught async errors.
     } finally {
       if (ownsLease) {
         if (_lease == null && _initializingController == null) {
@@ -354,7 +342,6 @@ class _VideoStickerViewState extends State<VideoStickerView>
           try {
             await current.dispose();
           } catch (_) {
-            // Continue tearing down the remaining native players.
           }
         }),
       );

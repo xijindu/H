@@ -25,8 +25,6 @@ class NativeBottomTabItem {
   };
 }
 
-/// UIKit owns the glass, tab layout, selection interaction, and VoiceOver.
-/// Only app-owned Heroicons and localized titles cross the platform channel.
 class NativeBottomTabBar extends StatefulWidget {
   const NativeBottomTabBar({
     super.key,

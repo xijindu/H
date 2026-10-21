@@ -1,11 +1,3 @@
-//
-//  image_cache_config.dart
-//
-//  Flutter ImageCache budget tuned for chat surfaces with many small
-//  thumbnails. Kept small so off-screen decoded images do not accumulate
-//  while still preserving visible avatars and media tiles.
-//
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 

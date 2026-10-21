@@ -1,12 +1,4 @@
-﻿//
-//  forum_topic_browser_view.dart
-//
-//  Intermediate browser for forum/topic chats opened from the main chat list:
-//  the left rail is the topic-chat list, and the right side lists topics for
-//  the selected chat. Opening a row enters the real topic view.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -286,8 +278,6 @@ class _ForumTopicBrowserViewState extends State<ForumTopicBrowserView> {
   Future<void> _openTopic(_ForumTopicEntry topic) async {
     final chat = _selectedChat;
     if (context.read<ThemeController>().forumTopicsAsGroupChat) {
-      // Keep the topic list underneath so back returns to it, as the topic
-      // feed route does.
       await pushAppChatRoute<void>(
         context,
         AppChatPageRoute<void>(

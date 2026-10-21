@@ -35,9 +35,6 @@ import UserNotifications
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     configureNativeSentryIfNeeded()
-    // flutter_local_notifications registers through FlutterAppDelegate. iOS
-    // only forwards tap callbacks to it when the app delegate is explicitly
-    // installed as the notification-center delegate.
     UNUserNotificationCenter.current().delegate = self
     if
       let userInfo = launchOptions?[.remoteNotification] as? [AnyHashable: Any],
@@ -96,16 +93,7 @@ import UserNotifications
       options.environment = environment
       options.releaseName = Self.sentryReleaseName(info: info)
       options.sendDefaultPii = false
-      // SentryFlutter configures Dart transactions later, but its iOS bridge
-      // does not copy `tracesSampleRate` into an already-started native SDK.
-      // Keep this in lockstep with `sentryTracesSampleRate` so TestFlight
-      // builds also emit the sampled app-start/native performance traces.
       options.tracesSampleRate = 0.02
-      // Sentry Cocoa 8.58.3 scans every app runtime class to auto-instrument
-      // UIViewControllers. On affected iOS 16 devices that background scan
-      // crashes in `swift_getTypeByMangledName` before Flutter can start.
-      // Keep crash reporting and sampled app-start traces, but do not enable
-      // the unsafe automatic UIKit transaction instrumentation.
       options.enableUIViewControllerTracing = false
       options.enableWatchdogTerminationTracking = true
     }
@@ -119,10 +107,6 @@ import UserNotifications
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
-    // The engine is ready at this callback. Register synchronously so Dart
-    // cannot invoke a plugin between engine startup and the next main-loop
-    // turn; that race produced MissingPluginException reports from secure
-    // storage, MobileScanner, and platform channels.
     registerFlutterPluginsAndChannels(engineBridge)
   }
 
@@ -164,7 +148,6 @@ import UserNotifications
         }
       }
       #endif
-      // Do not invent usable space when the system reserves the whole edge.
       var geometry: [String: Any] = [:]
       if bottom > 0 && bottom < window.bounds.height {
         geometry["topFraction"] = Double((bottom + 8) / window.bounds.height)
@@ -776,11 +759,6 @@ private enum StickerAlphaMovError: LocalizedError {
   }
 }
 
-/// Converts a PNG/APNG frame sequence into a MOV whose codec retains alpha.
-/// HEVC-with-alpha is preferred for compact output; ProRes 4444 is the
-/// lossless-alpha fallback. We deliberately do not fall back to H.264 because
-/// silently flattening transparency would make the export look correct only on
-/// a matching background.
 private enum StickerAlphaMovTranscoder {
   private static let queue = DispatchQueue(
     label: "org.handy.app.sticker-export",
@@ -812,8 +790,6 @@ private enum StickerAlphaMovTranscoder {
       throw StickerAlphaMovError.unreadableImage
     }
 
-    // Video encoders require even dimensions. The generated PNG is normally
-    // 512 px already, but keep arbitrary static sticker sources valid too.
     let width = max(2, firstFrame.width - firstFrame.width % 2)
     let height = max(2, firstFrame.height - firstFrame.height % 2)
     let outputURL = FileManager.default.temporaryDirectory

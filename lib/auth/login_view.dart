@@ -1,10 +1,3 @@
-//
-//  login_view.dart
-//
-//  Reference-styled multi-step login that adapts to AuthManager.step:
-//  phone → code → password. Port of the Swift `LoginView`.
-//
-
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -27,8 +20,6 @@ import 'account_store.dart';
 import 'auth_manager.dart';
 import 'country_picker.dart';
 
-/// Whether the login flow owns the back action instead of allowing the root
-/// app route to hand it to the platform as an app/window exit.
 bool loginHasBackAction({
   required bool forcePhone,
   required AuthStep step,
@@ -64,19 +55,12 @@ class _LoginViewState extends State<LoginView> {
   DateTime? _resendAvailableAt;
   int _resendRemainingSeconds = 0;
 
-  // When true, show the phone-number step even though TDLib is still at a later
-  // auth state — lets the user back out of QR / code / 2FA to fix the number.
   bool _forcePhone = false;
 
-  /// Explicit choice from the country picker. Takes precedence over
-  /// [_detectedCountry] when both are available.
   Country? _selectedCountry;
 
-  /// Auto-detected from the leading digits of the phone input as the user types.
   Country? get _detectedCountry => Country.match(_phoneDigits);
 
-  /// Effective country for display: explicit picker choice wins, otherwise
-  /// fall back to whatever the input digits match.
   Country? get _effectiveCountry => _selectedCountry ?? _detectedCountry;
 
   String get _phoneDigits => _phone.text.replaceAll(RegExp(r'[^0-9]'), '');
@@ -100,9 +84,6 @@ class _LoginViewState extends State<LoginView> {
     super.dispose();
   }
 
-  /// Formats the full international number via libphonenumber's as-you-type
-  /// formatter (country-specific grouping). Re-runs from scratch on each change
-  /// so paste/delete reformat correctly.
   static String _formatAsYouType(String input) {
     final digits = input.replaceAll(RegExp(r'[^0-9]'), '');
     if (digits.isEmpty) return '+';
@@ -135,13 +116,9 @@ class _LoginViewState extends State<LoginView> {
     final auth = context.watch<AuthManager>();
     final accounts = context.watch<AccountStore>();
     final c = context.colors;
-    // True when the phone-entry step is on screen (the natural state, or because
-    // the user chose to re-enter the number).
     final showingPhone =
         _forcePhone || auth.step is AuthWaitPhoneNumber;
     _syncResendCountdown(auth);
-    // A back affordance is useful once past the phone step, or whenever another
-    // account exists to switch to.
     final canGoBack = loginHasBackAction(
       forcePhone: _forcePhone,
       step: auth.step,
@@ -150,9 +127,6 @@ class _LoginViewState extends State<LoginView> {
     final backToPhoneOnly =
         !_forcePhone && auth.step is AuthWaitQrCode;
     return PopScope(
-      // LoginView is the root content, so allowing the platform back action
-      // through while the visible back affordance exists exits the app instead
-      // of moving within the authentication flow.
       canPop: !canGoBack,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && canGoBack) {
@@ -206,9 +180,6 @@ class _LoginViewState extends State<LoginView> {
                 left: 6,
                 child: AppInteractiveSurface(
                   semanticLabel: AppStringKeys.navigationBack.l10n(context),
-                  // QR back returns to the phone-number form. Aborting an
-                  // add-account at the phone step has nothing to re-enter, so
-                  // go straight back to the previous account.
                   onTap: () => _handleBack(
                     auth,
                     accounts,
@@ -257,9 +228,6 @@ class _LoginViewState extends State<LoginView> {
     _showBackOptions(auth);
   }
 
-  /// Back affordance for QR / code / 2FA steps: re-enter the
-  /// phone number, abort an add-account back to the previous account, or switch
-  /// to another configured account.
   void _showBackOptions(AuthManager auth) {
     final accounts = context.read<AccountStore>();
     final showReenter =
@@ -287,8 +255,6 @@ class _LoginViewState extends State<LoginView> {
               },
               child: Text(AppStrings.t(AppStringKeys.loginReenterPhoneNumber)),
             ),
-          // Aborting an add-account drops the half-created slot and returns to
-          // the account we came from.
           if (pendingAdd)
             CupertinoActionSheetAction(
               onPressed: () {
@@ -377,7 +343,6 @@ class _LoginViewState extends State<LoginView> {
     );
   }
 
-  // MARK: Steps
 
   Widget _phoneStep(AuthManager auth) {
     final c = context.colors;
@@ -1122,7 +1087,6 @@ class _LoginViewState extends State<LoginView> {
     );
   }
 
-  // MARK: Building blocks
 
   Widget _primaryButton(
     AuthManager auth,
@@ -1168,10 +1132,6 @@ class _LoginViewState extends State<LoginView> {
 
 }
 
-/// A TextEditingController that masks its text with dots at render time, so the
-/// field can stay a plain (non-obscured) text field. TextField.obscureText forces
-/// a password input type that some Chinese/ColorOS IMEs render as a numeric
-/// keypad; masking here keeps a real alphanumeric keyboard. Toggle [reveal].
 class ObscuringController extends TextEditingController {
   bool reveal = false;
 
@@ -1395,9 +1355,6 @@ class _VerificationCodeBox extends StatelessWidget {
   }
 }
 
-/// A pill-shaped reference text field with a leading glyph. Secure fields get a
-/// plain text keyboard and a show/hide eye toggle — Telegram 2-step passwords
-/// are NOT numeric.
 class InputField extends StatefulWidget {
   const InputField({
     super.key,
@@ -1432,8 +1389,6 @@ class _InputFieldState extends State<InputField> {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    // Secure fields mask through the controller (dots at render time); reflect
-    // the eye toggle into it so showing/hiding works without obscureText.
     final maskCtrl = widget.controller is ObscuringController
         ? widget.controller as ObscuringController
         : null;
@@ -1460,11 +1415,6 @@ class _InputFieldState extends State<InputField> {
                 widget.keyboardType,
               )),
               controller: widget.controller,
-              // Secure fields mask via an ObscuringController (render-time dots)
-              // and keep obscureText FALSE — TextField.obscureText forces a
-              // password input type that some Chinese/ColorOS IMEs render as a
-              // numeric PIN pad. A plain text field avoids the PIN keyboard and
-              // still accepts Telegram's alphanumeric 2-step passwords.
               obscureText: maskCtrl == null && _obscure,
               keyboardType:
                   widget.keyboardType ??

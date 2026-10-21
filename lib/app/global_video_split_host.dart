@@ -5,7 +5,6 @@ import '../chat/video_player_view.dart';
 import 'app_navigator.dart';
 import 'video_split_controller.dart';
 
-/// Keeps a split video above the app navigator without losing video playback.
 class GlobalVideoSplitHost extends StatefulWidget {
   const GlobalVideoSplitHost({super.key, required this.child});
 
@@ -175,17 +174,10 @@ class _GlobalVideoSplitHostState extends State<GlobalVideoSplitHost> {
       case VideoDisplayMode.split:
         break;
       case VideoDisplayMode.pictureInPicture:
-        // The player starts AVPictureInPictureController before this fallback
-        // is reached on iOS. Do not replace it with an in-app overlay.
         _videoSplit.close();
       case VideoDisplayMode.fullscreen:
-        // This host is in MaterialApp.builder, above the root Navigator.
-        // Resolve that navigator before removing the current player.
         final navigator = appNavigatorKey.currentState;
         if (navigator == null || !navigator.mounted) return;
-        // Keep a single playback owner. The queue is handed to fullscreen,
-        // then the embedded split player is removed before the new route is
-        // built so both controllers cannot decode and emit audio together.
         _videoSplit.close();
         navigator.push(
           MaterialPageRoute(

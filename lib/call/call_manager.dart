@@ -1,15 +1,4 @@
-﻿//
-//  call_manager.dart
-//
-//  Drives TDLib's 1:1 call lifecycle. Subscribes to the update stream, maps each
-//  `updateCall` state onto a UI-facing `CallPhase`, and exposes a single `call`
-//  model the call screen observes. Signaling (createCall / acceptCall /
-//  discardCall / key exchange / emoji verification) is handled here; the actual
-//  audio/video transport is delegated to a `CallMediaEngine` (a
-//  `NoopCallMediaEngine` by default). Port of the Swift `CallManager`.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 
@@ -26,12 +15,12 @@ import 'live_communication_bridge.dart';
 import 'tgcalls_media_engine.dart';
 
 enum CallPhase {
-  requesting, // outgoing, createCall sent, awaiting TDLib's call id
-  ringingIncoming, // incoming pending, awaiting accept
-  ringingOutgoing, // outgoing pending, peer's phone is ringing
-  exchangingKeys, // both sides agreed, deriving the shared key
-  active, // media flowing (callStateReady)
-  ending, // hanging up / discarded
+  requesting,
+  ringingIncoming,
+  ringingOutgoing,
+  exchangingKeys,
+  active,
+  ending,
 }
 
 enum CallStartResult { started, unsupported, busy }
@@ -66,10 +55,8 @@ class ActiveCall {
   int callId;
   final int peerUserId;
 
-  /// Stable account identity captured when this call was created or received.
   final int accountSlot;
 
-  /// Concrete TDLib client that owns [callId] and [peerUserId].
   final int clientId;
   String peerName;
   TdFileRef? peerPhoto;
@@ -93,8 +80,6 @@ class CallManager extends ChangeNotifier {
     liveCommunication.onSystemEnded = _handleSystemEnded;
   }
 
-  /// Android and iOS both ship a native Telegram call engine. Other platforms
-  /// keep the signaling-only fallback until they gain a media implementation.
   static CallMediaEngine _defaultEngine() =>
       Platform.isAndroid || Platform.isIOS
       ? TgcallsMediaEngine()
@@ -112,14 +97,10 @@ class CallManager extends ChangeNotifier {
   bool isMuted = false;
   bool isSpeaker = false;
   bool isVideoEnabled = false;
-  bool useFrontCamera = true; // last-selected lens (front by default)
+  bool useFrontCamera = true;
 
-  /// False on builds that do not bundle a real 1:1 call media transport.
   bool get supportsMediaCalls => _engine is! NoopCallMediaEngine;
 
-  // Protocol advertised in createCall/acceptCall. Defaults are overwritten at
-  // start() with the media engine's own supported protocol (so TDLib negotiates
-  // a version ntgcalls actually implements).
   int _minLayer = 65;
   int _maxLayer = 92;
   List<String> _libraryVersions = const ['4.0.0', '3.0.0'];
@@ -133,21 +114,11 @@ class CallManager extends ChangeNotifier {
     'library_versions': _libraryVersions,
   };
 
-  // MARK: - Lifecycle
-
-  /// Subscribes to TDLib updates and starts dispatching `updateCall`. Idempotent.
   void start() {
     if (_started) return;
     _started = true;
     groups.start();
-    // A call must not be created/accepted until this resolves. Otherwise a fast
-    // tap can send the stale fallback protocol while the native engine is still
-    // reporting its actual versions, leaving the peers unable to bring up media.
-    // Asking the engine for its protocol is what dlopens libntgcalls.so (~20 MB
-    // of WebRTC), so it waits for a gap in the scheduler rather than competing
-    // with the rest of the launch for I/O — create/accept still await it.
     _protocolReady = _warmProtocol();
-    // Outbound media signaling → TDLib. (v3/v4 calls negotiate WebRTC over this.)
     _engine.onSignalingData = _sendSignaling;
     _sub = _client
         .updatesOfAny(const [
@@ -173,7 +144,6 @@ class CallManager extends ChangeNotifier {
                   signalingCallId != active.callId) {
                 return;
               }
-              // Inbound media signaling → the engine. `data` is base64 in TDLib JSON.
               final d = update.str('data');
               if (d != null) {
                 try {
@@ -207,10 +177,6 @@ class CallManager extends ChangeNotifier {
     super.dispose();
   }
 
-  // MARK: - User actions
-
-  /// Places an outgoing call. Sets a `.requesting` placeholder immediately and
-  /// resolves the peer's name/photo in the background.
   CallStartResult startCall(int userId, bool isVideo) {
     if (!supportsMediaCalls) return CallStartResult.unsupported;
     if (call != null || groups.session != null) return CallStartResult.busy;
@@ -278,12 +244,6 @@ class CallManager extends ChangeNotifier {
     return true;
   }
 
-  /// Loads the protocol in a gap in the scheduler, with a timed backstop.
-  /// An idle task is declined for as long as any transient frame callback is
-  /// pending, so on a screen that animates without stopping it can sit in the
-  /// queue for a long time — and `_createCall`/`_acceptCall` await this future,
-  /// so the wait has to be bounded. Whichever arm arrives first performs the
-  /// load; the other joins the same one rather than querying twice.
   Future<void> _warmProtocol() {
     Future<void>? load;
     Future<void> loadOnce() => load ??= _loadProtocol();
@@ -361,9 +321,6 @@ class CallManager extends ChangeNotifier {
     }
   }
 
-  /// Ensures mic (and camera, for video) permission before placing/answering a
-  /// call — ntgcalls opens the devices itself, so the runtime grant must precede
-  /// createCall/acceptCall. Best-effort: proceeds even if denied (audio-only).
   Future<void> _ensureCallPermissions(bool video) async {
     try {
       await <Permission>[
@@ -429,10 +386,6 @@ class CallManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Turn the outgoing camera on with the chosen lens. The UI reuses the last
-  /// selected lens, while its rotate action can switch cameras after video is
-  /// active. `call.isVideo` remains the original Telegram call type; the live
-  /// call surface follows [isVideoEnabled].
   void enableVideo(bool front) {
     isVideoEnabled = true;
     useFrontCamera = front;
@@ -440,22 +393,17 @@ class CallManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Turn the outgoing camera off and return to the voice-call surface. The call
-  /// stays up and video can be re-enabled at any time.
   void disableVideo() {
     isVideoEnabled = false;
     _engine.setVideoEnabled(false);
     notifyListeners();
   }
 
-  /// Flip the front/back camera during a video call.
   void switchCamera() {
     useFrontCamera = !useFrontCamera;
     _engine.switchCamera();
     notifyListeners();
   }
-
-  // MARK: - Update handling
 
   void _handle(
     Map<String, dynamic> tdCall, {
@@ -574,9 +522,6 @@ class CallManager extends ChangeNotifier {
             encryptionKey: _decodeKey(state?.str('encryption_key')),
             config: state?.str('config') ?? '',
             customParameters: state?.str('custom_parameters') ?? '',
-            // `callStateReady.protocol` describes the peer. Pass one mutually
-            // supported version to the native engine, matching Telegram's own
-            // first-local-preference selection.
             libraryVersions: [selectedVersion],
             maxLayer: state?.obj('protocol')?.integer('max_layer') ?? _maxLayer,
             isOutgoing: active.isOutgoing,
@@ -610,8 +555,6 @@ class CallManager extends ChangeNotifier {
         _clear();
     }
   }
-
-  // MARK: - Helpers
 
   Uint8List _decodeKey(String? b64) {
     if (b64 == null || b64.isEmpty) return Uint8List(0);

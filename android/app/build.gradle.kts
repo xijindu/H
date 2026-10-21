@@ -3,13 +3,10 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services") apply false
 }
 
-// Firebase is optional for local contributors. Apply Google Services only for
-// a real config; missing or placeholder files must not make debug builds fail.
 val googleServicesFile = file("google-services.json")
 val hasFirebaseConfig = googleServicesFile.isFile && Regex(
     "\\\"mobilesdk_app_id\\\"\\s*:\\s*\\\"1:[0-9]+:android:[0-9a-fA-F]+\\\"",
@@ -22,9 +19,6 @@ if (hasFirebaseConfig) {
     logger.lifecycle("Firebase config not found; building without Firebase Analytics")
 }
 
-// Release signing (Nekoko LLC). Credentials live in android/key.properties
-// (git-ignored). When absent, release falls back to debug signing so CI and
-// fresh clones still build.
 val keystorePropertiesFile = rootProject.file("key.properties")
 val keystoreProperties = Properties()
 if (keystorePropertiesFile.exists()) {
@@ -61,9 +55,6 @@ android {
 
     packaging {
         jniLibs {
-            // The APK is distributed directly from CI. Store native libraries
-            // compressed so the arm64 APK is small enough for Telegram upload;
-            // Android will extract them at install time.
             useLegacyPackaging = true
         }
     }
@@ -81,19 +72,11 @@ android {
 
     buildTypes {
         release {
-            // Signed with the Nekoko LLC release key when android/key.properties
-            // is present; otherwise debug-signed so CI / fresh clones still build.
             signingConfig = if (keystorePropertiesFile.exists()) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
             }
-            // ntgcalls (and other native plugins) resolve their Java classes by name
-            // from native code via JNI (GetStaticMethodID); R8 obfuscation renames
-            // those classes → JniAbort/SIGABRT at runtime in release (debug doesn't
-            // minify, so it ran fine). The Java/Kotlin surface here is tiny — the APK
-            // is almost entirely native .so + Dart AOT, which R8 can't shrink — so
-            // disabling minification costs ~nothing and avoids release-only JNI crashes.
             isMinifyEnabled = false
             isShrinkResources = false
         }
@@ -112,23 +95,12 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
-    // FlutterFragmentActivity and the local_auth launch theme require AppCompat.
     implementation("androidx.appcompat:appcompat:1.8.0")
-    // Edge-to-edge: WindowCompat.setDecorFitsSystemWindows.
     implementation("androidx.core:core-ktx:1.18.0")
-    // MediaSession + MediaStyle notification for the system music controls.
     implementation("androidx.media:media:1.7.1")
-    // Android's system passkey picker. The Play Services adapter keeps the
-    // same Credential Manager API working on pre-Android 14 devices.
     implementation("androidx.credentials:credentials:1.6.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
-    // Mithka Pro subscriptions. Product prices and billing periods are owned by
-    // Play Console; the client always displays the localized ProductDetails.
     implementation("com.android.billingclient:billing:9.1.0")
-    // ntgcalls — a from-scratch C++ Telegram-calls engine (WebRTC + opus + libvpx
-    // statically bundled inside a self-contained libntgcalls.so per ABI). This is
-    // the real media transport behind the CallMediaEngine seam; CallMediaPlugin
-    // drives its 1:1 P2P API from the TDLib callStateReady payload.
     implementation("io.github.pytgcalls:ntgcalls:2.2.5")
     implementation("com.google.mlkit:language-id:17.0.6")
     implementation("com.google.mlkit:translate:17.0.3")

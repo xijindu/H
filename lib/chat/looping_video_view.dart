@@ -1,12 +1,4 @@
-﻿//
-//  looping_video_view.dart
-//
-//  Muted, lifecycle-aware playback for Telegram animations. The thumbnail
-//  remains visible while TDLib downloads the file and the decoder prepares
-//  its first frame.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -281,7 +273,6 @@ class _LoopingVideoViewState extends State<LoopingVideoView>
     try {
       await controller.dispose();
     } catch (_) {
-      // Native teardown failures must not become uncaught async errors.
     } finally {
       if (ownsLease) {
         if (_lease == null && _initializingController == null) {
@@ -324,9 +315,7 @@ class _LoopingVideoViewState extends State<LoopingVideoView>
         controllers.map((current) async {
           try {
             await current.dispose();
-          } catch (_) {
-            // Continue tearing down the remaining native players.
-          }
+          } catch (_) {}
         }),
       );
     } finally {
@@ -363,9 +352,6 @@ class _LoopingVideoViewState extends State<LoopingVideoView>
               child: SizedBox(
                 width: controller.value.size.width,
                 height: controller.value.size.height,
-                // Inline previews have no controls of their own. Keeping the
-                // native view out of hit testing lets the enclosing message
-                // gesture open fullscreen playback on direct-surface devices.
                 child: IgnorePointer(child: VideoPlayer(controller)),
               ),
             ),

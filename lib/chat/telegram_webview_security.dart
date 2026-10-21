@@ -14,7 +14,6 @@ String newTelegramWebViewBridgeNonce() {
   return base64UrlEncode(bytes);
 }
 
-/// The exact HTTPS origin that is allowed to use a privileged Telegram bridge.
 class TelegramWebViewOrigin {
   const TelegramWebViewOrigin._({required this.host, required this.port});
 
@@ -74,9 +73,6 @@ TelegramWebViewNavigationAction telegramPaymentNavigationAction({
   if (expectedOrigin?.matches(uri) ?? false) {
     return TelegramWebViewNavigationAction.navigateTrusted;
   }
-  // Payment providers commonly cross an HTTPS origin boundary for 3-D Secure
-  // or bank verification. Keep that navigation in-process, but never grant it
-  // the credential-submission bridge.
   if (_isSafeHttpsUri(uri)) {
     return TelegramWebViewNavigationAction.navigateUntrusted;
   }

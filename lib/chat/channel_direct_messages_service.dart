@@ -505,7 +505,6 @@ class ChannelDirectMessagesService extends ChangeNotifier {
       }
       notifyListeners();
     } catch (_) {
-      // Sender metadata is decorative; the topic remains usable by identifier.
     } finally {
       _resolvingSenders.remove(topic.id);
     }
@@ -808,7 +807,6 @@ class ChannelDirectMessageTopicController extends ChangeNotifier {
       }
       notifyListeners();
     } catch (_) {
-      // Keep the transcript functional if a sender was deleted or inaccessible.
     } finally {
       _resolvingSenders.remove(message.id);
     }

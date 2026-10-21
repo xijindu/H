@@ -48,13 +48,6 @@ class MessageTranslationValue {
   final String languageCode;
 }
 
-/// A short-lived, on-device cache for successful message translations.
-///
-/// Cache keys include the account, message identity, source text and target
-/// language, so edits, account switches and target-language changes cannot reuse a
-/// stale translation. Entries remain available for seven full days and are
-/// pruned after that window. In-flight work is shared process-wide so two open
-/// windows cannot issue the same translation request simultaneously.
 class MessageTranslationCache {
   MessageTranslationCache(this._preferences, {DateTime Function()? now})
     : _now = now ?? DateTime.now;
@@ -101,8 +94,6 @@ class MessageTranslationCache {
     String storageKey,
     Future<MessageTranslationValue> Function() load,
   ) async {
-    // A second controller/window may have filled the shared preferences record
-    // between the first read and its turn to install the in-flight operation.
     final cached = _readStorageKey(storageKey);
     if (cached != null) return cached;
 
@@ -118,9 +109,7 @@ class MessageTranslationCache {
     });
     try {
       await _preferences.setString(storageKey, payload);
-    } catch (_) {
-      // A storage failure must not discard a translation the provider returned.
-    }
+    } catch (_) {}
     return value;
   }
 

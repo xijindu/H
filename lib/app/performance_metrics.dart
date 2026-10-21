@@ -6,8 +6,6 @@ import 'telemetry_config.dart';
 typedef PerformanceMetricClock = DateTime Function();
 typedef AnimatedAvatarGaugeReporter = void Function(int activePlayers);
 
-/// Rate-limits animated-avatar player gauges while preserving active-to-idle
-/// transitions. Repeated stop notifications while already idle are ignored.
 @visibleForTesting
 final class AnimatedAvatarMetricThrottle {
   AnimatedAvatarMetricThrottle({
@@ -48,10 +46,6 @@ final class AnimatedAvatarMetricThrottle {
   }
 }
 
-/// Low-volume, privacy-safe Sentry measurements for known UI hot paths.
-///
-/// These metrics contain only durations and aggregate counts. Reporting is
-/// rate-limited so observability cannot itself become part of the problem.
 abstract final class AppPerformanceMetrics {
   static const _chatListReportInterval = Duration(seconds: 30);
 

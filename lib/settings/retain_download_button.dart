@@ -9,8 +9,6 @@ import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import 'retained_download_store.dart';
 
-/// Explicit opt-in for an already completed file; never completes a partial
-/// download, changes automatic downloads, or removes an existing copy.
 class RetainDownloadButton extends StatefulWidget {
   const RetainDownloadButton({
     super.key,
@@ -57,8 +55,6 @@ class _RetainDownloadButtonState extends State<RetainDownloadButton> {
         showToast(context, AppStringKeys.downloadsKeptOnDevice);
       }
     } catch (_) {
-      // File paths and server errors can contain private information. The UI
-      // needs only the actionable retry explanation, not the raw exception.
       if (mounted) showToast(context, AppStringKeys.downloadsKeepFailed);
     } finally {
       if (mounted) {

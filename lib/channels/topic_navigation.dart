@@ -20,8 +20,6 @@ class TopicNavigationItem {
   final int iconColor;
 }
 
-/// The group's has_forum_tabs setting selects top tabs; other wide topic
-/// chats show a rail at the left edge of their conversation pane.
 class TopicNavigationLayout extends StatelessWidget {
   const TopicNavigationLayout({
     super.key,

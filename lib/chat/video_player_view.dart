@@ -1,12 +1,4 @@
-﻿//
-//  video_player_view.dart
-//
-//  Fullscreen player for a `messageVideo`. Starts TDLib download on demand and
-//  begins playback as soon as a readable local path exists; the scrubber marks
-//  the downloaded/buffered range separately from the played range.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -58,10 +50,6 @@ enum VideoPlayerPresentation { fullscreen, embedded, pictureInPicture }
 
 enum VideoDisplayMode { fullscreen, pictureInPicture, split }
 
-/// Restores a native PiP handoff into the app-level navigator.
-///
-/// Native iOS invokes this only after the user selects PiP's restore action.
-/// Returning true tells AVKit that the matching player route was scheduled.
 @visibleForTesting
 Future<bool> restoreVideoPlaybackFromPictureInPicture({
   required VideoPlaybackQueue queue,
@@ -108,10 +96,6 @@ Future<bool> restoreVideoPlaybackFromPictureInPicture({
   return true;
 }
 
-/// Whether the host should add its configurable touch-style pan gestures.
-///
-/// Keyboard shortcuts, pointer-wheel volume, taps, and fullscreen requests are
-/// all handled by [FVideoPlayer].
 @visibleForTesting
 bool videoPlaybackSurfaceUsesPanGestures({
   required VideoPlayerPresentation presentation,
@@ -128,9 +112,6 @@ enum _PlayerGesture { brightness, volume, seek, changeVideo, skipTenSeconds }
 
 enum _PlayerGestureSide { left, right }
 
-// Vertical adjustments should require a deliberate drag.  Mapping one screen
-// height to the full range made small phone swipes change volume and brightness
-// too abruptly, especially while holding the device in one hand.
 const _verticalGestureSensitivity = 0.5;
 
 class VideoPlayerView extends StatefulWidget {
@@ -196,11 +177,9 @@ class VideoPlayerView extends StatefulWidget {
 
   final VoidCallback? onToggleFullscreen;
 
-  /// Overrides TDLib file queries for deterministic host tests.
   @visibleForTesting
   final TdVideoStreamQuery? streamQuery;
 
-  /// Overrides native thumbnail generation for deterministic host tests.
   @visibleForTesting
   final FVideoThumbnailProvider? thumbnailProvider;
 
@@ -521,9 +500,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
   };
   final LayerLink _modeButtonLink = LayerLink();
   static const _resumePrefix = 'mithka.video.resume.';
-  // Every step costs a full SharedPreferences serialization plus a platform
-  // round trip, so the tick is coarse; the exit paths and the lifecycle hook
-  // below force a save, which is what actually makes the position durable.
   static const _resumeSaveStep = Duration(seconds: 15);
   static const _resumeMinimum = Duration(seconds: 3);
   static const _resumeEndSlack = Duration(seconds: 8);
@@ -579,8 +555,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appInForeground = state == AppLifecycleState.resumed;
     _syncStreamStallRecovery(_controller?.value);
-    // Leaving the app is where the resume position has to become durable: the
-    // process may never be resumed, and the periodic save is coarse.
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
@@ -714,9 +688,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
         );
     var attemptedPlatformView = preferredViewType == VideoViewType.platformView;
     if (!initialized && mounted) {
-      // A player probe can still lose a TDLib request race to an existing
-      // download from another view. Revalidate the bootstrap ranges and retry
-      // inside this route instead of requiring the user to close and reopen it.
       prepared = await server.prepareForPlayback();
       if (prepared && mounted) {
         final viewType =
@@ -1386,8 +1357,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
     }
   }
 
-  // TDLib recovery, resume persistence, and native PiP remain host-owned. The
-  // reusable player independently refreshes its chrome at a throttled cadence.
   void _onTick() {
     final value = _controller?.value;
     if (value != null && !value.hasError) {
@@ -1473,8 +1442,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
     });
   }
 
-  /// Keep the screen awake while the video is actively playing; release the
-  /// wakelock when paused or finished so the system idle timer resumes.
   void _updateWakelock() {
     final c = _controller;
     final shouldKeepAwake =
@@ -1670,8 +1637,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
     }
     final actual = current.fraction;
     if (actual > 0.01) _lastAudibleVolume = actual;
-    // Preserve an explicitly muted playback snapshot while remembering the
-    // system level that the unmute action should restore.
     if (_volume <= 0.01) return;
     await controller.setVolume(1);
     if (!mounted ||
@@ -1932,8 +1897,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
       return false;
     }
     if (FVideoPictureInPicture.keepsFlutterPlayerInActivity) {
-      // Android PiP hosts this Activity. Keep the Flutter route and its video
-      // texture mounted so the system captures the active player, not chat.
       _handleFVideoPictureInPictureEntered(
         FVideoPictureInPictureSnapshot(
           position: c.value.position,
@@ -2149,8 +2112,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
     required Future<bool>? pendingPiPStart,
     required TdVideoStreamServer? streamServer,
   }) async {
-    // A prepared native PiP session may still retain the player's texture.
-    // Release that platform session before disposing the Flutter controller.
     if (pendingPiPPreparation != null) {
       try {
         await pendingPiPPreparation;
@@ -2383,8 +2344,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
   Widget _playerChrome(BuildContext context, FVideoChromeScope scope) {
     _reusablePlayerActions = scope.actions;
     return GestureDetector(
-      // Text and decorative chrome can hit-test without handling taps. Let
-      // their taps dismiss controls while buttons/sliders keep their gestures.
       onTap: () => _dismissMenusAndControls(scope: scope),
       child: _playerFullscreenChrome(context, scope),
     );
@@ -3311,13 +3270,9 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
       _movePlayerMenuFocus(HardwareKeyboard.instance.isShiftPressed ? -1 : 1);
       return KeyEventResult.handled;
     }
-    // The focused menu item owns activation. Its inner Shortcuts widget sees
-    // these before this ancestor and invokes the corresponding action.
     if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.space) {
       return KeyEventResult.ignored;
     }
-    // Do not let playback, seeking, volume, or presentation shortcuts run
-    // underneath an open application menu.
     return KeyEventResult.handled;
   }
 
@@ -4806,9 +4761,6 @@ class _VideoPlayerViewState extends State<VideoPlayerView>
   Future<void> _enterPictureInPicture() async {
     if (_systemPiPBusy) return;
     setState(() => _systemPiPBusy = true);
-    // Prefer the native backend only after it has confirmed support. When a
-    // presentation switch callback is available it remains the deterministic
-    // fallback (including while support probing is still in flight).
     if (_systemPiPSupported ||
         (widget.onSwitchMode == null &&
             FVideoPictureInPicture.isSupportedPlatform)) {
@@ -6104,8 +6056,6 @@ class _HandyVideoTimelineState extends State<_HandyVideoTimeline> {
     try {
       await widget.scope.actions.endScrub(fraction);
     } catch (_) {
-      // The player owns command errors; always release this timeline's scrub
-      // preview so the controls remain usable after a failed seek.
     } finally {
       if (mounted && generation == _scrubGeneration) {
         setState(() {

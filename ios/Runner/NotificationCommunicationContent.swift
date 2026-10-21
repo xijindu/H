@@ -5,8 +5,6 @@ import UserNotifications
 
 let mithkaNotificationAppGroup = "group.org.handy.app.notifications"
 
-/// Keys the service extension stamps onto a delivered notification so the tap
-/// that follows knows which account it belongs to.
 let accountSlotUserInfoKey = "handy_account_slot"
 let accountUserIdUserInfoKey = "handy_account_user_id"
 
@@ -49,9 +47,6 @@ struct CommunicationNotificationInformation {
       if groupConversation {
         intent.setImage(avatar, forParameterNamed: \.speakableGroupName)
       } else {
-        // Keep the image on both INPerson and the intent parameter. The latter
-        // survives intent serialization on iOS versions that otherwise drop
-        // an image created from application-container data.
         intent.setImage(avatar, forParameterNamed: \.sender)
       }
     }
@@ -62,21 +57,11 @@ struct CommunicationNotificationInformation {
     let intent = messageIntent()
     let interaction = INInteraction(intent: intent, response: nil)
     interaction.direction = .incoming
-    // Donation improves Focus and suggestions, but enrichment itself can still
-    // produce the communication avatar if donation is temporarily unavailable.
     try? await interaction.donate()
     return try content.updating(from: intent)
   }
 }
 
-/// The account each signed-in user id occupies, shared with the notification
-/// service extension.
-///
-/// A Telegram push names its account by user id; the slot is Mithka's own
-/// numbering and only the app knows it. Recording the map here lets the
-/// extension stamp the slot onto a notification as it is delivered, so a tap
-/// that cold-starts the app already knows which account the chat id belongs
-/// to — the app's own registry is empty at that point.
 enum NotificationAccountStore {
   private static let key = "accountSlotsByUserId"
 
@@ -117,8 +102,6 @@ enum NotificationAvatarStore {
       try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
       pruneIfNeeded(in: url.deletingLastPathComponent())
     } catch {
-      // The in-process notification can still use the normalized data even if
-      // an app-group entitlement or a temporary file operation is unavailable.
     }
     return data
   }

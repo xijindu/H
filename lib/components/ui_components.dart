@@ -1,11 +1,3 @@
-//
-//  ui_components.dart
-//
-//  Reusable reference-styled building blocks. People use circular avatars;
-//  groups use rounded squares. Bubbles have a small tail. Port of the Swift
-//  `UIComponents` (NavHeader, badges, dividers, separators, bubble shape).
-//
-
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -22,13 +14,6 @@ import '../theme/theme_controller.dart';
 import 'app_icons.dart';
 import 'app_interactive_surface.dart';
 
-/// Marks only the first route hosted by the settings split-detail pane.
-///
-/// Its first route is selected by the sidebar rather than pushed by history,
-/// so a back control is invalid there. Routes subsequently pushed inside the
-/// same navigator do not inherit this route-local marker and retain normal
-/// back navigation. Keeping the marker inside the route also avoids mistaking
-/// the Settings window's outer navigation history for detail-pane history.
 class SettingsSplitPaneScope extends InheritedWidget {
   const SettingsSplitPaneScope({super.key, required super.child});
 
@@ -42,11 +27,6 @@ class SettingsSplitPaneScope extends InheritedWidget {
   bool updateShouldNotify(SettingsSplitPaneScope oldWidget) => false;
 }
 
-/// Shared shell for every settings destination.
-///
-/// The header and grouped background are deliberately owned here so a page
-/// cannot drift by rebuilding those pieces. The child supplies its scroll
-/// behavior.
 class SettingsPageScaffold extends StatelessWidget {
   const SettingsPageScaffold({
     super.key,
@@ -68,10 +48,6 @@ class SettingsPageScaffold extends StatelessWidget {
   final VoidCallback? onTrailing;
   final Widget? trailing;
 
-  /// The shell still verifies navigator history before it renders the control,
-  /// so a destination with a title but no history gets no dead back chevron,
-  /// while the same widget on a pushed route gets its back action
-  /// automatically.
   final bool showBackButton;
   final bool resizeToAvoidBottomInset;
   final Widget? bottomNavigationBar;
@@ -105,7 +81,6 @@ class SettingsPageScaffold extends StatelessWidget {
   }
 }
 
-/// Canonical scrolling body for settings pages.
 class SettingsListView extends StatelessWidget {
   const SettingsListView({
     super.key,
@@ -132,10 +107,6 @@ class SettingsListView extends StatelessWidget {
   );
 }
 
-/// Project-owned search control shared by settings indexes and selectors.
-///
-/// It intentionally owns the glyphs, fill, radius, height and clear affordance
-/// so platform search widgets cannot introduce a second icon set or padding.
 class SettingsSearchField extends StatelessWidget {
   const SettingsSearchField({
     super.key,
@@ -233,7 +204,6 @@ class SettingsSearchField extends StatelessWidget {
   }
 }
 
-/// Text action for the trailing side of [SettingsPageScaffold]'s header.
 class SettingsHeaderAction extends StatelessWidget {
   const SettingsHeaderAction({
     super.key,
@@ -275,8 +245,6 @@ class SettingsHeaderAction extends StatelessWidget {
   }
 }
 
-/// Flat reference-style header bar: optional back chevron, leading title,
-/// optional trailing icon.
 class NavHeader extends StatelessWidget {
   const NavHeader({
     super.key,
@@ -376,7 +344,6 @@ class NavHeader extends StatelessWidget {
   }
 }
 
-/// Unread-count pill. Muted/archived chats use the neutral gray variant.
 class UnreadBadge extends StatefulWidget {
   const UnreadBadge({
     super.key,
@@ -573,9 +540,6 @@ class _UnreadBadgeState extends State<UnreadBadge> {
     );
   }
 
-  // The badge width needs a text measurement, and every unread row asks for one
-  // on every rebuild. The label set is tiny ('1'..'99+') and the painter does no
-  // scaling, so the layout result is bit-identical per (label, direction).
   static final Map<(String, TextDirection), Size> _sizeCache = {};
 
   Size _visualSize(BuildContext context, String label) {
@@ -627,9 +591,6 @@ class _UnreadBadgeBody extends StatelessWidget {
       child: Text(
         label,
         style: AppTextStyle.caption(
-          // Telegram stores the counter's label colour alongside its fill
-          // (chats_unreadCounterText), so a theme can darken it for a pale
-          // badge instead of being stuck with white.
           context.colors.badgeText,
           weight: AppTextWeight.semibold,
         ),
@@ -694,7 +655,6 @@ class _UnreadBadgeMorphPainter extends CustomPainter {
       oldDelegate.broken != broken;
 }
 
-/// Group role tag: owner = yellow, admin = teal, member = purple, channel = pink.
 class RoleTag extends StatelessWidget {
   const RoleTag({
     super.key,
@@ -766,7 +726,6 @@ class RoleTag extends StatelessWidget {
   }
 }
 
-/// Small solid dot (muted unread indicator / tab markers).
 class RedDot extends StatelessWidget {
   const RedDot({super.key, this.size = 9, this.muted = false});
   final double size;
@@ -782,7 +741,6 @@ class RedDot extends StatelessWidget {
   );
 }
 
-/// Thin inset list divider.
 class InsetDivider extends StatelessWidget {
   const InsetDivider({super.key, this.leadingInset = 76});
   final double leadingInset;
@@ -793,11 +751,6 @@ class InsetDivider extends StatelessWidget {
   );
 }
 
-/// Divider aligned with the title column of a canonical settings row.
-///
-/// Use [SettingsDivider.text] for a text-only selection list. Keeping these
-/// two alignments named prevents pages from inventing nearly-identical magic
-/// numbers such as 47, 48, 52, 54, 58, or 62.
 class SettingsDivider extends StatelessWidget {
   const SettingsDivider({super.key})
     : leadingInset = AppMetric.settingsIconDividerInset;
@@ -812,22 +765,13 @@ class SettingsDivider extends StatelessWidget {
       InsetDivider(leadingInset: leadingInset);
 }
 
-/// Standard grouped settings card. Use this for left-label/right-value rows
-/// instead of duplicating per-screen private `_settingsCard` variants.
-/// Label above a group of settings rows.
-///
-/// Every settings screen used to define its own: sixteen private copies under
-/// five names, with three paddings, two sizes, two colours, and one that
-/// uppercased its text. This is the one shape they all share.
 class SettingsSectionHeader extends StatelessWidget {
-  /// [titleKey] is an `AppStringKeys` constant.
   const SettingsSectionHeader(this.titleKey, {super.key, this.text, this.color})
     : assert(
         titleKey != null || text != null,
         'a section header needs a key or literal text',
       );
 
-  /// For a label that is data rather than copy — a folder name, say.
   const SettingsSectionHeader.text(String this.text, {super.key, this.color})
     : titleKey = null;
 
@@ -867,7 +811,6 @@ class SettingsCard extends StatelessWidget {
     this.dividerInset = AppMetric.settingsIconDividerInset,
   });
 
-  /// A grouped row card that owns divider placement as well as its surface.
   const SettingsCard.rows({
     super.key,
     required List<Widget> rows,
@@ -906,8 +849,6 @@ class SettingsCard extends StatelessWidget {
   }
 }
 
-/// A complete settings section: optional label, canonical card, canonical
-/// row dividers. This is the preferred unit inside [SettingsListView].
 class SettingsSection extends StatelessWidget {
   const SettingsSection({
     super.key,
@@ -940,7 +881,6 @@ class SettingsSection extends StatelessWidget {
   );
 }
 
-/// Explanatory copy associated with the settings section immediately above.
 class SettingsNote extends StatelessWidget {
   const SettingsNote({super.key, required this.text});
 
@@ -963,12 +903,6 @@ class SettingsNote extends StatelessWidget {
   );
 }
 
-/// Card surface holding arbitrary content rather than a list of rows.
-///
-/// [SettingsCard] is a column of rows and clips to its own corners, which is
-/// wrong for a chart, a paragraph, a slider or a wrap of chips. Those used to
-/// hand-roll the same BoxDecoration, which is how the corner radius drifted
-/// across seven values in the first place.
 class SettingsPanel extends StatelessWidget {
   const SettingsPanel({
     super.key,
@@ -980,11 +914,9 @@ class SettingsPanel extends StatelessWidget {
 
   final Widget child;
 
-  /// Null leaves the child to manage its own insets, which several panels do.
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
 
-  /// Set when the child paints into the corners — a list or an image.
   final Clip clipBehavior;
 
   @override
@@ -1002,11 +934,6 @@ class SettingsPanel extends StatelessWidget {
   }
 }
 
-/// Standard line icon for a settings row.
-///
-/// Detail screens use one accent-coloured glyph treatment. The coloured tile
-/// remains available for the top-level settings index, where it distinguishes
-/// destinations rather than controls within one screen.
 class SettingsLeadingIcon extends StatelessWidget {
   const SettingsLeadingIcon({super.key, required this.icon, this.color});
 
@@ -1018,9 +945,6 @@ class SettingsLeadingIcon extends StatelessWidget {
       AppIcon(icon, size: AppIconSize.xl, color: color ?? AppTheme.brand);
 }
 
-/// Colored settings glyph tile used by the main settings list and nested
-/// settings menus. The 28 px tile has a 7 px radius and a centered 15 px white
-/// glyph, including on yellow and other light backgrounds.
 class SettingsIconTile extends StatelessWidget {
   const SettingsIconTile({
     super.key,
@@ -1084,9 +1008,6 @@ class SettingsRow extends StatelessWidget {
   final String? subtitle;
   final bool enabled;
 
-  /// The height a settings row of [height] actually resolves to. Exposed so a
-  /// hand-rolled row that has to line up with the settings rows around it can
-  /// read the rule instead of hard-coding a number.
   static double resolveHeight([double height = AppMetric.settingsRowHeight]) =>
       height;
 
@@ -1186,7 +1107,6 @@ class SettingsRow extends StatelessWidget {
   }
 }
 
-/// Project-native switch used instead of Material/Cupertino controls.
 class AppSwitch extends StatelessWidget {
   const AppSwitch({
     super.key,
@@ -1209,10 +1129,6 @@ class AppSwitch extends StatelessWidget {
     const padding = 2.0;
     const handleSize = 26.0;
     final trackColor = value ? c.linkBlue : c.textTertiary;
-    // The active handle sits on the accent, so it follows the theme's own
-    // on-accent token rather than the page brightness — a light accent needs a
-    // dark handle whatever the rest of the theme is doing. Off, the handle
-    // sits on the neutral track and stays white.
     final handleColor = value ? c.onAccent : const Color(0xFFFFFFFF);
     return AppInteractiveSurface(
       semanticLabel:
@@ -1265,8 +1181,6 @@ class AppSwitch extends StatelessWidget {
   }
 }
 
-/// Owned square selection control used where a persistent opt-in must be
-/// explicit. It intentionally does not inherit platform checkbox styling.
 class AppCheckbox extends StatelessWidget {
   const AppCheckbox({
     super.key,
@@ -1319,13 +1233,6 @@ class AppCheckbox extends StatelessWidget {
   }
 }
 
-/// Pill-shaped filter chip for a settings list's segmented header.
-///
-/// Data & Storage and Downloads each grew their own: different radii (8/18 vs
-/// 16), different selected fills (a neutral wash vs an accent tint), one
-/// density-aware and one not, one reachable by keyboard and screen reader and
-/// one a bare GestureDetector. This is the union of the better halves, so a
-/// new filter strip does not start a third dialect.
 class SettingsFilterChip extends StatelessWidget {
   const SettingsFilterChip({
     super.key,
@@ -1342,19 +1249,14 @@ class SettingsFilterChip extends StatelessWidget {
   final VoidCallback onTap;
   final AppIconData? icon;
 
-  /// Quiet secondary value after the label — a size, a count.
   final String? trailingLabel;
 
-  /// Fills the available width, for a strip that divides a row evenly rather
-  /// than sitting inline.
   final bool expand;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     final radius = BorderRadius.circular(18);
-    // Selected reads as the accent, not a grey wash, and takes it from the
-    // palette so an imported theme moves it.
     final foreground = selected ? c.linkBlue : c.textSecondary;
     final label$ = Text(
       label,
@@ -1380,8 +1282,6 @@ class SettingsFilterChip extends StatelessWidget {
         ),
         child: Row(
           mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
-          // A vertical rail wants its glyphs on one straight edge to scan;
-          // an inline chip centres its own content.
           mainAxisAlignment: expand
               ? MainAxisAlignment.start
               : MainAxisAlignment.center,
@@ -1427,12 +1327,8 @@ class SettingsSwitchRow extends StatelessWidget {
   final ValueChanged<bool> onChanged;
   final Widget? leading;
 
-  /// Explanatory line under the title, for a switch whose effect is not
-  /// obvious from its label alone.
   final String? subtitle;
 
-  /// A disabled row still reads, but dims and stops responding — used where
-  /// the platform, not the user, decides.
   final bool enabled;
 
   final double height;
@@ -1507,8 +1403,6 @@ class SettingsSwitchRow extends StatelessWidget {
   }
 }
 
-/// Project-owned activity glyph used instead of platform-styled progress
-/// indicators.
 class AppActivityIndicator extends StatefulWidget {
   const AppActivityIndicator({super.key, this.size = 26, this.color});
 
@@ -1535,7 +1429,6 @@ class _AppActivityIndicatorState extends State<AppActivityIndicator>
   @override
   Widget build(BuildContext context) => Semantics(
     label: AppStrings.t(AppStringKeys.topicChatLoading),
-    // Own layer, or the 60 Hz spin repaints whatever list or button hosts it.
     child: RepaintBoundary(
       child: AnimatedBuilder(
         animation: _controller,
@@ -1553,7 +1446,6 @@ class _AppActivityIndicatorState extends State<AppActivityIndicator>
   );
 }
 
-/// Project-owned determinate progress track.
 class AppProgressBar extends StatelessWidget {
   const AppProgressBar({super.key, required this.value, this.height = 3});
 
@@ -1590,8 +1482,6 @@ class AppProgressBar extends StatelessWidget {
   }
 }
 
-/// Project-owned single-value scrubber with pointer, keyboard and assistive
-/// technology adjustment contracts.
 class AppValueScrubber extends StatelessWidget {
   const AppValueScrubber({
     super.key,
@@ -1617,7 +1507,6 @@ class AppValueScrubber extends StatelessWidget {
   final double? step;
   final FocusNode? focusNode;
 
-  /// Slimmer track and thumb, for a scrubber sitting inline in a toolbar.
   final bool compact;
 
   @override
@@ -1725,7 +1614,6 @@ class AppValueScrubber extends StatelessWidget {
   );
 }
 
-/// Project-owned two-thumb scrubber for lossless trim bounds.
 class AppRangeScrubber extends StatefulWidget {
   const AppRangeScrubber({
     super.key,
@@ -1914,7 +1802,6 @@ const Map<ShortcutActivator, Intent> _scrubberShortcuts = {
   SingleActivator(LogicalKeyboardKey.arrowUp): _ScrubberAdjustIntent(1),
 };
 
-/// Centered gray timestamp separator in a conversation.
 class TimeSeparator extends StatelessWidget {
   const TimeSeparator({super.key, required this.unix});
   final int unix;
@@ -1940,7 +1827,6 @@ class TimeSeparator extends StatelessWidget {
   }
 }
 
-/// Centered system/service banner (joins, pins, friendship notes).
 class SystemBanner extends StatelessWidget {
   const SystemBanner({super.key, required this.text});
   final String text;
@@ -1969,16 +1855,11 @@ class SystemBanner extends StatelessWidget {
   }
 }
 
-/// Opaque semantic plate used for service events and date separators. Keeping
-/// the plate opaque makes contrast deterministic even over bright or detailed
-/// wallpapers.
 Color servicePlateBackground(AppColors colors) =>
     colors.bubbleIncoming.withValues(alpha: 1);
 
 Color servicePlateForeground(Color plate) => readableForeground(plate);
 
-/// Chat-list preview: optional gray sender prefix + message, with a few "alert"
-/// tags colored red.
 class ChatPreviewText extends StatelessWidget {
   const ChatPreviewText({
     super.key,
@@ -1990,7 +1871,7 @@ class ChatPreviewText extends StatelessWidget {
   });
   final String? sender;
   final String message;
-  final bool draft; // render a red "[草稿]" prefix and ignore sender
+  final bool draft;
   final String? alertPrefix;
   final double fontSize;
 

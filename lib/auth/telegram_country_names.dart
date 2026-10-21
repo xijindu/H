@@ -3,12 +3,6 @@
 typedef TelegramCountryNamesQuery =
     Future<Map<String, dynamic>> Function(Map<String, dynamic> request);
 
-/// Country names returned by Telegram for the active TDLib language.
-///
-/// Telegram iOS requests `help.getCountriesList` with the current language
-/// code. TDLib's `getCountries` exposes that same server-maintained list, so we
-/// use its localized `name` and retain the bundled names only as an offline
-/// fallback.
 class TelegramCountryNames {
   TelegramCountryNames({
     required TelegramCountryNamesQuery query,

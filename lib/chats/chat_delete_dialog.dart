@@ -7,8 +7,6 @@ import '../theme/app_motion.dart';
 import '../theme/app_theme.dart';
 import 'chat_delete_policy.dart';
 
-/// Selects who a chat deletion affects. The scope choice is deliberately kept
-/// separate from the final irreversible confirmation.
 Future<ChatDeleteScope?> showChatDeleteScopeDialog(
   BuildContext context, {
   required ChatDeleteCapabilities capabilities,
@@ -48,9 +46,6 @@ Future<ChatDeleteScope?> showChatDeleteScopeDialog(
   );
 }
 
-/// Requires both a deletion-scope decision and a distinct final confirmation.
-/// Saved Messages is a self-chat, so it receives two dedicated clear prompts
-/// rather than the irrelevant self/all-users scope chooser.
 Future<ChatDeleteScope?> showTwoStepChatDeleteDialog(
   BuildContext context, {
   required ChatDeleteCapabilities capabilities,
@@ -115,7 +110,6 @@ Future<ChatDeleteScope?> showTwoStepChatDeleteDialog(
   return confirmed ? scope : null;
 }
 
-/// The common two-stage gate used by destructive chat-history operations.
 Future<bool> showTwoStepDestructiveConfirmation(
   BuildContext context, {
   required String firstTitle,

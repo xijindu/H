@@ -1,10 +1,4 @@
-﻿//
-//  archived_chats_view.dart
-//
-//  Telegram archived chats folded behind the group assistant entry.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../app/app_navigator.dart';
@@ -65,13 +59,6 @@ class ArchivedChatsRow extends StatelessWidget {
   }
 }
 
-/// [ArchivedChatsView] kept in step with the chat list model.
-///
-/// The view itself renders the list it is handed, which suits the split layout
-/// because that pane rebuilds whenever its owner does. A pushed route has no
-/// such owner: clearing a row's badge updates the model, but the route kept
-/// rendering the snapshot it was built with, so the counter only disappeared
-/// when the screen was reopened.
 class LiveArchivedChatsView extends StatelessWidget {
   const LiveArchivedChatsView({
     super.key,

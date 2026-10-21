@@ -1,13 +1,7 @@
 ﻿import '../tdlib/td_models.dart';
 
-/// TDLib exposes yet-unsent messages with a normal positive ID plus
-/// `sending_state`; the state, not the ID sign, is authoritative.
 bool isPendingChatMessage(ChatMessage message) => message.isSending;
 
-/// Server history follows TDLib message IDs. A pending outgoing message still
-/// has a temporary ID, so compare it by its displayed send time instead of
-/// forcing it after every server message. That keeps a 10:52 live update below
-/// outgoing messages shown at 10:51 while upload/send completion is pending.
 int compareChatMessagesChronologically(ChatMessage a, ChatMessage b) {
   if (isPendingChatMessage(a) || isPendingChatMessage(b)) {
     final byDate = a.date.compareTo(b.date);
@@ -16,7 +10,6 @@ int compareChatMessagesChronologically(ChatMessage a, ChatMessage b) {
   return a.id.compareTo(b.id);
 }
 
-/// Highest server-assigned ID, ignoring local pending messages.
 int latestServerMessageId(Iterable<ChatMessage> messages) {
   var latest = 0;
   for (final message in messages) {
@@ -29,8 +22,6 @@ int latestServerMessageId(Iterable<ChatMessage> messages) {
   return latest;
 }
 
-/// Latest server ID visible to the transcript, falling back to the complete
-/// loaded window when filtering leaves only local pending messages.
 int latestServerMessageReadBoundary({
   required Iterable<ChatMessage> visibleMessages,
   required Iterable<ChatMessage> allMessages,
@@ -39,7 +30,6 @@ int latestServerMessageReadBoundary({
   return visible > 0 ? visible : latestServerMessageId(allMessages);
 }
 
-/// Pending local sends cannot have been acknowledged by the peer yet.
 bool isOutgoingServerMessageRead({
   required ChatMessage message,
   required int lastReadOutboxId,
@@ -50,21 +40,15 @@ bool isOutgoingServerMessageRead({
       message.id <= lastReadOutboxId;
 }
 
-/// Only an empty remote history page proves that no older page exists.
 bool confirmsOlderHistoryExhausted({required bool onlyLocal}) {
   return !onlyLocal;
 }
 
-/// Chat-list preview / cold local cache often yields a single bubble. Windows
-/// thinner than this must await a remote page before the transcript is marked
-/// ready, otherwise the UI settles on the preview until the user scrolls.
 const kThinInitialHistoryMessageCount = 12;
 
 bool isThinInitialHistoryWindow(int messageCount) =>
     messageCount > 0 && messageCount < kThinInitialHistoryMessageCount;
 
-/// Caught-up chats should open on the latest window. Around-last-read is only
-/// for chats that still have unread inbox messages.
 bool shouldLoadInitialHistoryAroundLastRead({
   required bool openAtLatest,
   required int lastReadInboxId,
@@ -100,13 +84,6 @@ List<ChatMessage> mergeChatMessages(
   return byId.values.toList()..sort(compareChatMessagesChronologically);
 }
 
-/// Applies the result of a history request that was started while live message
-/// updates could still arrive.
-///
-/// A foreground/background hydration request must merge into the visible
-/// transcript. An explicit jump may replace the old window, but still keeps
-/// messages that arrived after the request began so its late response cannot
-/// erase live updates.
 List<ChatMessage> mergeChatHistoryWindow({
   required Iterable<ChatMessage> currentAtRequestStart,
   required Iterable<ChatMessage> currentAtCompletion,
@@ -138,15 +115,10 @@ List<ChatMessage> mergeChatHistoryWindow({
   );
 }
 
-/// Whether a live message can be appended without creating a disconnected
-/// transcript (an older history window followed directly by the newest item).
 bool shouldMergeLiveMessageIntoChatWindow({
   required bool historyReachesLatest,
 }) => historyReachesLatest;
 
-/// Media kinds that have a dedicated multi-item presentation in the chat
-/// transcript. Telegram permits photos/videos to share an album, while
-/// documents form document-only albums.
 enum ChatMediaAlbumKind { visual, document }
 
 ChatMediaAlbumKind? chatMediaAlbumKind(ChatMessage message) {
@@ -158,9 +130,6 @@ ChatMediaAlbumKind? chatMediaAlbumKind(ChatMessage message) {
   return null;
 }
 
-/// Whether two adjacent messages are members of the same renderable TDLib
-/// media album. A non-zero `media_album_id` is authoritative; timestamps alone
-/// must never merge unrelated files sent consecutively.
 bool areMessagesInSameMediaAlbum(ChatMessage previous, ChatMessage next) {
   final previousKind = chatMediaAlbumKind(previous);
   if (previousKind == null || previousKind != chatMediaAlbumKind(next)) {

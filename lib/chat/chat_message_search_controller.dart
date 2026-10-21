@@ -1,14 +1,4 @@
-﻿//
-//  chat_message_search_controller.dart
-//
-//  In-chat message search. The transcript never leaves the screen, so this
-//  owns only the query, the paged `searchChatMessages` results, and the cursor
-//  the search header, navigator, and results pane step through. Moving the
-//  transcript to a hit stays the chat view's job; the controller announces it
-//  through [ChatMessageSearchController.onActivateResult].
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -22,12 +12,8 @@ import '../tdlib/td_client.dart';
 import '../tdlib/td_models.dart';
 import 'chat_search_query.dart';
 
-/// Width of the trailing results pane in a wide chat.
 const double chatSearchResultsPaneWidth = 300;
 
-/// A wide chat lists every hit beside the transcript and keeps the composer;
-/// anything narrower steps through hits from a bottom navigator so the
-/// transcript keeps the full width.
 bool chatSearchUsesResultsPane({
   required Size windowSize,
   required double conversationWidth,
@@ -37,8 +23,6 @@ bool chatSearchUsesResultsPane({
     usesSplitSelectionLayout(windowSize, platform: platform, isWeb: isWeb) &&
     conversationWidth >= chatSearchResultsPaneWidth + splitDetailMinWidth;
 
-/// Splits [text] around every occurrence of [query] so a result row can weight
-/// the matched runs. Returns a single unstyled span when nothing matches.
 List<InlineSpan> chatSearchHighlightSpans({
   required String text,
   required String query,
@@ -62,10 +46,6 @@ List<InlineSpan> chatSearchHighlightSpans({
   return spans.isEmpty ? [TextSpan(text: text)] : spans;
 }
 
-/// The kinds of message an in-chat search can narrow to.
-///
-/// Labels and TDLib filter names are the ones global search already uses, so a
-/// chat's filter strip reads the same as the search screen's category tabs.
 enum ChatSearchFilter {
   all,
   media,
@@ -93,8 +73,6 @@ enum ChatSearchFilter {
   };
 }
 
-/// Sender identity for a hit, resolved once per sender and shared by every
-/// result row that quotes them.
 class _SearchSender {
   const _SearchSender({required this.name, this.photo});
 
@@ -102,11 +80,6 @@ class _SearchSender {
   final TdFileRef? photo;
 }
 
-/// Query, results, and cursor for search inside one open chat.
-///
-/// Results arrive newest-first, matching TDLib. "Older" therefore walks
-/// forward through [results] and "newer" walks back, which is also the
-/// direction the up/down controls point in the transcript.
 class ChatMessageSearchController extends ChangeNotifier {
   ChatMessageSearchController({
     required this.chatId,
@@ -121,19 +94,9 @@ class ChatMessageSearchController extends ChangeNotifier {
   final int chatId;
   final TdClient _client;
 
-  /// Called whenever the cursor lands on a hit.
-  ///
-  /// `automatic` marks the landing a fresh query performs on its own, which a
-  /// caller must treat differently from a deliberate step: it happens on every
-  /// keystroke's worth of results.
   final void Function(ChatMessage message, {required bool automatic})?
   onActivateResult;
 
-  /// Whether a fresh query moves the cursor to its newest hit.
-  ///
-  /// A transcript wants that — the view follows what was typed. A surface that
-  /// only lists hits does not: there is nothing to follow, and a marked first
-  /// row would read as a choice the user did not make.
   final bool autoActivateFirstResult;
 
   final TextEditingController textController = TextEditingController();
@@ -160,8 +123,6 @@ class ChatMessageSearchController extends ChangeNotifier {
   );
   ChatSearchActiveToken? _activeToken;
 
-  /// Picked from the suggestion list rather than typed; it outlives the text,
-  /// because its token has been taken out of it.
   _SearchSenderFilter? _committedSender;
   List<ChatSearchTokenSuggestion> _suggestions = const [];
   int _suggestRunId = 0;
@@ -176,28 +137,19 @@ class ChatMessageSearchController extends ChangeNotifier {
       : null;
   int? get activeMessageId => activeResult?.id;
 
-  /// The filter in force: a `has:` token wins over the chip while it is typed,
-  /// because it is the more specific thing the user just said.
   ChatSearchFilter get filter => _tokens.filter ?? _filter;
 
-  /// The resolved `from:` sender, once a member matched the token.
   int? get senderUserId => (_committedSender ?? _senderFilter)?.userId;
   String? get senderName => (_committedSender ?? _senderFilter)?.name;
 
-  /// The `from:` text as typed, resolved or not.
   String? get senderQuery => _tokens.fromQuery;
 
-  /// The token the caret is in, if it is one that offers suggestions.
   ChatSearchActiveToken? get activeToken => _activeToken;
   List<ChatSearchTokenSuggestion> get suggestions => _suggestions;
 
-  /// A run is in flight, or one is queued behind the debounce.
   bool get isLoading => _loading || _debounce?.isActive == true;
   bool get hasQuery => _query.trim().isNotEmpty;
 
-  /// Whether anything is being searched for. A narrowed filter or a `from:`
-  /// sender counts on its own — "every photo Bob sent" is a useful result set
-  /// with no words typed.
   bool get hasSearch =>
       _tokens.text.trim().isNotEmpty ||
       filter != ChatSearchFilter.all ||
@@ -205,11 +157,8 @@ class ChatMessageSearchController extends ChangeNotifier {
   bool get hasResults => _results.isNotEmpty;
   bool get hasMore => _nextFromMessageId != 0;
 
-  /// TDLib reports the full match count even while only the first page is
-  /// loaded; a short or exhausted response can still exceed it.
   int get matchCount => math.max(_totalCount, _results.length);
 
-  /// The cursor's 1-based position, or 0 before anything is selected.
   int get matchPosition => _activeIndex < 0 ? 0 : _activeIndex + 1;
 
   bool get canStepOlder =>
@@ -263,14 +212,11 @@ class ChatMessageSearchController extends ChangeNotifier {
     _query = value;
     _tokens = parseChatSearchQuery(value);
     final caret = textController.selection.baseOffset;
-    // `in:` means nothing inside one chat — the chat is already decided — so
-    // only a sender token offers suggestions here.
     final token = activeChatSearchToken(
       value,
       caret < 0 ? value.length : caret,
     );
     _activeToken = token?.kind == ChatSearchTokenKind.from ? token : null;
-    // A sender resolved for a different token no longer applies.
     if (_senderFilter?.query != _tokens.fromQuery) _senderFilter = null;
     _startSuggestions();
     _restart();
@@ -284,10 +230,6 @@ class ChatMessageSearchController extends ChangeNotifier {
       _suggestions = const [];
       return;
     }
-    // Every keystroke inside a `from:` token fans out into searchChatMembers
-    // plus one round trip per candidate id, so coalesce it the way the message
-    // search itself is. An empty token is the affordance shown the moment
-    // `from:` is typed, and it has nothing to coalesce, so it stays immediate.
     if (token.value.isEmpty) {
       _fetchSuggestions(token, runId);
       return;
@@ -307,12 +249,9 @@ class ChatMessageSearchController extends ChangeNotifier {
     }());
   }
 
-  /// Whether the field is asking to be taught its syntax: focused, empty, and
-  /// carrying no filter yet.
   bool get showsTokenHints =>
       focusNode.hasFocus && !hasSearch && _senderFilter == null;
 
-  /// Starts a token in the field from the hint list.
   void startToken(String token) {
     if (_disposed) return;
     final text = _query.isEmpty || _query.endsWith(' ')
@@ -326,8 +265,6 @@ class ChatMessageSearchController extends ChangeNotifier {
     updateQuery(text);
   }
 
-  /// Commits a picked suggestion to a badge and takes its text out of the
-  /// field, so the filter is stated once rather than twice.
   void applySuggestion(ChatSearchTokenSuggestion suggestion) {
     final token = _activeToken;
     if (_disposed || token == null) return;
@@ -345,16 +282,12 @@ class ChatMessageSearchController extends ChangeNotifier {
     updateQuery(applied.text);
   }
 
-  /// Narrows the search to one kind of message, keeping whatever is typed.
   void setFilter(ChatSearchFilter filter) {
     if (_disposed || filter == _filter) return;
     _filter = filter;
     _restart();
   }
 
-  /// Drops the current results and queues a fresh first page. Hits from the
-  /// previous query or filter describe a different set, so they are discarded
-  /// rather than filtered down.
   void _restart() {
     _cancelRun();
     _results = const [];
@@ -373,7 +306,6 @@ class ChatMessageSearchController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Drops the committed `from:` badge.
   void clearSender() {
     if (_disposed || _committedSender == null) return;
     _committedSender = null;
@@ -388,8 +320,6 @@ class ChatMessageSearchController extends ChangeNotifier {
     focusNode.requestFocus();
   }
 
-  /// Moves the cursor to [index] and announces the hit. Out-of-range indexes
-  /// are ignored so callers can step without bounds-checking twice.
   void selectIndex(int index, {bool automatic = false}) {
     if (_disposed || index < 0 || index >= _results.length) return;
     _activeIndex = index;
@@ -402,8 +332,6 @@ class ChatMessageSearchController extends ChangeNotifier {
     if (index >= 0) selectIndex(index);
   }
 
-  /// Steps one hit further back in time, loading the next page first when the
-  /// cursor is sitting on the oldest loaded hit.
   Future<void> stepOlder() async {
     if (_disposed || _results.isEmpty) return;
     if (_activeIndex + 1 >= _results.length) {
@@ -439,8 +367,6 @@ class ChatMessageSearchController extends ChangeNotifier {
     if (_disposed || runId != _runId) return;
     _loading = true;
     notifyListeners();
-    // The sender has to be resolved before the first page, or the page would
-    // be run unfiltered and then replaced a moment later.
     await _resolveSenderFilter(runId);
     if (_disposed || runId != _runId) return;
     final page = await _fetchPage(trimmed, from: 0);
@@ -466,13 +392,9 @@ class ChatMessageSearchController extends ChangeNotifier {
     final grew = merged.length > _results.length;
     _results = List<ChatMessage>.unmodifiable(merged);
     _totalCount = page.totalCount;
-    // A page that adds nothing new cannot advance the cursor, so treat it as
-    // the end of the results rather than paging the same window forever.
     _nextFromMessageId = grew ? page.nextFromMessageId : 0;
     notifyListeners();
     unawaited(_hydrateSenders(page.messages, runId));
-    // Typing lands on the newest hit so the transcript follows the query
-    // without a second gesture; later pages never move the cursor.
     if (activateFirst && autoActivateFirstResult && _results.isNotEmpty) {
       selectIndex(0, automatic: true);
     }
@@ -499,9 +421,6 @@ class ChatMessageSearchController extends ChangeNotifier {
           .whereType<ChatMessage>()
           .where((message) => !message.isService)
           .toList(growable: false);
-      // A zero cursor means TDLib reached the beginning of the chat. Without
-      // one, the oldest hit in the page is the only usable cursor, and a short
-      // page is the only proof that paging is done.
       final nextFromMessageId =
           response.int64('next_from_message_id') ??
           (raw.length < _pageSize ? 0 : (messages.lastOrNull?.id ?? 0));
@@ -515,11 +434,6 @@ class ChatMessageSearchController extends ChangeNotifier {
     }
   }
 
-  /// Turns the `from:` text into a member of this chat.
-  ///
-  /// TDLib matches names and usernames itself, so the token behaves like the
-  /// member picker rather than an exact-name match. An unresolvable name
-  /// leaves the filter off — the search still runs on the remaining words.
   Future<void> _resolveSenderFilter(int runId) async {
     if (_committedSender != null) return;
     final query = _tokens.fromQuery;
@@ -558,8 +472,6 @@ class ChatMessageSearchController extends ChangeNotifier {
     }
   }
 
-  /// Search hits arrive without a resolved sender, so a group would otherwise
-  /// attribute every row to the chat itself.
   Future<void> _hydrateSenders(List<ChatMessage> batch, int runId) async {
     var changed = false;
     for (final message in batch) {
@@ -599,8 +511,6 @@ class ChatMessageSearchController extends ChangeNotifier {
         'chat_id': senderId,
       });
       final title = chat.str('title')?.trim();
-      // An untitled sender chat keeps the row's own peer-title fallback rather
-      // than showing a placeholder name.
       if (title == null || title.isEmpty) return null;
       return _SearchSender(
         name: title,
@@ -611,8 +521,6 @@ class ChatMessageSearchController extends ChangeNotifier {
     }
   }
 
-  /// Invalidates every in-flight page so a stale response can never repopulate
-  /// the list behind a newer query.
   void _cancelRun() {
     _debounce?.cancel();
     _debounce = null;
@@ -632,7 +540,6 @@ class ChatMessageSearchController extends ChangeNotifier {
   }
 }
 
-/// A `from:` token that resolved to a real member.
 class _SearchSenderFilter {
   const _SearchSenderFilter({
     required this.query,
@@ -640,7 +547,6 @@ class _SearchSenderFilter {
     required this.name,
   });
 
-  /// The token text this was resolved from, so a retyped name re-resolves.
   final String query;
   final int userId;
   final String name;

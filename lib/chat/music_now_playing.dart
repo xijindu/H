@@ -1,12 +1,3 @@
-//
-//  music_now_playing.dart
-//
-//  Publishes the app-wide music player to the system media controls: the iOS
-//  Control Center / lock screen (MPNowPlayingInfoCenter) and the Android
-//  media notification / lock screen (MediaSession). Remote commands from
-//  those surfaces are routed back into the player.
-//
-
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -16,7 +7,6 @@ import '../l10n/app_localizations.dart';
 import '../tdlib/td_image_loader.dart';
 import '../tdlib/td_models.dart';
 
-/// The player operations the system media controls can trigger.
 abstract interface class NowPlayingTarget implements Listenable {
   ChatMessage? get current;
   bool get isPlaying;
@@ -33,7 +23,6 @@ abstract interface class NowPlayingTarget implements Listenable {
   void closeWidget();
 }
 
-/// One snapshot of what the system controls should show.
 @immutable
 class NowPlayingState {
   const NowPlayingState({
@@ -64,7 +53,6 @@ class NowPlayingState {
     'positionMs': position.inMilliseconds,
     'playing': playing,
     'artworkPath': artworkPath,
-    // Android renders its own notification buttons and channel name.
     'labels': {
       'channel': AppStrings.t(AppStringKeys.profileDetailMusic),
       'play': AppStrings.t(AppStringKeys.musicPlayerPlay),
@@ -75,12 +63,6 @@ class NowPlayingState {
   };
 }
 
-/// Mirrors a [NowPlayingTarget] to the platform channel.
-///
-/// The player notifies several times a second while it plays. The system
-/// extrapolates elapsed time from the last position and the playback rate, so
-/// only track changes, play/pause, artwork and position jumps (seeks) are
-/// sent; steady progress is not.
 class MusicNowPlayingBridge {
   MusicNowPlayingBridge(
     this.target, {
@@ -92,8 +74,6 @@ class MusicNowPlayingBridge {
 
   static const channelName = 'mithka/now_playing';
 
-  /// Position drift beyond this, relative to the extrapolated elapsed time,
-  /// counts as a seek and is pushed to the system scrubber.
   static const seekTolerance = Duration(milliseconds: 1500);
 
   final NowPlayingTarget target;
@@ -108,10 +88,6 @@ class MusicNowPlayingBridge {
   int? _artworkFileId;
   String? _artworkPath;
 
-  /// Bumped whenever the cached artwork stops being valid: playback clears,
-  /// the bridge detaches, or another track takes over the cache. TDLib file
-  /// ids are per account, so a late artwork completion from an older
-  /// generation must never publish onto a reused file id.
   int _artworkGeneration = 0;
 
   static bool get _platformSupported =>
@@ -169,9 +145,6 @@ class MusicNowPlayingBridge {
       if (_visible) unawaited(_invoke('clear'));
       _visible = false;
       _published = null;
-      // Clearing playback also drops the cached cover: file ids are
-      // account-scoped, so the same id can later resolve a different
-      // account's artwork.
       _invalidateArtwork();
       return;
     }
@@ -192,8 +165,6 @@ class MusicNowPlayingBridge {
       album: target.playbackSourceTitle,
       duration: total,
       position: target.position,
-      // A track that is still resolving is about to play; showing it as
-      // paused would flash the wrong button on the lock screen.
       playing: target.isPlaying || target.isLoading,
       artworkPath: _artworkPath,
     );
@@ -232,9 +203,6 @@ class MusicNowPlayingBridge {
   Future<void> _loadArtwork(int fileId, TdFileRef cover) async {
     final generation = _artworkGeneration;
     final path = await _resolveArtwork(cover);
-    // Only the generation that started this load may publish it. After a
-    // clear the same file id can be reused by another account, whose cover
-    // must not be overwritten by the stale completion.
     if (!_attached ||
         _artworkFileId != fileId ||
         _artworkGeneration != generation ||
@@ -249,9 +217,6 @@ class MusicNowPlayingBridge {
     try {
       await channel.invokeMethod<void>(method, arguments);
     } on MissingPluginException {
-      // Tests run without the native bridge.
-    } on PlatformException {
-      // The system surface is best effort; playback must not depend on it.
-    }
+    } on PlatformException {}
   }
 }

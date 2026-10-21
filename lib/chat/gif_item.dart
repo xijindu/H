@@ -1,10 +1,4 @@
-﻿//
-//  gif_item.dart
-//
-//  A saved Telegram animation shown in the composer's GIF tab.
-//
-
-import '../tdlib/td_models.dart';
+﻿import '../tdlib/td_models.dart';
 
 class GifItem {
   const GifItem({
@@ -48,11 +42,8 @@ class GifItem {
 
 Map<String, dynamic> gifMessageContent(GifItem gif) => {
   '@type': 'inputMessageAnimation',
-  // The bundled TDLib schema carries file metadata in inputAnimation.
   'animation': {
     '@type': 'inputAnimation',
-    // Saved animations already belong to the active TDLib account. Reusing
-    // the account-local file id retains the file reference required to send.
     'animation': {'@type': 'inputFileId', 'id': gif.id},
     'duration': gif.duration,
     'width': gif.width,

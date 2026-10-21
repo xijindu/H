@@ -1,20 +1,4 @@
-﻿//
-//  update_checker.dart
-//
-//  In-app update check against the project's GitHub Releases, on the platforms
-//  Mithka distributes itself on. On launch it asks the latest release for its
-//  tag (semver) and assets, compares the tag to the installed version, and
-//  offers whatever that platform can act on:
-//
-//    Android — the APK for this device's ABI, handed to the browser.
-//
-//  iOS updates through the App Store and Google Play builds update through the
-//  store, so neither is offered a package from GitHub Releases. The repo is
-//  public, so the releases API needs no auth, and the launch check fails
-//  silently (offline / rate-limited).
-//
-
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -25,10 +9,6 @@ import '../app/app_version.dart';
 import '../components/confirm_dialog.dart';
 import 'release_feed.dart';
 
-/// What a manual check from About found.
-///
-/// [maybePrompt] fails silently because it runs unasked on launch. A check the
-/// user pressed has to say something either way.
 enum UpdateCheckOutcome { upToDate, updateAvailable, unavailable }
 
 class UpdateChecker {
@@ -38,43 +18,24 @@ class UpdateChecker {
   static const _channel = MethodChannel('handy/app_info');
   static bool _checkedThisLaunch = false;
 
-  /// Google Play builds update through the store and must not offer APKs from
-  /// GitHub Releases. The optional argument keeps the distribution rule easy
-  /// to verify without changing compile-time defines in the test process.
   static bool automaticChecksEnabled({
     bool isGooglePlayBuild = _isGooglePlayBuild,
   }) => !isGooglePlayBuild;
 
-  /// Whether this platform ships packages Mithka can offer from GitHub.
-  ///
-  /// The optional argument keeps the rule testable off the target platform.
   static bool platformSelfDistributes({bool isAndroid = false}) => isAndroid;
 
-  /// Checks once per launch and prompts when a newer build exists for this
-  /// device. Safe to call from any screen's first frame; no-op otherwise.
   static Future<void> maybePrompt(BuildContext context) async {
     if (!supportsManualCheck || _checkedThisLaunch) return;
     _checkedThisLaunch = true;
     try {
       await _check(context, unasked: true);
-    } catch (_) {
-      // Offline, rate-limited, or no release yet — silently skip.
-    }
+    } catch (_) {}
   }
 
-  /// Whether About shows a manual "check for updates" row.
-  ///
-  /// Same rule as the automatic check: only where Mithka distributes its own
-  /// packages, and never on a Play build, where the store owns updates.
   static bool get supportsManualCheck =>
       automaticChecksEnabled() &&
       platformSelfDistributes(isAndroid: Platform.isAndroid);
 
-  /// Runs a check the user asked for and reports what happened.
-  ///
-  /// Prompts exactly as the launch check does when a newer build exists, but a
-  /// missing package or a failed request is an answer here rather than
-  /// something to swallow.
   static Future<UpdateCheckOutcome> checkNow(BuildContext context) async {
     if (!supportsManualCheck) return UpdateCheckOutcome.unavailable;
     try {
@@ -104,7 +65,6 @@ class UpdateChecker {
     return UpdateCheckOutcome.updateAvailable;
   }
 
-  /// The running build's version, from the Android host or package metadata.
   static Future<String> _installedVersion() async {
     if (Platform.isAndroid) {
       final info = await _channel.invokeMethod<Map<dynamic, dynamic>>('info');
@@ -126,8 +86,6 @@ class UpdateChecker {
     final abis = await _deviceAbis();
     if (abis.isEmpty) return UpdateCheckOutcome.unavailable;
     final url = _apkFor(release, abis);
-    // A newer release with no APK for this architecture is not something the
-    // user can act on, so it is not reported as available.
     if (url == null) return UpdateCheckOutcome.unavailable;
     if (!context.mounted) return UpdateCheckOutcome.updateAvailable;
 
@@ -147,7 +105,6 @@ class UpdateChecker {
     return UpdateCheckOutcome.updateAvailable;
   }
 
-  /// The release's APK for the device's preferred ABI, first match wins.
   static String? _apkFor(ReleaseInfo release, List<String> abis) {
     for (final abi in abis) {
       for (final asset in release.assets) {

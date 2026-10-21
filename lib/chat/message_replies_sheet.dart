@@ -53,9 +53,6 @@ List<Map<String, dynamic>> replySheetSendCandidates(
       Map<String, dynamic>.from(request)..remove('message_thread_id'),
     );
   }
-  // A forum topic is an explicit destination, not optional metadata. If a
-  // scoped request is rejected, fail closed instead of replying in the chat's
-  // root conversation.
   if (request.obj('topic_id')?.type == 'messageTopicForum') {
     return candidates;
   }
@@ -1124,9 +1121,6 @@ class _MessageRepliesSheetState extends State<_MessageRepliesSheet> {
   }
 }
 
-/// A reply-sheet row that deliberately reuses the transcript renderer so
-/// attachments, entities, link previews, and structured rich messages cannot
-/// degrade to their list-preview labels on this surface.
 class MessageReplySheetItem extends StatelessWidget {
   const MessageReplySheetItem({
     super.key,

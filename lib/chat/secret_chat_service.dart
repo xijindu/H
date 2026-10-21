@@ -14,9 +14,6 @@ class SecretChatDestination {
   final String title;
 }
 
-/// Starts a TDLib-managed end-to-end encrypted chat and validates its result.
-/// TDLib creates and stores the encryption keys; this layer only routes UI to
-/// the returned chat.
 abstract final class SecretChatService {
   static SecretChatReadiness readiness(Map<String, dynamic>? secretChat) {
     return switch (secretChat?.obj('state')?.type) {

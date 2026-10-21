@@ -1,11 +1,3 @@
-//
-//  settings_view.dart
-//
-//  Settings are ordered by the task the user wants to complete. Telegram
-//  account controls and Mithka preferences keep direct, distinct destinations
-//  without making their implementation owner the top-level navigation.
-//
-
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -44,19 +36,12 @@ class SettingsView extends StatefulWidget {
     this.initialCategoryId,
   });
 
-  /// Used by Telegram's `settingsSectionSearch` internal link.
   final bool focusSearch;
 
-  /// Hides only the root Settings back affordance. Detail pages keep their
-  /// local back navigation.
   final bool showBackButton;
 
-  /// Account-slot backup/restore and logout own TDLib database lifecycle.
-  /// Callers that must not end the session can disable them.
   final bool allowSessionLifecycleActions;
 
-  /// Optional initial category to open a specific screen directly. Unknown
-  /// IDs fall back to General.
   final String? initialCategoryId;
 
   @override
@@ -68,13 +53,8 @@ class _SettingsViewState extends State<SettingsView> {
   final FocusNode _searchFocusNode = FocusNode();
   late String _selectedCategoryId;
 
-  /// The destination shown in the detail pane, once one has been chosen.
-  ///
-  /// Null means the category was selected but none of its children yet, which
-  /// only happens for a category the user just expanded.
   String? _selectedDestinationId;
 
-  /// Categories expanded in the sidebar. The selected one is always open.
   final Set<String> _expandedCategoryIds = <String>{};
 
   @override
@@ -230,9 +210,6 @@ class _SettingsViewState extends State<SettingsView> {
                             : _sidebarMatches(context, matches),
                       ),
                     ),
-                    // Signing out belongs to the account, not to any one
-                    // section, so it sits under the tree rather than inside a
-                    // category's screen.
                     if (widget.allowSessionLifecycleActions)
                       _sidebarLogOut(context),
                   ],
@@ -259,8 +236,6 @@ class _SettingsViewState extends State<SettingsView> {
 
   Widget _splitSidebarHeader(BuildContext context) {
     final c = context.colors;
-    // The enclosing SafeArea only clears the system inset; iPadOS floating
-    // windows additionally need clearance for the window controls.
     return Container(
       constraints: const BoxConstraints(minHeight: 58),
       padding: EdgeInsets.fromLTRB(
@@ -302,11 +277,6 @@ class _SettingsViewState extends State<SettingsView> {
     );
   }
 
-  /// The sidebar as a nested list: categories, each expanding in place to show
-  /// its own screens.
-  ///
-  /// A category holding a single screen is a leaf — expanding to reveal one
-  /// child that repeats its parent's name would be noise.
   List<Widget> _sidebarTree(
     BuildContext context,
     List<_SettingsCategory> categories,
@@ -324,7 +294,6 @@ class _SettingsViewState extends State<SettingsView> {
           key: ValueKey('settings-category-${category.id}'),
           label: category.titleKey.l10n(context),
           icon: category.icon,
-          // A leaf highlights only while its screen is the one on show.
           selected:
               isLeaf &&
               isSelectedCategory &&
@@ -354,8 +323,6 @@ class _SettingsViewState extends State<SettingsView> {
     return rows;
   }
 
-  /// Search replaces the tree with its matches; the grouping is not what the
-  /// user is navigating by at that point.
   List<Widget> _sidebarMatches(
     BuildContext context,
     List<_SettingsDestination> matches,
@@ -391,10 +358,6 @@ class _SettingsViewState extends State<SettingsView> {
     ];
   }
 
-  /// One sidebar row, at either level.
-  ///
-  /// [expanded] non-null draws a disclosure chevron, which is what separates a
-  /// category from a screen.
   Widget _sidebarRow(
     BuildContext context, {
     required Key key,
@@ -566,12 +529,7 @@ class _SettingsViewState extends State<SettingsView> {
     required String query,
     required List<_SettingsDestination> matches,
   }) {
-    // The sidebar now names every screen, so the detail pane shows the chosen
-    // one rather than a list that repeats what is already on the left.
     final chosen = _resolveSelected(selected, query: query, matches: matches);
-    // The placeholder stays outside the Navigator: its identity used to carry
-    // the raw search query, so every keystroke deactivated and re-inflated a
-    // whole nested Navigator + route subtree.
     if (chosen == null) {
       return KeyedSubtree(
         key: const ValueKey('settings-detail-empty'),
@@ -598,7 +556,6 @@ class _SettingsViewState extends State<SettingsView> {
     );
   }
 
-  /// The destination the detail pane should show, if any.
   _SettingsDestination? _resolveSelected(
     _SettingsCategory selected, {
     required String query,
@@ -609,7 +566,6 @@ class _SettingsViewState extends State<SettingsView> {
     for (final destination in pool) {
       if (destination.id == _selectedDestinationId) return destination;
     }
-    // A single-screen category needs no explicit pick to show its screen.
     if (query.isEmpty && pool.length == 1) return pool.single;
     return null;
   }

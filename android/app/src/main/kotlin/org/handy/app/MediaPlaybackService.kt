@@ -7,15 +7,6 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 
-/**
- * A started, same-process foreground service that hosts the music media
- * notification while playback is active.
- *
- * The notification itself is built by [NowPlayingPlugin] and re-posted on
- * every state change; this service only promotes it to a foreground one so
- * Android keeps the process (and with it flutter_sound's MediaPlayer) alive
- * while the app is backgrounded. It is stopped when playback is cleared.
- */
 class MediaPlaybackService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 

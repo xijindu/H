@@ -175,9 +175,6 @@ class ChatFolderService {
       if (id == null) continue;
       identified.add((id, info));
     }
-    // The folders are independent, and this reload runs on every
-    // updateChatFolders — awaiting them one at a time paid N round trips of
-    // latency per reorder.
     final raws = await Future.wait([
       for (final (id, _) in identified)
         _query({'@type': 'getChatFolder', 'chat_folder_id': id}),
@@ -227,7 +224,6 @@ class ChatFolderService {
   Future<Map<String, dynamic>> getFolder(int id) =>
       _query({'@type': 'getChatFolder', 'chat_folder_id': id});
 
-  /// Re-read before saving so a name/icon edit cannot overwrite newer rules.
   Future<void> editAppearance(int id, {String? title, String? iconName}) async {
     if (title == null && iconName == null) return;
     final folder = Map<String, dynamic>.of(await getFolder(id));

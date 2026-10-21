@@ -1,10 +1,5 @@
 ﻿import 'package:flutter/services.dart';
 
-/// Schedules iOS 15+ communication notifications through native SiriKit APIs.
-///
-/// A regular [DarwinNotificationAttachment] is expanded notification media; it
-/// does not become the circular conversation avatar. Native code must enrich
-/// the notification with an `INSendMessageIntent` for that presentation.
 class IOSCommunicationNotificationBridge {
   const IOSCommunicationNotificationBridge({
     this.channel = const MethodChannel('handy/communication_notifications'),
@@ -12,11 +7,6 @@ class IOSCommunicationNotificationBridge {
 
   final MethodChannel channel;
 
-  /// Publishes which slot each signed-in user id occupies.
-  ///
-  /// The notification service extension stamps the slot onto a push as it is
-  /// delivered, and it cannot ask the app at that moment — so the app tells it
-  /// in advance, whenever the set of accounts changes.
   Future<void> setAccountSlots(Map<int, int> slotsByUserId) =>
       channel.invokeMethod<void>('setAccountSlots', {
         for (final entry in slotsByUserId.entries) '${entry.key}': entry.value,

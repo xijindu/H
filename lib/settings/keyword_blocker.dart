@@ -1,11 +1,4 @@
-﻿//
-//  keyword_blocker.dart
-//
-//  Local keyword-based spam blocker. Keywords are stored in SharedPreferences
-//  and applied client-side to message text/notifications.
-//
-
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -23,9 +16,6 @@ class KeywordBlocker extends ChangeNotifier {
   List<String> _keywords = const [];
   String _listUrl = '';
   Set<int> _blockedSenderIds = const <int>{};
-  // matches() runs per keyword per message over the whole loaded transcript,
-  // so the rules are compiled and case-folded once per keyword-list change
-  // instead of once per test.
   List<RegExp> _compiledRules = const [];
   List<String> _plainLowered = const [];
 
@@ -47,8 +37,6 @@ class KeywordBlocker extends ChangeNotifier {
 
   bool matches(String text) {
     if (_keywords.isEmpty || text.trim().isEmpty) return false;
-    // Regex rules keep matching the original text, plain keywords the folded
-    // copy — the same split the per-call version made.
     for (final regex in _compiledRules) {
       if (regex.hasMatch(text)) return true;
     }

@@ -1,11 +1,4 @@
-﻿//
-//  td_models.dart
-//
-//  View-facing models parsed from TDLib JSON, plus content→text helpers.
-//  The Flutter port of the Swift `TDModels` / `TDParse`.
-//
-
-import 'dart:convert';
+﻿import 'dart:convert';
 
 import 'package:dlibphonenumber/dlibphonenumber.dart';
 import 'package:flutter/foundation.dart';
@@ -14,7 +7,6 @@ import 'package:handy/notifications/scope_notification_settings.dart';
 
 import 'json_helpers.dart';
 
-/// Reference to a downloadable TDLib file (profile photo, thumbnail, …).
 class TdFileRef {
   TdFileRef({
     required this.id,
@@ -32,8 +24,8 @@ class TdFileRef {
   final String? mimeType;
   final bool hasAnimation;
   final int? photoId;
-  Uint8List? miniThumb; // decoded JPEG for instant placeholder
-  TdFileRef? thumbnail; // downloadable thumbnail with the real aspect ratio
+  Uint8List? miniThumb;
+  TdFileRef? thumbnail;
 
   TdFileRef inheritLocalPathFrom(TdFileRef? previous) {
     return TdFileRef(
@@ -56,15 +48,14 @@ class TdFileRef {
   }
 }
 
-/// Categories surfaced by the search hub and the media browser.
 enum ChatMediaCategory {
-  media, // 图片/视频
-  file, // 文件
-  audio, // 音频/音乐
-  link, // 链接
-  sticker, // 表情
-  voice, // 语音
-  member; // 群成员
+  media,
+  file,
+  audio,
+  link,
+  sticker,
+  voice,
+  member;
 
   String get title => switch (this) {
     ChatMediaCategory.media => AppStrings.t(AppStringKeys.tdMessagePhotoVideo),
@@ -78,7 +69,6 @@ enum ChatMediaCategory {
     ),
   };
 
-  /// The TDLib SearchMessagesFilter `@type`, or null for non-message categories.
   String? get tdFilter => switch (this) {
     ChatMediaCategory.media => 'searchMessagesFilterPhotoAndVideo',
     ChatMediaCategory.file => 'searchMessagesFilterDocument',
@@ -106,8 +96,6 @@ enum ChatMediaCategory {
 
 enum ChatKind { privateChat, group, channel, bot, secret, unknown }
 
-/// A custom (premium) emoji span in a message's text — covers [length] UTF-16
-/// units at [offset], rendered inline from custom_emoji_id [id].
 class CustomEmojiEntity {
   const CustomEmojiEntity(this.offset, this.length, this.id);
   final int offset;
@@ -115,8 +103,6 @@ class CustomEmojiEntity {
   final int id;
 }
 
-/// A TDLib formattedText entity in message text/caption. Offsets and lengths
-/// are UTF-16 code units, matching Dart String indexing.
 class MessageTextEntity {
   const MessageTextEntity({
     required this.offset,
@@ -139,8 +125,6 @@ class MessageTextEntity {
   final String? language;
   final MessageButton? button;
 
-  /// Full TDLib `TextEntityType` payload, including fields introduced after
-  /// this client was built. Known convenience fields above remain available.
   final Map<String, dynamic> typeData;
 
   int get end => offset + length;
@@ -172,7 +156,6 @@ class MessageTextEntity {
   }
 }
 
-/// A server quote or a manually selected UTF-16 range from a message.
 class MessageTextQuote {
   const MessageTextQuote({
     required this.text,
@@ -503,7 +486,6 @@ class _RichTextBuilder {
   }
 }
 
-/// One reaction bucket on a message (emoji or custom-emoji + count + chosen).
 class MessageReaction {
   const MessageReaction({
     this.emoji,
@@ -516,7 +498,6 @@ class MessageReaction {
   final int count;
   final bool chosen;
 
-  /// The TDLib reaction_type for add/removeMessageReaction.
   Map<String, dynamic> get type => customEmojiId != 0
       ? {
           '@type': 'reactionTypeCustomEmoji',
@@ -525,7 +506,6 @@ class MessageReaction {
       : {'@type': 'reactionTypeEmoji', 'emoji': emoji};
 }
 
-/// A sender's role in a group/channel.
 enum MemberRole { owner, admin, member, channel }
 
 class ChatSummary {
@@ -574,13 +554,13 @@ class ChatSummary {
   bool isMuted;
   ChatKind kind;
   TdFileRef? photo;
-  String? lastSender; // group preview prefix, e.g. "restart:"
+  String? lastSender;
   bool isPinned;
   bool isVerified;
-  int archiveOrder; // > 0 when the chat is in the Archive list
-  bool isMarkedUnread; // "标为未读" with no unread count
-  String draftText; // unsent draft; shown as "[草稿]" prefix when non-empty
-  int? peerUserId; // private/secret chat peer, used for chat-list identity UI
+  int archiveOrder;
+  bool isMarkedUnread;
+  String draftText;
+  int? peerUserId;
   bool peerIsContact;
   String? peerPhoneNumber;
   bool peerIsPremium;
@@ -590,23 +570,13 @@ class ChatSummary {
   bool supportsBotTopics;
   ChatMessage? lastChatMessage;
   bool
-  isSavedMessages; // true when this is the Saved Messages chat (private chat with yourself)
+  isSavedMessages;
 
-  /// Chat folders this chat currently sits in, kept from its TDLib chat-list
-  /// positions. Lets a chat-list row draw its folder tags without asking
-  /// TDLib — or recomputing folder filters — once per row.
   final Set<int> folderIds = {};
 
-  /// Groups & channels use a rounded-square avatar unless UI preferences
-  /// override them; people use a circle.
   bool get usesSquareAvatar =>
       kind == ChatKind.group || kind == ChatKind.channel;
 
-  /// Whether this chat can be browsed and addressed through forum topics.
-  ///
-  /// TDLib's `chat.view_as_topics` only classifies forum supergroups (and
-  /// Saved Messages presentation). Private bot topics are instead advertised
-  /// by `userTypeBot.has_topics`, so keep the two sources explicit.
   bool get supportsTopics => isForum || supportsBotTopics;
 
   bool get isBotTopicChat => supportsBotTopics && !isForum;
@@ -656,10 +626,6 @@ class MessageAppearancePreview {
   final Map<String, dynamic>? chatTheme;
 }
 
-/// Community identity retained by a chat-added service message.
-///
-/// The Bot API intentionally supplies only an id and name. Native TDLib
-/// sessions can enrich the same model with a cached community photo later.
 class MessageCommunityPreview {
   MessageCommunityPreview({required this.id, required this.name, this.photo});
 
@@ -785,19 +751,12 @@ class ChatMessage {
   String? senderName;
   bool senderIsChat;
   bool isService;
-  bool isCall; // messageCall — a call log; not reactable
-  bool callIsVideo; // messageCall.is_video
-  // messageCall.discard_reason @type: callDiscardReasonMissed / Declined /
-  // Disconnected / HungUp / Empty. Null until the call ends.
+  bool isCall;
+  bool callIsVideo;
   String? callDiscardReason;
-  int callDuration; // messageCall.duration, seconds (0 if never connected)
-  /// Raw TDLib content @type (messageText / messagePhoto / messageAudio / …).
-  /// Kept so we can distinguish kinds the lossy media fields can't (e.g. a
-  /// photo vs a video-thumb, or plain text vs an audio/poll placeholder).
+  int callDuration;
   String? contentType;
 
-  /// TDLib's message-level restriction reason. When present, the original
-  /// content must be replaced by this server-provided explanation.
   String? restrictionReason;
   String? restrictionReasonCode;
   String? restrictedContentText;
@@ -806,7 +765,7 @@ class ChatMessage {
   bool hasUnreadReactions;
   int? senderId;
   TdFileRef? senderPhoto;
-  TdFileRef? image; // photo / sticker / video-thumb / gif
+  TdFileRef? image;
   int? imageWidth;
   int? imageHeight;
   MessageDocument? document;
@@ -817,24 +776,22 @@ class ChatMessage {
   int senderAccentColorId;
   int senderEmojiStatusId;
   int mediaAlbumId;
-  TdFileRef? animatedSticker; // .tgs (Lottie) sticker file
-  TdFileRef? videoSticker; // .webm video sticker file
-  TdFileRef? video; // playable video file (messageVideo)
-  int? videoDuration; // seconds, for the duration badge
-  int? videoFileSize; // bytes, for the inline autoplay budget
-  /// Cover the media preview until explicitly revealed.
+  TdFileRef? animatedSticker;
+  TdFileRef? videoSticker;
+  TdFileRef? video;
+  int? videoDuration;
+  int? videoFileSize;
   bool hasSpoiler;
 
-  /// Non-interactive quote/search previews cannot reveal a media spoiler.
   TdFileRef? get previewImage => hasSpoiler ? null : image;
   String videoNoteTranscription;
   bool videoNoteTranscriptionPending;
   String? videoNoteTranscriptionError;
-  String? diceEmoji; // messageDice emoji, e.g. 🎲 / 🎯 / 🏀
-  int? diceValue; // messageDice value reported by TDLib
-  int? stickerFileId; // any sticker's file id (for "add to favorites")
-  int? stickerSetId; // the sticker's set id (for 表情详情)
-  bool isAnimatedEmoji; // single-emoji message (messageAnimatedEmoji)
+  String? diceEmoji;
+  int? diceValue;
+  int? stickerFileId;
+  int? stickerSetId;
+  bool isAnimatedEmoji;
   MessageLocation? location;
   MessageVoice? voice;
   MessageContactCard? contact;
@@ -844,18 +801,14 @@ class ChatMessage {
   MessageSuggestedPostInfo? suggestedPostInfo;
   MessageSummaryCard? summaryCard;
 
-  /// Server-provided hint that this message can be summarized by Telegram AI.
   final String summaryLanguageCode;
   bool canRecognizeSpeech;
   String? aiSummaryText;
   List<MessageTextEntity> aiSummaryEntities = const [];
   bool aiSummaryLoading = false;
 
-  // 引用 / reply: the message this one replies to, resolved lazily for the quote.
   int? replyToMessageId;
   MessageTextQuote? replyToQuote;
-  // Rendering can extract tables from the original formatted text. Quotes
-  // must still address the unmodified source text, not that rendered subset.
   String? textQuoteSource;
   List<MessageTextEntity>? textQuoteSourceEntities;
   String get quoteSourceText => textQuoteSource ?? text;
@@ -864,26 +817,20 @@ class ChatMessage {
   String? get replyPreviewText => replyToQuote?.text ?? replyToPreview;
   List<MessageTextEntity> get replyPreviewEntities =>
       replyToQuote?.entities ?? replyToEntities;
-  int? replyToDate; // unix timestamp of the quoted message
-  String? replyToSender; // resolved sender name of the quoted message
-  String? replyToPreview; // one-line preview of the quoted message
+  int? replyToDate;
+  String? replyToSender;
+  String? replyToPreview;
   List<MessageTextEntity> replyToEntities;
-  TdFileRef? replyToImage; // thumbnail/photo shown inside the quote block
+  TdFileRef? replyToImage;
   int? replyToImageWidth;
   int? replyToImageHeight;
 
-  // Service messages such as member joins may carry affected user ids, resolved
-  // by the chat view model once TDLib can provide display names.
   List<int> serviceUserIds;
 
-  /// The visual payload retained only for Telegram's wallpaper/theme service
-  /// messages. Other service content remains text-only.
   final MessageAppearancePreview? appearancePreview;
 
-  /// Rich identity for community membership service events.
   final MessageCommunityPreview? communityPreview;
 
-  // Inline custom (premium) emoji spans within `text`.
   List<CustomEmojiEntity> customEmoji;
   List<MessageTextEntity> textEntities;
   MessageLinkPreview? linkPreview;
@@ -895,43 +842,32 @@ class ChatMessage {
   List<RichMessageBlock> richBlocks;
   bool richMessageIsFull;
 
-  bool isEdited; // shows a "已编辑" tag
+  bool isEdited;
   bool isSending;
   bool isSendAcknowledged;
   int viewCount;
   int forwardCount;
   bool hasCommentThread;
 
-  /// TDLib `reply_info.reply_count`: channel comments or ordinary group
-  /// replies, depending on the containing chat.
   int commentCount;
   int? lastCommentMessageId;
 
-  /// Whether this instance carries an authoritative reply-info snapshot.
-  /// False means a partial/cached message omitted interaction metadata, so a
-  /// same-ID merge must not erase newer thread information already in memory.
   bool commentThreadMetadataKnown;
 
-  /// When true, this message is from a Telegram-blocked user and the
-  /// "hide blocked user messages" feature is on.
   bool blockedByUser;
   List<MessageReaction> reactions = const [];
-  String? forwardOrigin; // name of the original author when forwarded
-  String? forwardAuthorSignature; // signed author within the origin channel
-  int? forwardFromUserId; // origin user, resolved lazily to forwardOrigin
-  int? forwardFromChatId; // origin chat/channel, resolved lazily
-  int? forwardFromMessageId; // original channel message when TDLib exposes it
+  String? forwardOrigin;
+  String? forwardAuthorSignature;
+  int? forwardFromUserId;
+  int? forwardFromChatId;
+  int? forwardFromMessageId;
 
-  /// Whether TDLib supplied enough forwarding metadata to render an
-  /// attribution header, even while the display name is still being resolved.
   bool get hasForwardAttribution =>
       (forwardOrigin?.trim().isNotEmpty ?? false) ||
       (forwardFromUserId != null && forwardFromUserId! > 0) ||
       (forwardFromChatId != null && forwardFromChatId != 0) ||
       (forwardFromMessageId != null && forwardFromMessageId! > 0);
 
-  /// Stable text for the header while an asynchronous user/chat lookup is in
-  /// flight or when Telegram intentionally hides the original name.
   String get forwardDisplayName {
     final name = forwardOrigin?.trim();
     final signature = forwardAuthorSignature?.trim();
@@ -945,11 +881,8 @@ class ChatMessage {
     return AppStrings.t(AppStringKeys.groupManagementLogUnknownActor);
   }
 
-  /// A plain text message (messageText) — not an audio/poll/contact placeholder.
   bool get isPlainText => contentType == 'messageText';
 
-  /// A real photo (messagePhoto) — not a sticker / GIF / video thumbnail, all
-  /// of which also set [image].
   bool get isPhoto => contentType == 'messagePhoto';
 
   bool get isContentRestricted =>
@@ -981,10 +914,6 @@ class ChatMessage {
         richBlocks.isNotEmpty;
   }
 
-  /// Visual media that Telegram may place in the same media album.
-  ///
-  /// Stickers, GIFs and video stickers also have thumbnails in [image], but
-  /// they are not part of photo/video album merging.
   bool get isAlbumVisualMedia =>
       image != null &&
       (contentType == 'messagePhoto' || contentType == 'messageVideo');
@@ -995,13 +924,8 @@ class ChatMessage {
   bool get isDice =>
       contentType == 'messageDice' && (diceEmoji ?? '').isNotEmpty;
 
-  /// Whether the "+1" (复读) quick-repeat may apply to this kind at all: only
-  /// plain text and photos. Audio, voice, location, stickers, polls, files,
-  /// videos, contacts and call logs are excluded.
   bool get canRepeat => !isContentRestricted && (isPlainText || isPhoto);
 
-  /// Keeps the source files used by an outgoing pending message after TDLib
-  /// replaces it with the server-confirmed message and new file identifiers.
   void inheritLocalMediaFrom(ChatMessage previous) {
     image = image?.inheritLocalPathFrom(previous.image) ?? previous.image;
     if ((imageWidth ?? 0) <= 0 || (imageHeight ?? 0) <= 0) {
@@ -1353,8 +1277,6 @@ class SuggestedPostPrice {
 
   final SuggestedPostPriceKind kind;
 
-  /// Telegram Stars for [SuggestedPostPriceKind.stars], or hundredths of one
-  /// TON for [SuggestedPostPriceKind.ton], matching TDLib's gram_cent_count.
   final int amount;
 
   Map<String, dynamic> toTdJson() => switch (kind) {
@@ -1448,11 +1370,10 @@ class CurrentUser {
   String phoneNumber;
   String? username;
   TdFileRef? photo;
-  int emojiStatusId; // custom_emoji_id of the Telegram emoji status, 0 = none
-  bool isPremium; // Telegram Premium subscriber
+  int emojiStatusId;
+  bool isPremium;
 }
 
-// MARK: - Parsing
 
 abstract final class TDParse {
   static bool isBotUser(Map<String, dynamic> user) {
@@ -1547,15 +1468,12 @@ abstract final class TDParse {
     );
   }
 
-  /// Text of a chat's unsent draft, or '' if none.
   static String draftText(Map<String, dynamic>? draft) {
     if (draft == null) return '';
     final content = draft.obj('content');
     if (content?.type == 'draftMessageContentText') {
       return content?.obj('text')?.str('text') ?? '';
     }
-    // Keep old cached fixtures readable during an in-place upgrade. Current
-    // TDLib responses always use draftMessageContentText above.
     final legacy = draft.obj('input_message_text');
     if (legacy?.type != 'inputMessageText') return '';
     return legacy?.obj('text')?.str('text') ?? '';
@@ -1597,7 +1515,6 @@ abstract final class TDParse {
 
     final media = mediaAttachment(content);
 
-    // 转发: forward_info.origin identifies the original author.
     final forwardInfo = message.obj('forward_info');
     final origin = forwardInfo?.obj('origin');
     final forwardSource = forwardInfo?.obj('source');
@@ -1616,16 +1533,12 @@ abstract final class TDParse {
       case 'messageOriginHiddenUser':
         fwdName = origin?.str('sender_name');
     }
-    // A few TDLib versions put the navigable source in forward_info.source
-    // instead of repeating it in messageOriginChannel. Keep both forms so a
-    // forwarded channel post remains actionable across cached message shapes.
     fwdChatId ??=
         forwardSource?.int64('chat_id') ??
         forwardSource?.int64('sender_chat_id');
     fwdMessageId ??= forwardSource?.int64('message_id');
     if (fwdMessageId != null && fwdMessageId <= 0) fwdMessageId = null;
 
-    // 引用: reply_to is messageReplyToMessage { chat_id, message_id, … }.
     final replyTo = message.obj('reply_to');
     final replyToMessageId = replyTo?.type == 'messageReplyToMessage'
         ? replyTo?.int64('message_id')
@@ -1772,16 +1685,12 @@ abstract final class TDParse {
       ..forwardFromMessageId = isContentRestricted ? null : fwdMessageId;
   }
 
-  /// Returns the server-provided reason that makes a chat or message
-  /// unavailable on this client platform.
   static String? restrictionReasonFor(Map<String, dynamic>? object) =>
       _cleanString(
         object?.obj('restriction_info')?.str('restriction_reason'),
       ) ??
       _cleanString(object?.obj('restriction_info')?.str('text'));
 
-  /// Returns the machine-readable restriction reason such as `porno` or
-  /// `terms` when TDLib includes it.
   static String? restrictionReasonCodeFor(Map<String, dynamic>? object) {
     final restrictionInfo = object?.obj('restriction_info');
     return _cleanString(
@@ -1986,7 +1895,6 @@ abstract final class TDParse {
     );
   }
 
-  /// Parses message.interaction_info.reactions into reaction buckets.
   static List<MessageReaction> reactionsFrom(Map<String, dynamic> message) {
     final list = message
         .obj('interaction_info')
@@ -2063,7 +1971,6 @@ abstract final class TDParse {
     );
   }
 
-  /// Extracts textEntityTypeCustomEmoji spans from a formattedText object.
   static List<CustomEmojiEntity> customEmojiEntities(Map<String, dynamic>? ft) {
     return customEmojiEntitiesFrom(textEntities(ft));
   }
@@ -2089,10 +1996,6 @@ abstract final class TDParse {
     if (content == null) return null;
     if (content.type == 'messageText') return content.obj('text');
 
-    // TDLib uses the same formattedText `caption` field for every captionable
-    // attachment. Read it structurally instead of maintaining a media-type
-    // allowlist, so a newly introduced attachment type cannot regress into
-    // rendering its preview label as a caption.
     return content.obj('caption');
   }
 
@@ -3675,10 +3578,6 @@ abstract final class TDParse {
           final isTgs = fmt == 'stickerFormatTgs';
           final isWebm = fmt == 'stickerFormatWebm';
           return MediaAttachment(
-            // Static (.webp) stickers are shown directly via `image`, so point at
-            // the full sticker file — the thumbnail is low-res and looks blurry
-            // scaled up. Animated (.tgs) / video (.webm) keep the thumb only as a
-            // placeholder behind the rendered animation.
             image: (isTgs || isWebm) ? thumb : (stickerFile ?? thumb),
             width: w,
             height: h,
@@ -3689,8 +3588,6 @@ abstract final class TDParse {
           );
         }
       case 'messageAnimatedEmoji':
-        // A lone emoji → TDLib sends its animated sticker (usually .tgs); render
-        // it like a sticker so single emoji animate instead of "[动画表情]" text.
         final sticker = content.obj('animated_emoji')?.obj('sticker');
         if (sticker != null) {
           final thumb = fileRef(sticker.obj('thumbnail')?.obj('file'));
@@ -3928,12 +3825,6 @@ abstract final class TDParse {
     }
   }
 
-  /// User-authored text carried by a message, excluding localized preview
-  /// labels such as "Video", "Music", "GIF", or a generated file name.
-  ///
-  /// [messageText] intentionally retains those labels for chat-list/search
-  /// previews. Transcript messages must use this value so an absent caption is
-  /// represented as an empty string and can never be rendered as real text.
   static String messageContentText(Map<String, dynamic> content) {
     final formatted = formattedTextForContent(content);
     if (formatted != null) return formatted.str('text') ?? '';
@@ -4170,7 +4061,6 @@ abstract final class TDParse {
     });
   }
 
-  // MARK: Files
 
   static TdFileRef? smallPhoto(Map<String, dynamic>? photoInfo) {
     if (photoInfo == null) return null;
@@ -4201,10 +4091,6 @@ abstract final class TDParse {
     if (file == null || id == null) return null;
     final normalizedThumbnail = thumbnail?.id == id ? null : thumbnail;
     final local = file.obj('local');
-    // TDLib exposes `local.path` as soon as any prefix/range exists. That path
-    // is not a decodable whole file until the completion bit is set; treating
-    // it as an outgoing/local source bypasses TdFileCenter's download waiter
-    // and can leave message media displaying a permanently partial image.
     final completedLocalPath =
         local?.boolean('is_downloading_completed') == true
         ? local?.str('path')
@@ -4219,8 +4105,6 @@ abstract final class TDParse {
     );
   }
 
-  /// The byte size TDLib knows for a file: `size` once the real value is known,
-  /// otherwise the server's estimate.
   static int? _fileSize(Map<String, dynamic>? file) {
     final size = file?.integer('size') ?? 0;
     if (size > 0) return size;
@@ -4265,9 +4149,6 @@ abstract final class TDParse {
     return width * height;
   }
 
-  /// MemoryImage's cache key is the byte list's identity, so a fresh decode per
-  /// parse re-decodes the same thumbnail and burns an ImageCache slot that then
-  /// evicts a genuinely expensive photo. Same base64 in, same instance out.
   static final Map<String, Uint8List> _miniThumbs = {};
   static const _maxMiniThumbs = 128;
 
@@ -4288,7 +4169,6 @@ abstract final class TDParse {
     }
   }
 
-  // MARK: Users
 
   static String userName(Map<String, dynamic> user) {
     final first = user.str('first_name') ?? '';
@@ -4302,11 +4182,6 @@ abstract final class TDParse {
     });
   }
 
-  /// Enabled usernames in TDLib's display-priority order.
-  ///
-  /// `active_usernames` includes enabled collectible usernames and defines the
-  /// primary username as its first entry. Older/incomplete payloads may omit
-  /// that array, so only then do we fall back to `editable_username`.
   static List<String> activeUsernames(Map<String, dynamic> user) {
     final usernames = user.obj('usernames');
     if (usernames == null) return const [];
@@ -4328,10 +4203,6 @@ abstract final class TDParse {
     return List.unmodifiable(result);
   }
 
-  /// The custom emoji that represents a TDLib `emojiStatus` in compact UI.
-  ///
-  /// Regular statuses expose `custom_emoji_id`, while upgraded gifts expose
-  /// their display model through `model_custom_emoji_id`.
   static int emojiStatusCustomEmojiId(Map<String, dynamic>? emojiStatus) {
     final type = emojiStatus?.obj('type');
     return type?.int64('custom_emoji_id') ??
@@ -4343,8 +4214,6 @@ abstract final class TDParse {
 
   static final _nonDigitsRegExp = RegExp(r'\D');
 
-  /// Formats a raw TDLib phone number (digits, no +) to international form via
-  /// libphonenumber metadata (e.g. `+61 412 345 678`). Falls back to `+<digits>`.
   static String formatPhone(String? raw) {
     final d = (raw ?? '').replaceAll(_nonDigitsRegExp, '');
     if (d.isEmpty) return '';
@@ -4415,7 +4284,6 @@ abstract final class TDParse {
   }
 }
 
-/// Tuple-equivalent for [TDParse.mediaAttachment].
 class MediaAttachment {
   const MediaAttachment({
     this.image,
@@ -4437,12 +4305,12 @@ class MediaAttachment {
   final int? height;
   final MessageDocument? document;
   final MessageMusic? music;
-  final TdFileRef? animated; // .tgs Lottie sticker
-  final TdFileRef? videoSticker; // .webm video sticker
-  final TdFileRef? video; // playable video file (messageVideo)
-  final int? videoDuration; // seconds
-  final int? videoFileSize; // bytes, for the inline autoplay budget
-  final int? stickerFileId; // any sticker's file id (for "add to favorites")
-  final int? stickerSetId; // the sticker's set id (for 表情详情)
-  final bool isAnimatedEmoji; // single-emoji message (messageAnimatedEmoji)
+  final TdFileRef? animated;
+  final TdFileRef? videoSticker;
+  final TdFileRef? video;
+  final int? videoDuration;
+  final int? videoFileSize;
+  final int? stickerFileId;
+  final int? stickerSetId;
+  final bool isAnimatedEmoji;
 }

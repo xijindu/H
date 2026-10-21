@@ -67,9 +67,6 @@ Future<void> showEmojiStatusPicker(
       var statusTab = 0;
       return DefaultTextStyle.merge(
         style: const TextStyle(decoration: TextDecoration.none),
-        // The sheet fills the window behind the panel, so a click around the
-        // panel lands on the sheet, never on the route's barrier. Treat those
-        // as outside taps; taps on the panel itself stay there.
         child: GestureDetector(
           key: const ValueKey('emoji-status-picker-outside'),
           behavior: HitTestBehavior.opaque,

@@ -1,6 +1,5 @@
 ﻿import 'package:flutter/services.dart';
 
-/// Reports whether the native app has a usable Firebase configuration.
 class FirebaseConfiguration {
   FirebaseConfiguration._();
 

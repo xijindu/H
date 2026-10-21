@@ -1,14 +1,4 @@
-﻿//
-//  location_picker_view.dart
-//
-//  messenger-style location picker with a fixed centre pin — pan the map to aim
-//  the pin; the centre coordinate is what gets sent. Uses the native Apple Maps
-//  (MapKit) on iOS and flutter_map + OpenStreetMap tiles elsewhere. A 我的位置
-//  button recentres on the GPS fix and the current centre's address is
-//  reverse-geocoded (best-effort) into a bottom card. 发送 returns the chosen LatLng.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -85,8 +75,8 @@ class _LocationPickerViewState extends State<LocationPickerView> {
   static const _minimumZoom = 3.0;
   static const _maximumZoom = 20.0;
 
-  final MapController _map = MapController(); // flutter_map (Android / OSM)
-  amap.AppleMapController? _appleCtrl; // Apple MapKit (iOS)
+  final MapController _map = MapController();
+  amap.AppleMapController? _appleCtrl;
   late LatLng _center = widget.initial;
   late double _zoom = widget.initialZoom;
   String _address = '';
@@ -117,7 +107,6 @@ class _LocationPickerViewState extends State<LocationPickerView> {
     );
   }
 
-  /// Best-effort OSM Nominatim reverse geocode → a human address line.
   Future<void> _reverseGeocode(LatLng p) async {
     setState(() => _geocoding = true);
     try {
@@ -219,7 +208,6 @@ class _LocationPickerViewState extends State<LocationPickerView> {
     if (mounted) await Navigator.of(context).maybePop();
   }
 
-  /// Native Apple Maps (MapKit) on iOS; flutter_map + OSM tiles elsewhere.
   Widget _mapWidget() {
     if (Platform.isIOS) {
       return amap.AppleMap(
@@ -303,7 +291,6 @@ class _LocationPickerViewState extends State<LocationPickerView> {
             child: Stack(
               children: [
                 _mapWidget(),
-                // Fixed centre pin (its tip marks the chosen point).
                 IgnorePointer(
                   child: Center(
                     child: Transform.translate(

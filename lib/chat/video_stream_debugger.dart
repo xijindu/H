@@ -8,8 +8,6 @@ import '../l10n/app_localizations.dart';
 import '../tdlib/td_image_loader.dart';
 import '../theme/app_theme.dart';
 
-/// The three states computed for each byte chunk. Sparse ranges stay at their
-/// real offsets, so seeking never paints the untouched gap as downloaded.
 enum VideoDownloadBlockState { downloaded, partiallyDownloaded, undownloaded }
 
 @immutable
@@ -83,12 +81,6 @@ int _ceilDivide(int value, int divisor) {
   return (value + divisor - 1) ~/ divisor;
 }
 
-/// Computes a grid that fits inside the supplied bounds.
-///
-/// The number of chunks follows the measured pixel capacity of the pane. The
-/// byte size represented by each square grows as needed for large files, so a
-/// dense grid can fill the available space without overflowing and every
-/// chunk still represents at least one MiB.
 VideoDownloadBlockLayout videoDownloadBlockLayout({
   required int totalBytes,
   required int downloadedBytes,
@@ -265,9 +257,6 @@ List<TdFileByteRange> _normalizeDownloadedRanges(
 typedef VideoStreamDebuggerBuilder =
     Widget Function(BuildContext context, BoxConstraints constraints);
 
-/// Keeps the player in a stable element slot while the inspector is shown or
-/// hidden. This prevents closing the overlay from disposing and recreating the
-/// underlying video player.
 class VideoStreamDebuggerOverlay extends StatelessWidget {
   const VideoStreamDebuggerOverlay({
     super.key,

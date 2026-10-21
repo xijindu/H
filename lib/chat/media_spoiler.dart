@@ -9,14 +9,10 @@ import '../l10n/app_localizations.dart';
 import '../tdlib/td_client.dart';
 import '../tdlib/td_models.dart';
 
-/// Opening one item must not reveal other spoilers by gallery swipe or autoplay.
 bool canPreviewMediaAlongside(ChatMessage candidate, ChatMessage selected) =>
     !candidate.hasSpoiler ||
     (candidate.id == selected.id && candidate.chatId == selected.chatId);
 
-/// A preview-only reveal gate. Hidden media is never mounted, so native video
-/// surfaces, autoplay and accessibility cannot expose it beneath the cover.
-/// The parent must supply bounded dimensions (or [width] and [height]).
 class MediaSpoiler extends StatefulWidget {
   const MediaSpoiler({
     super.key,
@@ -125,7 +121,6 @@ class _MediaSpoilerState extends State<MediaSpoiler>
   }
 }
 
-/// Keeps reveal state local to this message, account and media revision.
 class MessageMediaSpoiler extends StatelessWidget {
   const MessageMediaSpoiler({
     super.key,

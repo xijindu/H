@@ -15,16 +15,9 @@ import '../theme/app_theme.dart';
 
 enum AppAssetPickerType { image, video, imageAndVideo }
 
-/// The send choices WeChat keeps inside the picker itself rather than in a
-/// sheet in front of it: 原图 (send the untouched original instead of a
-/// downscaled copy) and, once a Live Photo is in the selection, sending its
-/// motion component as a video.
 class AppAssetSendOptions {
-  /// Hand one to [AppAssetPicker.pickDetailed], which passes ownership to the
-  /// picker route and disposes it when that route goes away.
   AppAssetSendOptions({this.scaledMaxDimension = 1280});
 
-  /// Longest edge a photo is resized to while [sendOriginal] is off.
   final int scaledMaxDimension;
 
   final ValueNotifier<bool> sendOriginal = ValueNotifier<bool>(false);
@@ -94,9 +87,6 @@ abstract final class AppAssetPicker {
     return selection.assets.map((asset) => asset.file).toList(growable: false);
   }
 
-  /// [sendOptions] hands the quality choices to the picker's own bottom bar.
-  /// The values it carries when the picker closes win over
-  /// [preferLivePhotoVideo], [preserveOriginalFiles] and [photoMaxDimension].
   static Future<AppAssetPickerSelection> pickDetailed(
     BuildContext context, {
     required AppAssetPickerType type,
@@ -113,8 +103,6 @@ abstract final class AppAssetPicker {
     Future<AppAssetPickerSelection> materializeAll(
       List<AssetEntity> assets,
     ) async {
-      // Read the toggles once, here: the picker route is still tearing down
-      // while this runs, and it owns the notifiers.
       final live = sendOptions?.preferLivePhotoVideo ?? preferLivePhotoVideo;
       final original =
           sendOptions?.preserveOriginalFiles ?? preserveOriginalFiles;
@@ -157,7 +145,6 @@ abstract final class AppAssetPicker {
       }
       return await materializeAll(assets);
     } on StateError {
-      // Permission denied — request it and retry.
       final requestType = switch (type) {
         AppAssetPickerType.image => RequestType.image,
         AppAssetPickerType.video => RequestType.video,
@@ -173,7 +160,6 @@ abstract final class AppAssetPicker {
       );
       if (state == PermissionState.authorized ||
           state == PermissionState.limited) {
-        // The permission dialog awaited above; the host route may be gone.
         if (!context.mounted) {
           return const AppAssetPickerSelection(assets: [], failedCount: 0);
         }
@@ -281,10 +267,6 @@ abstract final class AppAssetPicker {
       AppTheme.brand,
       light: brightness == Brightness.light,
     );
-    // Force the app's family onto every entry rather than trusting each one to
-    // already carry it: the package styles text the app never sees, and a
-    // family it cannot resolve falls through to whatever the platform picks
-    // last (a serif face on iOS).
     final appBody = appTheme.textTheme.bodyMedium;
     final textTheme = appTheme.textTheme.apply(
       fontFamily: appBody?.fontFamily,
@@ -572,12 +554,6 @@ abstract final class AppAssetPicker {
   }
 }
 
-/// App-owned chrome for the third-party asset grid.
-///
-/// Mithka deliberately does not bundle Material Icons. The package defaults
-/// therefore resolve private-use icon codepoints through the user's text font,
-/// which produces corrupted letters or question marks on iOS. Keep the picker
-/// behavior while replacing its visible header glyphs with project icons.
 class AppAssetPickerBuilderDelegate
     extends DefaultAssetPickerBuilderDelegate<DefaultAssetPickerProvider> {
   AppAssetPickerBuilderDelegate({
@@ -609,10 +585,6 @@ class AppAssetPickerBuilderDelegate
          enableLivePhoto: config.enableLivePhoto,
        );
 
-  /// Present when the caller wants the quality choices in the picker's own
-  /// bottom bar instead of a sheet in front of it. The delegate takes
-  /// ownership: the toggles are listened to by widgets on this route, so they
-  /// can only be disposed once the route is, which is what [dispose] does.
   final AppAssetSendOptions? sendOptions;
 
   @override
@@ -732,10 +704,6 @@ class AppAssetPickerBuilderDelegate
     );
   }
 
-  /// Tapping a tile picks it, the way WeChat's grid behaves. The package's
-  /// default sends the tap to the full-screen viewer instead, which buries
-  /// selection behind a second screen; the bottom bar's preview button still
-  /// opens the viewer for anyone who wants a closer look.
   @override
   Widget selectedBackdrop(BuildContext context, int index, AssetEntity asset) {
     final indicatorSize = MediaQuery.sizeOf(context).width / gridCount / 3;
@@ -759,8 +727,6 @@ class AppAssetPickerBuilderDelegate
     );
   }
 
-  /// The package draws the tick with a Material Icons codepoint, which this
-  /// app does not bundle.
   @override
   Widget selectIndicator(BuildContext context, int index, AssetEntity asset) {
     final indicatorSize = MediaQuery.sizeOf(context).width / gridCount / 3;
@@ -806,8 +772,6 @@ class AppAssetPickerBuilderDelegate
                                     color: Colors.white,
                                   )
                                 : Text(
-                                    // WeChat numbers the selection rather than
-                                    // ticking it, so the send order is visible.
                                     '${context.read<DefaultAssetPickerProvider>().selectedAssets.indexOf(asset) + 1}',
                                     style: const TextStyle(
                                       color: Colors.white,
@@ -827,7 +791,6 @@ class AppAssetPickerBuilderDelegate
     );
   }
 
-  /// Adds WeChat's in-picker send choices above the preview/confirm row.
   @override
   Widget bottomActionBar(BuildContext context) {
     final options = sendOptions;
@@ -870,9 +833,6 @@ class AppAssetPickerBuilderDelegate
     );
   }
 
-  /// Same story as [accessLimitedBottomTip]: the package stamps
-  /// `Icons.videocam` beside every video's duration, which without Material
-  /// Icons is a tofu box on each video thumbnail in the grid.
   @override
   Widget videoIndicator(BuildContext context, AssetEntity asset) {
     return Align(
@@ -921,10 +881,6 @@ class AppAssetPickerBuilderDelegate
     );
   }
 
-  /// The package draws this banner with `Icons.warning` and
-  /// `Icons.keyboard_arrow_right`. Without Material Icons bundled those two
-  /// codepoints have no glyph and render as tofu boxes at either end of the
-  /// blue bar. Same layout and same tap target, project icons instead.
   @override
   Widget accessLimitedBottomTip(BuildContext context) {
     final bottomPadding = hasBottomActions
@@ -1026,9 +982,6 @@ class AppAssetPickerBuilderDelegate
     );
   }
 
-  /// Routes the viewer through [AppAssetPickerViewerDelegate] so its header
-  /// gets project icons and the app's text style instead of the package's
-  /// Material glyphs.
   @override
   Future<void> viewAsset(
     BuildContext context,
@@ -1069,10 +1022,6 @@ class AppAssetPickerBuilderDelegate
   }
 }
 
-/// The preview screen's chrome, for the same reason the grid has its own: the
-/// package's header spends Material Icons codepoints this app does not bundle,
-/// so the back arrow and the tick render as tofu, and its title leans on a
-/// text style the picker theme does not reach.
 class AppAssetPickerViewerDelegate
     extends
         DefaultAssetPickerViewerBuilderDelegate<
@@ -1093,10 +1042,6 @@ class AppAssetPickerViewerDelegate
     super.enableLivePhoto,
   });
 
-  /// Sourced from the picker theme rather than left to inherit: the package's
-  /// header installs its own [DefaultTextStyle], and anything the app has not
-  /// put a family on lands on whatever the platform picks last — which is how
-  /// the counter ended up in a serif face.
   TextStyle get _titleStyle =>
       (themeData.appBarTheme.titleTextStyle ??
               themeData.textTheme.titleMedium ??

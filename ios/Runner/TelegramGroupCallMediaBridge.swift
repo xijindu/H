@@ -162,9 +162,6 @@ final class TelegramGroupCallMediaBridge: NSObject {
     switch call.method {
     case "getProtocol":
 #if canImport(TgVoipWebrtc)
-      // Telegram iOS reverses the framework's raw version list before it is
-      // advertised. The resulting order is the local preference order used
-      // when choosing the first version also supported by the peer.
       let versions = Array(
         OngoingCallThreadLocalContextWebrtc
           .versions(withIncludeReference: false)

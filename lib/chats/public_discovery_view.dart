@@ -46,9 +46,6 @@ class _PublicDiscoveryViewState extends State<PublicDiscoveryView> {
   int _requiredStarCount = 0;
   int? _agreedStarCount;
 
-  /// Whether the last query had any characters (the clear button) and any
-  /// non-blank ones (which empty-state copy to show). Those are the only two
-  /// things `build` reads off the query text.
   bool _hadQueryText = false;
   bool _hadQueryTerm = false;
 
@@ -73,9 +70,6 @@ class _PublicDiscoveryViewState extends State<PublicDiscoveryView> {
     _debounce = Timer(const Duration(milliseconds: 320), () {
       if (mounted) unawaited(_run(reset: true));
     });
-    // The field paints its own text, so a keystroke that changes neither of the
-    // two flags changes nothing on screen — and a rebuild here re-lays-out
-    // every result row.
     final hasText = value.isNotEmpty;
     final hasTerm = value.trim().isNotEmpty;
     if (hasText == _hadQueryText && hasTerm == _hadQueryTerm) return;
@@ -608,9 +602,6 @@ class _PublicDiscoveryViewState extends State<PublicDiscoveryView> {
         ),
       );
     }
-    // Up to 150 result rows across the three sections, each with an avatar that
-    // resolves and decodes a TDLib file — the old Column built every one of
-    // them, on every keystroke.
     return CustomScrollView(
       slivers: [
         SliverPadding(
@@ -706,7 +697,6 @@ class _PublicDiscoveryViewState extends State<PublicDiscoveryView> {
                 ],
               ),
             );
-            // Only the last row carries the card's bottom corners.
             if (index != peers.length - 1) return row;
             return ClipRRect(
               borderRadius: const BorderRadius.vertical(bottom: radius),
@@ -978,7 +968,6 @@ enum _DiscoveryTab {
 
   const _DiscoveryTab(this.labelKey);
 
-  /// Resolved at the render boundary, never stored translated.
   final String labelKey;
 }
 
@@ -1036,7 +1025,6 @@ enum _GlobalMediaFilter {
 
   const _GlobalMediaFilter(this.labelKey, this.apiType, this.icon);
 
-  /// Resolved at the render boundary, never stored translated.
   final String labelKey;
   final String apiType;
   final AppIconData icon;

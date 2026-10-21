@@ -70,7 +70,6 @@ class _TelegramRichTextState extends State<TelegramRichText> {
   }
 
   void _disposeRecognizers() {
-    // The cached spans hold these, so they die together.
     _spanCache = null;
     for (final recognizer in _recognizers) {
       recognizer.dispose();
@@ -105,9 +104,6 @@ class _TelegramRichTextState extends State<TelegramRichText> {
     );
   }
 
-  /// Every rebuild otherwise mints fresh `TapGestureRecognizer`s, and
-  /// `TextSpan.==` folds in the recognizer — so the paragraph never compares
-  /// equal and `RenderParagraph` lays the whole thing out again.
   List<InlineSpan> _memoizedSpans(
     BuildContext context,
     TextStyle baseStyle,
@@ -115,8 +111,6 @@ class _TelegramRichTextState extends State<TelegramRichText> {
   ) {
     final hashtagTap = widget.onHashtagTap != null;
     final mentionTap = widget.onMentionTap != null;
-    // A code span resolves the monospace family and the inline-code fill from
-    // the ambient theme, which no key below can see — leave those uncached.
     final cacheable = !widget.entities.any(_isCodeEntity);
     if (cacheable &&
         _spanCache != null &&
@@ -380,8 +374,6 @@ class _TelegramRichTextState extends State<TelegramRichText> {
       if (widget.onMentionTap == null) {
         return [TextSpan(text: segment, style: style)];
       }
-      // Read through `widget` at tap time, so a memoized span still reaches the
-      // current callback.
       final recognizer = TapGestureRecognizer()
         ..onTap = () => widget.onMentionTap?.call(mentionUserId, segment);
       _recognizers.add(recognizer);

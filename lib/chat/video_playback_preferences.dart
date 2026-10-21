@@ -36,10 +36,6 @@ class VideoPlaybackPreferences {
       'videoPlayback.rightVerticalSwipeAction';
   static const completionPreferenceKey = 'videoPlayback.completionAction';
 
-  /// Emits after a playback preference has been durably written.
-  ///
-  /// Preference writes need an observable source so consumers can trigger the
-  /// existing settings-changed plumbing after a durable write.
   static final _VideoPlaybackPreferenceChanges _changes =
       _VideoPlaybackPreferenceChanges();
   static ChangeNotifier get changes => _changes;

@@ -129,7 +129,6 @@ class _QrScannerViewState extends State<QrScannerView>
         try {
           await _controller.start();
         } catch (_) {
-          // The scanner renders its controller error state.
         }
       });
     } else if (state == AppLifecycleState.inactive) {

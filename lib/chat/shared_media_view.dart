@@ -1,12 +1,4 @@
-﻿//
-//  shared_media_view.dart
-//
-//  Shared-content browser for a chat (群相册 / 文件). Tabs run `searchChatMessages`
-//  with a media filter — photos/videos in a grid, documents / links / voice in
-//  lists. Opened from the chat-info screen.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -78,10 +70,6 @@ const double _videoGridMetadataHeight = 140;
 const int _sharedMediaPageSize = 80;
 const double _sharedMediaLoadMoreThreshold = 640;
 
-/// Music and Video are hosted by the surrounding tablet shell, so a second
-/// back/title bar is both redundant and unsafe there. The richer grid remains
-/// a separate wide-layout decision: portrait iPad keeps the list but still
-/// omits this inner header.
 bool sharedMediaUsesHeaderlessHub(
   Size size, {
   TargetPlatform? platform,
@@ -126,7 +114,7 @@ class SharedMediaView extends StatefulWidget {
   });
   final int chatId;
   final String title;
-  final int initialTab; // 0 图片视频, 1 文件, 2 链接, 3 语音, 4 视频, 5 音乐
+  final int initialTab;
   final String displayTitle;
   final bool lockedTab;
   final bool showBackButton;
@@ -194,8 +182,6 @@ class _SharedMediaViewState extends State<SharedMediaView> {
   late SharedMediaFileFilter _fileFilter = widget.initialFileFilter;
   final Set<int> _downloadActions = {};
 
-  /// Minimum video duration for the video tab, persisted device-wide so the
-  /// choice survives across chats and launches (phone/tablet alike).
   static const _minVideoDurationPrefsKey =
       'mithka.sharedMedia.minVideoDuration';
   static const _minVideoDurationStops = [0, 10, 30, 60, 300, 1800];
@@ -349,8 +335,6 @@ class _SharedMediaViewState extends State<SharedMediaView> {
     String query, {
     required int generation,
   }) async {
-    // A null chat list searches main and archived chats in one ordered stream.
-    // TDLib's opaque offset also lets the cache browser reach older media.
     final response = await _searchGlobalMessages(
       query: query,
       filter: _tabs[tab].filter,
@@ -399,9 +383,6 @@ class _SharedMediaViewState extends State<SharedMediaView> {
   }) {
     final explicit = response.int64('next_from_message_id');
     if (explicit != null) return explicit > 0 ? explicit : 0;
-    // Older TDLib builds do not include the cursor in foundChatMessages. A
-    // short page is then the only reliable end marker; when a page is full,
-    // continue from its oldest media message.
     if (rawCount < _sharedMediaPageSize || messages.isEmpty) return 0;
     return messages.last.id > 0 ? messages.last.id : 0;
   }
@@ -445,13 +426,10 @@ class _SharedMediaViewState extends State<SharedMediaView> {
       if (!mounted || generation != _requestGeneration || tab != _tab) return;
       setState(() {
         _cache[tab] = merged;
-        // A repeated page must terminate even if an older TDLib returns the
-        // same cursor forever.
         _nextFromMessageId[tab] = grew ? cursor : 0;
       });
       _primeFileStates(page);
     } catch (_) {
-      // Keep the cursor so a later scroll can retry a transient TDLib error.
     } finally {
       if (mounted) setState(() => _loadingMore.remove(tab));
     }
@@ -486,7 +464,6 @@ class _SharedMediaViewState extends State<SharedMediaView> {
             (message) => known.add('${message.chatId}:${message.id}'),
           ),
         ];
-        // A short or empty page isn't an end marker; only the cursor is.
         _nextGlobalOffset[tab] = next == offset ? '' : next;
         if (_tabs[tab].videoOnly && _query.trim().isEmpty) {
           _recentGlobalVideos = _cache[tab]!;
@@ -562,10 +539,6 @@ class _SharedMediaViewState extends State<SharedMediaView> {
 
   void _applyFile(Map<String, dynamic> file) {
     final id = file.integer('id');
-    // TDLib emits updateFile for every avatar, thumbnail and sticker in the
-    // app — dozens a second while anything downloads. Rebuilding this page for
-    // a file it has never shown means re-filtering and re-sorting the grid for
-    // nothing, so only the ids this screen actually renders get through.
     if (id == null || !_watchedFiles.contains(id)) return;
     final local = file.obj('local');
     final expected = file.integer('expected_size') ?? 0;
@@ -612,7 +585,6 @@ class _SharedMediaViewState extends State<SharedMediaView> {
       }, _accountSlot);
       _applyFile(file);
     } catch (_) {
-      // Retry on a later filter refresh; never start a download to probe state.
     } finally {
       _loadingFiles.remove(fileId);
     }
@@ -1293,7 +1265,6 @@ class _SharedMediaViewState extends State<SharedMediaView> {
         ? _minDurationControl()
         : null;
 
-    // Split the row so neither control ends up cramped.
     final children = [
       Row(
         children: [
@@ -1320,9 +1291,6 @@ class _SharedMediaViewState extends State<SharedMediaView> {
     );
   }
 
-  /// Discrete min-duration scrubber for the video tab: 0 · 10s · 30s · 1m ·
-  /// 5m · 30m. On the app's own scrubber rather than CupertinoSlider, whose
-  /// thumb dwarfs everything beside it in a toolbar.
   Widget _minDurationControl() {
     final c = context.colors;
     final index = _minVideoDurationStops
@@ -1398,11 +1366,8 @@ class _SharedMediaViewState extends State<SharedMediaView> {
     ),
   };
 
-  /// One download-state dropdown keeps the toolbar compact on narrow screens.
   Widget _fileFilterDropdown() {
     final c = context.colors;
-    // The surface carries its own semantics; wrapping it in another Semantics
-    // node leaves the tap action on the inner one where callers cannot see it.
     return AppInteractiveSurface(
       key: const ValueKey('shared-media-filter-dropdown'),
       semanticLabel: _fileFilterLabel(_fileFilter),
@@ -1585,10 +1550,6 @@ class _SharedMediaViewState extends State<SharedMediaView> {
       ].join(' ').toLowerCase();
       return fields.contains(query);
     }).toList();
-    // Keep the all-videos list in Telegram's message order. Download
-    // completion updates must not move a card out from under the user's
-    // pointer or make it appear to switch lists; only filtered views need
-    // download-priority ordering.
     if (_tabs[_tab].videoOnly && _fileFilter != SharedMediaFileFilter.all) {
       filtered.sort((a, b) {
         final byPriority = _videoPriority(b).compareTo(_videoPriority(a));
@@ -2596,19 +2557,11 @@ class _SharedMediaViewState extends State<SharedMediaView> {
     );
   }
 
-  /// One of these sits in the corner of every photo, video and grid tile. As a
-  /// `PopupMenuButton` it inflated ~25 elements — IconButton, InkResponse and
-  /// its Actions/Focus/MouseRegion/RawGestureDetector stack, plus a Tooltip —
-  /// on top of an ~8 element tile, and a fling recycles a screenful of tiles
-  /// every few frames. It is a painted circle now; the same two actions open in
-  /// the project's own sheet. (It was also Material, which the project bans.)
   Widget _overlayMenu(ChatMessage message) {
     return Semantics(
       key: ValueKey(
         'shared-media-overlay-menu-${_sourceChatIdFor(message)}-${message.id}',
       ),
-      // Its own node, as the button it replaces had — without this the label
-      // and the tap merge into the tile's node and swallow the tile's own.
       container: true,
       button: true,
       label: AppStrings.t(AppStringKeys.commonMore),

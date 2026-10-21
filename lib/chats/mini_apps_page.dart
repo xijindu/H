@@ -1,11 +1,4 @@
-﻿//
-//  mini_apps_page.dart
-//
-//  Telegram Mini Apps surfaced from the chat search screen. The active search
-//  query is resolved by TelegramMiniAppRecents through TDLib.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../chat/telegram_mini_app_recents.dart';

@@ -1,12 +1,3 @@
-//
-//  chat_info_view.dart
-//
-//  Chat info / settings page for a private chat or group (reached by tapping the
-//  conversation header's menu). Grouped white cards on the gray canvas: identity,
-//  member grid (groups), quick rows, pin/mute toggles, destructive actions.
-//  Port of the Swift `ChatInfoView` / `ChatInfoViewModel`.
-//
-
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
@@ -435,8 +426,6 @@ class _ChatInfoViewState extends State<ChatInfoView> {
     );
   }
 
-  /// custom identity row: avatar + name/subtitle inline & left-aligned, with a
-  /// QR icon + chevron on the right (groups → tap opens the 群二维码 page).
   Widget _topCard() {
     final c = context.colors;
     final circleGroups = context.watch<ThemeController>().circularGroupAvatars;
@@ -493,7 +482,6 @@ class _ChatInfoViewState extends State<ChatInfoView> {
     );
   }
 
-  /// Group / channel description with clickable links and mentions.
   Widget _descriptionCard() {
     final c = context.colors;
     return Container(
@@ -660,7 +648,6 @@ class _ChatInfoViewState extends State<ChatInfoView> {
     );
   }
 
-  /// Circular +/− action tile sized like a member avatar (邀请 / 移除).
   Widget _actionTile(IconData icon, String label, VoidCallback onTap) {
     final c = context.colors;
     return GestureDetector(
@@ -893,7 +880,6 @@ class _ChatInfoViewState extends State<ChatInfoView> {
               AppStrings.t(AppStringKeys.chatInfoClearHistory),
               _clearHistory,
             ),
-          // Only a confirmed member can quit — hide 退出 for non-joined groups/channels.
           if (canLeave) ...[
             if (_vm.canClearHistory) const InsetDivider(leadingInset: 0),
             _destructiveRow(
@@ -977,16 +963,13 @@ class ChatInfoViewModel extends ChangeNotifier {
   bool isGroup = false;
   bool isChannel = false;
   int memberCount = 0;
-  String? username; // public @username (supergroups only)
-  bool isPublic = false; // has a public username → searchable
+  String? username;
+  bool isPublic = false;
   bool isPinned = false;
   bool isMuted = false;
   bool isArchived = false;
   int autoDeleteTime = 0;
   List<ChatMember> members = [];
-  // Suppresses progressive streaming during a refresh: the strip is already
-  // showing a full cached list, so filling it one member at a time would
-  // shrink it back to one and regrow.
   bool _paintedFromCache = false;
   bool canInvite = false;
   bool canRemove = false;
@@ -1000,11 +983,10 @@ class ChatInfoViewModel extends ChangeNotifier {
   bool get opensDirectMessagesAsTopics =>
       isAdministeredDirectMessagesGroup || canManageDirectMessages;
   bool canChangeAutoDelete = false;
-  bool isMember = false; // confirmed member → may quit; false hides 退出
+  bool isMember = false;
   bool canClearHistory = false;
   bool _loaded = false;
   String? _notice;
-  // Group / channel description (plain text) with link entities parsed
   String description = '';
   List<MessageTextEntity> descriptionEntities = const [];
 
@@ -1014,7 +996,6 @@ class ChatInfoViewModel extends ChangeNotifier {
     return value;
   }
 
-  /// Parse plain-text description into entities for URLs, @mentions, and emails.
   void _setDescription(String text) {
     description = text;
     if (text.isEmpty) {
@@ -1022,13 +1003,10 @@ class ChatInfoViewModel extends ChangeNotifier {
       return;
     }
     final entities = <MessageTextEntity>[];
-    // URL pattern (http/https)
     final urlPattern = RegExp(r'https?://[^\s]+');
-    // Email pattern
     final emailPattern = RegExp(
       r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
     );
-    // @username pattern
     final mentionPattern = RegExp(r'@[a-zA-Z0-9_]{5,}');
 
     void addMatches(
@@ -1038,7 +1016,6 @@ class ChatInfoViewModel extends ChangeNotifier {
       int? userId,
     }) {
       for (final match in pattern.allMatches(text)) {
-        // Avoid overlapping entities
         if (entities.any((e) => match.start < e.end && match.end > e.offset)) {
           continue;
         }
@@ -1069,9 +1046,6 @@ class ChatInfoViewModel extends ChangeNotifier {
     _loadAsync();
   }
 
-  /// Paints a previously resolved member strip before the network pass starts,
-  /// so switching back to a chat does not replay the whole resolve. The strip
-  /// stays live: [_loadMembers] still refreshes and overwrites it.
   void _seedMembersFromCache() {
     final cached = ChatMembersCache.shared.read(
       accountSlot: TdClient.shared.activeSlot,
@@ -1125,8 +1099,6 @@ class ChatInfoViewModel extends ChangeNotifier {
     await _loadMembers(chat);
   }
 
-  /// Public @username (supergroups) → determines searchability + the 群号 line's
-  /// trailing chip (@handle when public, 不允许被搜索 lock when private).
   Future<void> _loadGroupMeta(Map<String, dynamic> chat) async {
     final type = chat.obj('type');
     try {
@@ -1147,7 +1119,6 @@ class ChatInfoViewModel extends ChangeNotifier {
           canManageDirectMessages = true;
         }
         _applySelfStatus(sg.obj('status'), defaultInvite: false);
-        // Fetch supergroupFullInfo for the description.
         try {
           final info = await TdClient.shared.query({
             '@type': 'getSupergroupFullInfo',
@@ -1168,8 +1139,6 @@ class ChatInfoViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Whether the current user can invite / remove members — gates the 邀请/移除
-  /// action tiles. Creator = both; admin = per rights; member = default invite.
   Future<void> _loadSelfPermissions(Map<String, dynamic> chat) async {
     final defaultInvite =
         chat.obj('permissions')?.boolean('can_invite_users') ?? false;
@@ -1258,7 +1227,6 @@ class ChatInfoViewModel extends ChangeNotifier {
         final raw = full.objects('members') ?? const <Map<String, dynamic>>[];
         memberCount = raw.length;
         await _resolveMembers(raw);
-        // Extract description from basic group full info.
         final desc = full.str('description') ?? '';
         _setDescription(desc);
       } else if (type?.type == 'chatTypeSupergroup') {
@@ -1272,9 +1240,6 @@ class ChatInfoViewModel extends ChangeNotifier {
           'limit': 30,
         });
         final raw = result.objects('members') ?? const <Map<String, dynamic>>[];
-        // _loadGroupMeta already set memberCount from the accurate
-        // getSupergroupFullInfo response; only fall back here when that
-        // was unavailable.
         if (memberCount == 0) {
           memberCount =
               result.integer('member_count') ??
@@ -1294,10 +1259,6 @@ class ChatInfoViewModel extends ChangeNotifier {
       final uid = memberId?.int64('user_id');
       if (uid == null) continue;
       try {
-        // TDLib guarantees updateUser lands before the id is handed to us, so
-        // the index usually already holds this user and the round-trip is
-        // pure latency — the resolve is sequential, so it costs the strip a
-        // full RTT per member.
         final user =
             TdUserIndex.shared.userFor(TdClient.shared.activeSlot, uid) ??
             await TdClient.shared.query({'@type': 'getUser', 'user_id': uid});
@@ -1318,10 +1279,6 @@ class ChatInfoViewModel extends ChangeNotifier {
             roleTitle: roleTitle,
           ),
         );
-        // Stream after each resolve so the grid fills progressively and a slow
-        // or failing lookup can't keep the whole list empty. Skipped once a
-        // cached strip is on screen — there is nothing to fill in, and the
-        // partial lists would only flicker.
         if (!_paintedFromCache) {
           members = List.of(result);
           notifyListeners();
@@ -1330,8 +1287,6 @@ class ChatInfoViewModel extends ChangeNotifier {
     }
     if (result.isNotEmpty) {
       if (_paintedFromCache) {
-        // Swap in one step. An empty result here means the refresh failed
-        // rather than that the group emptied, so the cached strip stands.
         members = List.of(result);
         notifyListeners();
       }

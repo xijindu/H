@@ -1,11 +1,3 @@
-//
-//  profile_detail_view.dart
-//
-//  A user's profile page (个人资料), reached by tapping a contact: a blurred
-//  profile-photo cover with the avatar overlapping the bottom-left, name beside
-//  it, compact detail rows, and a fixed bottom bar (音视频通话 / 发消息).
-//
-
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -77,7 +69,7 @@ class _ProfileDetailViewState extends State<ProfileDetailView> {
   int _emojiStatusId = 0;
   String _statusText = '';
   int? _chatId;
-  List<_FeaturedProfilePhoto> _photos = []; // 精选照片 — profile-photo history
+  List<_FeaturedProfilePhoto> _photos = [];
   String _birthday = '';
   String _location = '';
   String _businessHours = '';
@@ -241,7 +233,6 @@ class _ProfileDetailViewState extends State<ProfileDetailView> {
     } catch (_) {}
   }
 
-  // MARK: - Actions
 
   void _call(bool isVideo) {
     final started = context.read<CallManager>().startCall(
@@ -459,7 +450,6 @@ class _ProfileDetailViewState extends State<ProfileDetailView> {
     return h > 0 ? '${two(h)}:${two(m)}:${two(sec)}' : '${two(m)}:${two(sec)}';
   }
 
-  // MARK: - Build
 
   @override
   Widget build(BuildContext context) {
@@ -637,8 +627,6 @@ class _ProfileDetailViewState extends State<ProfileDetailView> {
     } catch (_) {}
   }
 
-  /// Cover (blurred profile photo, gradient fallback) + overlapping avatar +
-  /// name/username/status.
   Widget _header() {
     final top =
         MediaQuery.of(context).padding.top + iPadWindowChromeInsetOf(context);
@@ -942,8 +930,6 @@ class _ProfileDetailViewState extends State<ProfileDetailView> {
     final chatId = _chatId;
     final toggle = canPlay && chatId != null
         ? () {
-            // Route through the shared player so the track joins the global
-            // queue, the mini bar and the system media controls.
             if (controller.isActive(musicFile)) {
               controller.toggleCurrent();
             } else if (_musicMessage != null) {
@@ -1262,7 +1248,6 @@ class _ProfileDetailViewState extends State<ProfileDetailView> {
     );
   }
 
-  /// 精选照片 — a horizontal strip of the user's profile-photo history.
   Widget _photosCard() {
     final c = context.colors;
     final count = _photos.length;

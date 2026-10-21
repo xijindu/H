@@ -1,6 +1,3 @@
-// Translation catalogue — edit strings directly here.
-// Locale: en-US
-
 import 'locale_catalogue.dart';
 
 const String _tag = "en-US";

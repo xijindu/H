@@ -20,15 +20,11 @@ enum InternalBrowserNavigationAction {
   block,
 }
 
-/// Parses user-visible link text without turning explicit schemes such as
-/// `mailto:` and `tel:` into HTTPS host names.
 Uri? parseLinkUri(String value) {
   final trimmed = value.trim();
   if (trimmed.isEmpty) return null;
   if (trimmed.startsWith('//')) return Uri.tryParse('https:$trimmed');
 
-  // A host followed by a numeric port is not an explicit URI scheme even
-  // though Uri.parse would interpret the text before `:` as one.
   final hostWithPort = RegExp(
     r'^[^/?#\s:]+:\d+(?:[/?#]|$)',
     caseSensitive: false,
@@ -50,8 +46,6 @@ bool internalBrowserSupported({TargetPlatform? platform, bool isWeb = kIsWeb}) {
   };
 }
 
-/// The owned browser intentionally accepts only authenticated web origins.
-/// HTTP and custom schemes still work through the user's default handler.
 bool internalBrowserCanOpen(Uri uri) {
   if (uri.scheme.toLowerCase() != 'https' ||
       !uri.hasAuthority ||
@@ -67,8 +61,6 @@ bool internalBrowserCanOpen(Uri uri) {
   }
 }
 
-/// Returns null when the saved preference asks the caller to present the
-/// per-link chooser.
 LinkOpenTarget? linkOpenTargetFor({
   required LinkOpenMode mode,
   required Uri uri,
@@ -116,7 +108,6 @@ InternalBrowserNavigationAction internalBrowserNavigationAction({
       }.contains(scheme)) {
     return InternalBrowserNavigationAction.block;
   }
-  // Preserve ordinary app deep links, but never feed them to the WebView.
   return InternalBrowserNavigationAction.openExternally;
 }
 
@@ -135,8 +126,6 @@ bool linkCanOpenExternally(Uri uri) {
 
 Future<bool> launchInDefaultBrowser(Uri uri) async {
   if (!linkCanOpenExternally(uri)) return false;
-  // Android 11 package visibility can make canLaunchUrl report a false
-  // negative. Attempt the launch directly, retaining the established fallback.
   for (final mode in const [
     LaunchMode.externalApplication,
     LaunchMode.platformDefault,

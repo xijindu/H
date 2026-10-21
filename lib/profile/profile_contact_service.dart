@@ -67,9 +67,6 @@ Map<String, dynamic> deleteOwnProfilePhotoRequest(int photoId) => {
   'profile_photo_id': photoId,
 };
 
-/// One entry of `getUserProfilePhotos`: the id needed to reuse or delete the
-/// photo, plus the largest size to draw it from. An account keeps a stack of
-/// these, so both the edit-profile strip and the management grid read them.
 class ProfilePhotoEntry {
   const ProfilePhotoEntry({required this.id, required this.file});
 

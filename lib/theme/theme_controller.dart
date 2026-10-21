@@ -1,11 +1,3 @@
-//
-//  theme_controller.dart
-//
-//  Drives the app-wide appearance (跟随系统 / 浅色 / 深色), text scale, and chat
-//  appearance preferences. Values are persisted in SharedPreferences and
-//  applied through providers at the app root.
-//
-
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -122,10 +114,6 @@ enum ChatFolderDisplayMode {
   IconData get icon => _icon.data;
 }
 
-/// Where ordinary web links leave the chat surface.
-///
-/// Telegram links still resolve through TDLib and are unaffected by this
-/// device-wide preference.
 enum LinkOpenMode {
   askEveryTime(
     AppStringKeys.linkBrowserAskEveryTime,
@@ -197,10 +185,6 @@ enum StatusEmojiDisplayMode {
   bool get animate => this == StatusEmojiDisplayMode.animated;
 }
 
-/// How a sender's name is kept legible over a wallpaper.
-///
-/// [blend] pulls the sender colour halfway to the bubble's text colour, which
-/// holds contrast without the halo a shadow leaves around the glyphs.
 enum SenderNameReadabilityMode { background, blend, none }
 
 enum AppFontChoice {
@@ -812,8 +796,6 @@ enum AppMonospaceFontChoice {
     final selectedCustomFamily = customGoogleFamily ?? custom;
     final primaryFamily = withFamily.fontFamily?.trim();
     return withFamily.copyWith(
-      // ThemeController appends emoji and normal-text fallbacks after this
-      // monospace-only portion of the chain.
       fontFamilyFallback: _dedupe([
         if (isCustom &&
             selectedCustomFamily != null &&
@@ -869,8 +851,6 @@ class ThemeController extends ChangeNotifier {
        _activeAccountSlot = initialAccountSlot,
        _activeAccountUserId = initialAccountUserId {
     GoogleFontWeightLoader.shared.addListener(_onGoogleFontWeightsLoaded);
-    // Theming existed unconditionally before this preference was introduced,
-    // so both new installs and migrated users retain the established behavior.
     _themingEnabled = _prefs.getBool(_themingEnabledKey) ?? true;
     _usePerAccountTheming = _prefs.getBool(_usePerAccountThemingKey) ?? false;
     final initialUserId = _activeAccountUserId;
@@ -980,8 +960,6 @@ class ThemeController extends ChangeNotifier {
     );
     _senderNameReadabilityMode = SenderNameReadabilityMode.values.firstWhere(
       (mode) => mode.name == storedSenderNameReadability,
-      // 'shadow' is what this mode was called before it became a colour blend;
-      // a stored preference still names it.
       orElse: () => storedSenderNameReadability == 'shadow'
           ? SenderNameReadabilityMode.blend
           : switch (_prefs.getBool(_senderNameReadabilityPlateKey)) {
@@ -1044,7 +1022,7 @@ class ThemeController extends ChangeNotifier {
       (m) => m.name == _prefs.getString(_unreadBadgeOverflowModeKey),
       orElse: () => UnreadBadgeOverflowMode.capped,
     );
-    AppTheme.applyBrand(_brandColor); // before the first MaterialApp build
+    AppTheme.applyBrand(_brandColor);
   }
 
   static const _modeKey = 'appearanceMode';
@@ -1068,14 +1046,11 @@ class ThemeController extends ChangeNotifier {
   static const _animateAvatarsKey = 'animateAvatars';
   static const _animateStatusEmojiKey = 'animateStatusEmoji';
   static const _chatFolderDisplayModeKey = 'chatFolderDisplayMode';
-  // Retained only to migrate the former show/hide toggle.
   static const _chatFolderFilterKey = 'showChatFolderFilter';
   static const _hideSidebarPhoneKey = 'hideSidebarPhone';
   static const _memberTagsKey = 'showMemberTags';
   static const _plainMemberRoleTagsKey = 'showPlainMemberRoleTags';
   static const _forumTopicsAsGroupChatKey = 'forumTopicsAsGroupChat';
-  // Storage names are retained so existing appearance preferences survive the
-  // user-facing rename from Premium name colors to name colors.
   static const _nameColorsKey = 'showPremiumNameColors';
   static const _premiumEmojiStatusKey = 'showPremiumEmojiStatus';
   static const _chatNameColorsKey = 'showChatPremiumNameColors';
@@ -1107,8 +1082,6 @@ class ThemeController extends ChangeNotifier {
   static const _unreadBadgeOverflowModeKey = 'unreadBadgeOverflowMode';
 
   static const double minFontScale = 0.8;
-  // Text reflows inside bubbles and rows that grow with it, so a generous
-  // ceiling is safe: 2.0 covers users the old 1.4 cap left behind.
   static const double maxFontScale = 2.0;
   static const double minInterfaceScale = 0.66 * 0.66;
   static const double maxInterfaceScale = 1.50 * 1.50;
@@ -1131,10 +1104,6 @@ class ThemeController extends ChangeNotifier {
   int _emojiFontSelectionRevision = 0;
   late List<String> _fontFallbackChain;
 
-  // The font chain is rebuilt from scratch on every applyAppTextStyle call
-  // (three dedupe passes each), and applyAppTextTheme runs 15 of those per
-  // TextTheme. Nothing here changes between builds, so memoize until a font
-  // preference actually moves — see _invalidateFontCaches.
   List<String>? _normalFontFamilyChainCache;
   List<String>? _effectiveFontFamilyChainCache;
   final Map<(TextStyle, bool), TextStyle> _appTextStyleCache = {};
@@ -1266,7 +1235,6 @@ class ThemeController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The reusable semantic palette for every app surface at [brightness].
   AppColors uiColorsFor(Brightness brightness) =>
       brightness == Brightness.dark ? AppColors.dark : AppColors.light;
 
@@ -1322,8 +1290,6 @@ class ThemeController extends ChangeNotifier {
   bool get showMemberTags => _showMemberTags;
   bool get showPlainMemberRoleTags => _showPlainMemberRoleTags;
 
-  /// Opens a forum topic in the regular chat transcript, scoped to that topic,
-  /// instead of the topic post feed.
   bool get forumTopicsAsGroupChat => _forumTopicsAsGroupChat;
   NameColorAudience get chatListNameColorAudience => _chatListNameColorAudience;
   NameColorAudience get chatNameColorAudience => _chatNameColorAudience;
@@ -1394,61 +1360,34 @@ class ThemeController extends ChangeNotifier {
     return value;
   }
 
-  /// App-wide text scale factor, applied at the root via MediaQuery.textScaler
-  /// by the scaled app views. Every surface follows it — chat transcripts,
-  /// chat list, navigation and settings alike.
   double get fontScale => _fontScale;
 
-  /// The scale text actually renders at: the user's own font size preference
-  /// on top of the platform accessibility text size, capped at the range the
-  /// app's layouts are tested against so an extreme system setting cannot
-  /// break a fixed layout on its own.
-  ///
-  /// The system size only ever enlarges. This control owns how small the app
-  /// gets — it shows its setting as a percentage, and a device asking for
-  /// text below the platform default would otherwise render 100% smaller than
-  /// the sizes the app is designed at. Enlarging still composes, so a system
-  /// accessibility size carries into the app on its own.
   double effectiveTextScale(TextScaler systemScaler) =>
       (_fontScale * math.max(systemScaler.scale(1.0), 1.0)).clamp(
         minFontScale,
         maxFontScale,
       );
 
-  // Font scaling is applied once by the root MediaQuery; Text applies it
-  // implicitly and RichText reads it explicitly. Returning an already scaled
-  // size here made chat typography grow twice.
   double chatTextSize(double base) => base;
 
-  /// Squared value shown by the Interface Size control. For example, the
-  /// historical 1.5 render scale is presented as 225%.
   double get interfaceScale => _interfaceScale * _interfaceScale;
   double get renderedInterfaceScale => math.sqrt(interfaceScale);
   double get avatarSize => AppMetric.avatarSize;
   double get navHeaderHeight => AppMetric.navHeaderHeight;
   double scaled(double base) => base;
 
-  /// Drops every derived font cache. Called from anywhere a font preference is
-  /// assigned, including the preference reload — a setter-only sweep would
-  /// serve a stale TextTheme after an account switch.
   void _invalidateFontCaches() {
     _normalFontFamilyChainCache = null;
     _effectiveFontFamilyChainCache = null;
     _appTextStyleCache.clear();
   }
 
-  /// The cached chains are shared with every caller; treat them as read-only.
   List<String> _normalFontFamilyChain([TextStyle? base]) {
     return _normalFontFamilyChainCache ??= dedupeFontFamilies([
       ...(_fontFallbackChain.isNotEmpty
           ? _fontFallbackChain
           : [AppFontChoice._platformFontFamily()]),
       ...AppFontChoice._platformFontFallback(),
-      // Last resort. The platform's own UI face carries every weight and every
-      // script the system can render, so a chain that misses a glyph lands
-      // somewhere sane instead of on the engine's fallback of last resort.
-      // Deduping keeps it from appearing twice under the stock configuration,
-      // where it is already the primary.
       AppFontChoice._platformFontFamily(),
     ]);
   }
@@ -1469,9 +1408,6 @@ class ThemeController extends ChangeNotifier {
     final cached = _appTextStyleCache[cacheKey];
     if (cached != null) return cached;
     final styled = _computeAppTextStyle(base, boldText: boldText);
-    // The distinct base styles are the ~30 entries of two TextThemes plus the
-    // root body style; the guard only exists so an unexpected caller cannot
-    // grow this without bound.
     if (_appTextStyleCache.length >= 128) _appTextStyleCache.clear();
     _appTextStyleCache[cacheKey] = styled;
     return styled;
@@ -1500,12 +1436,6 @@ class ThemeController extends ChangeNotifier {
     );
   }
 
-  /// Names the family that holds every weight face once it is registered.
-  ///
-  /// Until then this falls back to google_fonts' own per-variant family, whose
-  /// single face makes the app's w600 labels a synthetic embolden rather than
-  /// the designed SemiBold. [GoogleFontWeightLoader] reports back when the real
-  /// faces land, and the cached styles are recomputed against them.
   TextStyle _googleTextStyle(String googleFamily, TextStyle weightedBase) {
     final loader = GoogleFontWeightLoader.shared;
     final unified = loader.loadedFamily(googleFamily);
@@ -1550,13 +1480,6 @@ class ThemeController extends ChangeNotifier {
     );
   }
 
-  /// Google-hosted families indexed by every name they answer to. The linear
-  /// scan this replaces walked 60 enum entries and evaluated `fontFamily` on
-  /// each, allocating a `replaceAll` String per Google entry.
-  ///
-  /// Only Google entries are indexed: a non-Google entry resolved to its own
-  /// null `googleFamily`, which is what a miss returns anyway, and no
-  /// non-Google family name collides with a Google one.
   static final Map<String, String> _googleFamilyByFamilyName = {
     for (final font in AppFontChoice.values)
       if (font.googleFamily case final google?) ...{
@@ -1583,9 +1506,6 @@ class ThemeController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Leave automatic mode by reversing the appearance currently on screen.
-  /// Once explicit, use the selected mode so repeated clicks also work while
-  /// the animated theme or the switch's build callback still has old data.
   void toggleDayNight(Brightness currentBrightness) {
     mode = switch (_mode) {
       AppearanceMode.light => AppearanceMode.dark,
@@ -1597,7 +1517,6 @@ class ThemeController extends ChangeNotifier {
     };
   }
 
-  /// The active scope's accent / brand color.
   set brandColor(Color value) {
     if (_brandColor == value) return;
     _brandColor = value;
@@ -1699,9 +1618,6 @@ class ThemeController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Registers an already-cached selected emoji font before the first frame.
-  /// Missing cache entries are intentionally not downloaded on the launch
-  /// path; the normal idle loader can fetch those without delaying startup.
   static Future<void> preloadCachedEmojiFont(SharedPreferences prefs) async {
     final storedKey = prefs.getString(_emojiFontChoiceKey);
     final migrated =
@@ -1719,21 +1635,13 @@ class ThemeController extends ChangeNotifier {
     }
   }
 
-  /// Bumped when stored emoji font keys need another one-shot migration.
   static const _emojiFontSchemaVersion = 1;
 
-  /// Names of the pre-catalog `EmojiFontChoice` enum mapped onto catalog keys.
-  /// `noto` meant the monochrome font back then and means the color one in the
-  /// catalog, so this may only ever be applied to a pre-catalog preference —
-  /// see [_emojiFontKeysAreMigrated].
   static const _legacyEmojiFontKeys = {
     'notoColor': 'noto',
     'noto': 'noto-mono',
   };
 
-  /// Whether the stored emoji font key already uses catalog keys. Only the
-  /// catalog writes a label alongside the key, so its presence identifies a
-  /// preference that must be left alone even before the schema was stamped.
   bool get _emojiFontKeysAreMigrated =>
       (_prefs.getInt(_emojiFontSchemaKey) ?? 0) >= _emojiFontSchemaVersion ||
       _prefs.getString(_emojiFontLabelKey) != null;
@@ -1831,8 +1739,6 @@ class ThemeController extends ChangeNotifier {
   }
 
   set interfaceScale(double value) {
-    // Guard the stored value, not the argument: the getter squares it back, so
-    // a round-tripped double would never compare equal to what came in.
     final next = math.sqrt(value.clamp(minInterfaceScale, maxInterfaceScale));
     if (_interfaceScale == next) return;
     _interfaceScale = next;
@@ -1841,9 +1747,6 @@ class ThemeController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The appearance sliders assign at pointer rate and every SharedPreferences
-  /// write rewrites the whole store, so the in-memory value moves now and the
-  /// disk write waits for the drag.
   void _scheduleScalePersist() {
     _scalePersistTimer?.cancel();
     _scalePersistTimer = Timer(
@@ -1852,8 +1755,6 @@ class ThemeController extends ChangeNotifier {
     );
   }
 
-  /// Only the scale that actually moved is written, so a scale this instance
-  /// never changed cannot push a stale cached value over one just stored.
   void _persistScales() {
     _scalePersistTimer = null;
     if (_fontScaleNeedsPersist) {
@@ -1876,8 +1777,6 @@ class ThemeController extends ChangeNotifier {
     super.dispose();
   }
 
-  /// The styles handed out so far name google_fonts' single-face family, so
-  /// drop them and rebuild against the one that now carries every weight.
   void _onGoogleFontWeightsLoaded() {
     _invalidateFontCaches();
     notifyListeners();

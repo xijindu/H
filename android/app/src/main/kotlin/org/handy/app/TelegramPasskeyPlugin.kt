@@ -30,14 +30,6 @@ import io.flutter.plugin.common.MethodChannel
 import java.security.MessageDigest
 import org.json.JSONObject
 
-/**
- * Credential Manager bridge for Telegram passkeys.
- *
- * Telegram's TDLib supplies WebAuthn options for the telegram.org relying
- * party. Credential Manager must sign the exact clientDataJSON hash while the
- * request is attributed to https://telegram.org; otherwise Telegram will
- * reject the assertion or attestation.
- */
 class TelegramPasskeyPlugin(
     private val activity: FragmentActivity,
     messenger: BinaryMessenger,

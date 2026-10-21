@@ -1,12 +1,4 @@
-﻿//
-//  full_image_viewer.dart
-//
-//  Fullscreen image gallery. Pinch / double-tap to zoom, drag to pan when
-//  zoomed; at fit-scale swipe down to dismiss and left/right to page across the
-//  chat's images. Port of the Swift `FullImageViewer`.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -181,11 +173,6 @@ class _FullImageViewerState extends State<FullImageViewer> {
                                   AppRadius.lg,
                                 ),
                               ),
-                              // A Container given an alignment grows to its
-                              // constraints, which here is the whole width
-                              // between the buttons: the counter rendered as a
-                              // bar across the window. Centring with a width
-                              // factor keeps the pill around its text.
                               child: Center(
                                 widthFactor: 1,
                                 child: Text(
@@ -365,8 +352,6 @@ class _ViewerPageState extends State<_ViewerPage> {
     );
   }
 
-  // A second finger can take over even when a gallery swipe or dismiss drag
-  // has already won the gesture arena before the scale recognizer starts.
   void _onPointerDown(PointerDownEvent event) {
     if (event.kind != PointerDeviceKind.touch) return;
     _touches[event.pointer] = event.localPosition;
@@ -439,9 +424,6 @@ class _ViewerPageState extends State<_ViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Sized from the box this page is given, not MediaQuery: the viewer also
-    // runs inside a split-layout pane, where the screen is larger than the
-    // viewport and the image spilled past it.
     return LayoutBuilder(builder: _buildPage);
   }
 
@@ -465,10 +447,6 @@ class _ViewerPageState extends State<_ViewerPage> {
         panEnabled: !_touchZoomActive,
         scaleEnabled: !_touchZoomActive,
         trackpadScrollCausesScale: true,
-        // Keep a finite viewport-sized child for both the real image and its
-        // full image and every thumbnail. Previously only a fully downloaded
-        // file or an in-memory mini-thumbnail was put in InteractiveViewer,
-        // so images still resolving from TDLib could not be zoomed at all.
         child: child,
       ),
     );

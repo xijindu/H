@@ -1,13 +1,4 @@
-﻿//
-//  sticker_set_detail_view.dart
-//
-//  表情详情 — a sticker-set detail page (modeled on the reference app's): a header, a card with
-//  the set's cover + title + sticker count and an 添加/移除 (install/remove) button,
-//  and a grid of the set's stickers rendered with animated previews. Loads the set
-//  via TDLib getStickerSet and toggles install with changeStickerSet.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../components/app_icons.dart';
@@ -15,7 +6,7 @@ import '../components/toast.dart';
 import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 import '../theme/app_theme.dart';
-import 'custom_emoji.dart'; // parseStickers
+import 'custom_emoji.dart';
 import 'sticker_export_service.dart';
 import 'sticker_item.dart';
 import 'sticker_preview.dart';
@@ -281,9 +272,6 @@ class _StickerSetDetailViewState extends State<StickerSetDetailView> {
                   )
                 else
                   Expanded(
-                    // A shrinkWrap grid under a ListView gets unbounded height
-                    // and lays out every cell, so all ~120 stickers used to
-                    // mount (and start) at once. A sliver keeps it lazy.
                     child: CustomScrollView(
                       slivers: [
                         SliverPadding(
@@ -555,9 +543,6 @@ class _StickerSetDetailViewState extends State<StickerSetDetailView> {
   }
 }
 
-/// Chooses the smallest number of columns that keeps every square sticker at
-/// or below 150 logical pixels. Grid spacing only makes the final cells
-/// smaller, so it does not need to be subtracted here.
 @visibleForTesting
 int stickerSetGridColumnCount(double width) {
   if (!width.isFinite || width <= 0) return 1;

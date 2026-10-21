@@ -339,8 +339,6 @@ class _ActiveAccountLockAvatarState extends State<_ActiveAccountLockAvatar> {
       final user = await TdClient.shared.query({'@type': 'getMe'});
       if (mounted) _apply(user);
     } catch (_) {
-      // The authorization state may not be ready during the launch frame. Its
-      // update retries this query while the monogram remains visible.
     }
   }
 
@@ -367,7 +365,6 @@ class _ActiveAccountLockAvatarState extends State<_ActiveAccountLockAvatar> {
         }
       }
     } on ProviderNotFoundException catch (_) {
-      // Standalone previews can render the TDLib-backed avatar directly.
     }
     final cacheSize = (size * MediaQuery.devicePixelRatioOf(context)).ceil();
     return Container(

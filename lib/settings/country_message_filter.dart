@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../auth/country_picker.dart';
 
-/// Local-only filter for private chats from non-contacts in selected regions.
 class CountryMessageFilter extends ChangeNotifier {
   CountryMessageFilter();
 

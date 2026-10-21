@@ -1,12 +1,4 @@
-﻿//
-//  group_management_view.dart
-//
-//  Telegram-style group management for admins/owners. This intentionally maps
-//  to real TDLib capabilities instead of showing non-Telegram automation controls
-//  that Telegram groups cannot perform natively.
-//
-
-import 'package:flutter/widgets.dart';
+﻿import 'package:flutter/widgets.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../chats/chat_delete_dialog.dart';
@@ -63,9 +55,6 @@ class _GroupManagementViewState extends State<GroupManagementView> {
 
   Map<String, bool> _permissions = _defaultPermissions;
 
-  // Default member permissions shown in the Posting Permissions section. The
-  // keys are TDLib 1.8.67 chatPermissions fields; can_create_topics is only
-  // meaningful in forum supergroups and is filtered out of the UI otherwise.
   static const _permissionLabels = <String, String>{
     'can_send_basic_messages':
         AppStringKeys.groupManagementPermissionSendMessages,
@@ -437,8 +426,6 @@ class _GroupManagementViewState extends State<GroupManagementView> {
                             AppStringKeys.groupManagementPostingPermissions,
                           ),
                           [
-                            // can_create_topics is a member right only in
-                            // forum supergroups; hide it everywhere else.
                             for (final entry in _permissionLabels.entries.where(
                               (e) => e.key != 'can_create_topics' || _isForum,
                             )) ...[

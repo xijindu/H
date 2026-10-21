@@ -1,12 +1,4 @@
-﻿//
-//  chat_members_view.dart
-//
-//  群成员 — full member list for a group/channel, reached from Chat Info. Loads
-//  members via TDLib (getSupergroupMembers / getBasicGroupFullInfo), resolves
-//  each user's name/photo/role, and lists them with role tags + online dots.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
 
@@ -123,8 +115,6 @@ class _ChatMembersViewState extends State<ChatMembersView> {
       } else if (type?.type == 'chatTypeSupergroup') {
         final sgid = type?.int64('supergroup_id');
         if (sgid != null) {
-          // getSupergroupFullInfo has the accurate member_count;
-          // getSupergroupMembers only returns an approximate count.
           int? fullCount;
           try {
             final fullInfo = await TdClient.shared.query({
@@ -215,12 +205,10 @@ class _ChatMembersViewState extends State<ChatMembersView> {
           ),
         );
       } catch (_) {}
-      // Stream partial results so the list fills in progressively.
       if (mounted && result.length % 12 == 0) {
         setState(() => _members = List.of(result));
       }
     }
-    // Owners/admins first, then by name.
     result.sort((a, b) {
       int rank(MemberRole? r) => r == MemberRole.owner
           ? 0

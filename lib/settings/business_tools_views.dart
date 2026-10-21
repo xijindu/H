@@ -782,8 +782,6 @@ class _BusinessQuickReplyEditorViewState
   }
 }
 
-/// Chat-surface picker. Selecting a shortcut sends every message in it using
-/// TDLib's atomic `sendQuickReplyShortcutMessages` request.
 class BusinessQuickReplyPickerView extends StatefulWidget {
   const BusinessQuickReplyPickerView({
     super.key,

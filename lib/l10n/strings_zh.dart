@@ -1,6 +1,3 @@
-// Translation catalogue — edit strings directly here.
-// Locale: zh
-
 import 'locale_catalogue.dart';
 
 const String _tag = "zh";

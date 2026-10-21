@@ -1,13 +1,4 @@
-﻿//
-//  hidden_sender_store.dart
-//
-//  Members whose messages the user hides on this device, in one group or in
-//  every chat. Unlike Block, nothing is sent to Telegram: the member is not
-//  blocked, not reported and not told. Chat transcripts, notifications and
-//  AI summaries leave their messages out.
-//
-
-import 'dart:convert';
+﻿import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -22,16 +13,12 @@ class HiddenSender {
     this.chatTitle,
   });
 
-  /// A user id (positive) or, for members posting as a chat, that chat's id
-  /// (negative) — the same space as [ChatMessage.senderId].
   final int senderId;
   final String name;
 
-  /// The group this applies to, or null for every chat.
   final int? chatId;
   final String? chatTitle;
 
-  /// Unix seconds.
   final int hiddenAt;
 
   bool get everywhere => chatId == null;
@@ -79,7 +66,6 @@ class HiddenSenderStore extends ChangeNotifier {
   Set<int> _everywhere = const {};
   Map<int, Set<int>> _byChat = const {};
 
-  /// Newest first.
   List<HiddenSender> get entries => _entries;
 
   void initialize(SharedPreferences prefs) {
@@ -100,7 +86,6 @@ class HiddenSenderStore extends ChangeNotifier {
     _replace(entries, persist: false);
   }
 
-  /// Re-reads the list after another window changed it.
   Future<void> reload() async {
     final prefs = _prefs;
     if (prefs == null) return;
@@ -108,14 +93,12 @@ class HiddenSenderStore extends ChangeNotifier {
     initialize(prefs);
   }
 
-  /// Whether a message from [senderId] in [chatId] is hidden.
   bool hides(int? senderId, int chatId) {
     if (senderId == null) return false;
     return _everywhere.contains(senderId) ||
         (_byChat[chatId]?.contains(senderId) ?? false);
   }
 
-  /// Entries that affect [chatId]: its own, plus the every-chat ones.
   List<HiddenSender> entriesFor(int chatId) => [
     for (final entry in _entries)
       if (entry.everywhere || entry.chatId == chatId) entry,
@@ -125,7 +108,6 @@ class HiddenSenderStore extends ChangeNotifier {
     _replace([
       entry,
       for (final other in _entries)
-        // Hiding everywhere makes this member's per-group entries moot.
         if (!other.sameScope(entry) &&
             !(entry.everywhere && other.senderId == entry.senderId))
           other,

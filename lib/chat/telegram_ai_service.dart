@@ -112,9 +112,6 @@ class TelegramAiDailyLimitReached extends TelegramAiPremiumRequired {
 
 const telegramAiPremiumFloodCode = 'AICOMPOSE_FLOOD_PREMIUM';
 
-/// Telegram iOS treats this RPC error as a dedicated Premium limit state.
-/// Keep the matcher public so translation surfaces that call TDLib directly
-/// can avoid presenting the raw backend error code.
 bool isTelegramAiPremiumFlood(Object error) {
   if (error is TelegramAiDailyLimitReached) return true;
   final message = error is TdError ? error.message : error.toString();

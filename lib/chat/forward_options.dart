@@ -23,9 +23,6 @@ class ForwardBlockedException implements Exception {
   String toString() => 'ForwardBlockedException';
 }
 
-/// Pins source ids and permission probes to the client that supplied them.
-/// Switching the selected account must not re-author cached source text as
-/// another account. A replaced/removed source client cannot serve the copy.
 ForwardQuery forwardQueryForOwner(
   TdClient client, {
   required int accountSlot,
@@ -87,9 +84,6 @@ Future<void> assertForwardAllowed({
   required List<int> messageIds,
   required ForwardOptions options,
 }) async {
-  // Chat protection changes are delivered independently from message
-  // properties. Checking the chat first makes the restriction effective as
-  // soon as updateChatHasProtectedContent is folded into TDLib's local state.
   try {
     final chat = await query({'@type': 'getChat', 'chat_id': fromChatId});
     if (chat.boolean('has_protected_content') == true) {
@@ -98,8 +92,6 @@ Future<void> assertForwardAllowed({
   } on ForwardBlockedException {
     rethrow;
   } catch (_) {
-    // Per-message properties below remain authoritative if an old/local TDLib
-    // state can't return the source chat yet.
   }
 
   try {
@@ -117,8 +109,6 @@ Future<void> assertForwardAllowed({
   } on ForwardBlockedException {
     rethrow;
   } catch (_) {
-    // Older/local TDLib states can fail to provide properties. Let the actual
-    // forward request decide and normalize the server error in the caller.
   }
 }
 

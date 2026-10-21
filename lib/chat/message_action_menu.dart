@@ -1,13 +1,4 @@
-﻿//
-//  message_action_menu.dart
-//
-//  The dark, rounded HUD menu shown when a message bubble is long-pressed. A
-//  grid of context actions (复制 / 回复 / 转发 / 收藏 / 删除, plus 存表情 for
-//  stickers). Fixed dark colors on purpose — a floating HUD, not themed surface.
-//  Port of the Swift `MessageActionMenu`.
-//
-
-import 'dart:math' as math;
+﻿import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
@@ -195,7 +186,6 @@ class MessageActionMenu extends StatelessWidget {
   final bool hasSelectedQuote;
   final bool allowSuggestedPostOffer;
 
-  /// Offer to hide this sender's messages on this device (groups only).
   final bool allowHideSender;
   final MessageActionSource source;
   final bool showingOriginalTranslation;
@@ -357,9 +347,6 @@ class MessageActionMenu extends StatelessWidget {
     result.add(MessageAction.multiSelect);
     result.add(isPinned ? MessageAction.unpinTodo : MessageAction.pinTodo);
     if (allowForwarding) result.add(MessageAction.save);
-    // 添加 — add any sticker (tgs / webm / webp) to favorites.
-    // Non-premium users can't add custom emoji / emoji sets, so hide 添加 + 表情包
-    // on single-emoji messages for them (regular stickers stay addable).
     final canAddEmoji = !message.isAnimatedEmoji || EmojiStore.shared.isPremium;
     if (message.stickerFileId != null && canAddEmoji) {
       result.add(MessageAction.saveSticker);

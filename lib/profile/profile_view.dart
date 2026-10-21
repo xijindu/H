@@ -1,13 +1,3 @@
-//
-//  profile_view.dart
-//
-//  The "我" side menu (slides in from the left, ~88% width). Redesigned to match
-//  the reference app's drawer: a themed avatar banner → a vertical list
-//  of rows (Calls / Saved Messages / Files / Videos) → account switcher →
-//  an icon-only bottom
-//  bar. Backed by real TDLib via ProfileViewModel + AccountStore.
-//
-
 import 'dart:async';
 import 'dart:io';
 
@@ -51,9 +41,6 @@ class ProfileViewModel extends ChangeNotifier {
   void onAppear() {
     if (_loaded) return;
     _loaded = true;
-    // Keep the profile (and the "我" drawer, which is this same view) live: when
-    // our own user changes — e.g. after editing the name — TDLib emits updateUser
-    // for us, so re-parse instead of waiting for an app restart.
     _sub = TdClient.shared.updatesOf('updateUser').listen((u) {
       final usr = u.obj('user');
       if (usr != null && usr.int64('id') == user?.id) _applyUser(usr);
@@ -95,8 +82,6 @@ class ProfileViewModel extends ChangeNotifier {
     super.dispose();
   }
 
-  /// Default emoji-status suggestions (custom_emoji_ids), resolved on demand
-  /// for the status picker.
   Future<List<int>> statusOptions() async {
     final ids = <int>[];
     for (final type in const [
@@ -105,8 +90,6 @@ class ProfileViewModel extends ChangeNotifier {
     ]) {
       try {
         final res = await TdClient.shared.query({'@type': type});
-        // Newer TDLib: { emoji_statuses: [emojiStatusTypeCustomEmoji{custom_emoji_id}] };
-        // older: { custom_emoji_ids: [int64] }.
         for (final s
             in res.objects('emoji_statuses') ??
                 const <Map<String, dynamic>>[]) {
@@ -124,14 +107,10 @@ class ProfileViewModel extends ChangeNotifier {
     return ids.toSet().toList();
   }
 
-  /// Sets (id != 0) or clears (id == 0) the current user's emoji status.
   Future<bool> setEmojiStatus(int id) async {
     try {
       await TdClient.shared.query({
         '@type': 'setEmojiStatus',
-        // Current TDLib: emojiStatus.type = emojiStatusTypeCustomEmoji{...}.
-        // (Sending custom_emoji_id at the top level is silently ignored, so the
-        // status never actually changes.)
         'emoji_status': id == 0
             ? null
             : {
@@ -172,9 +151,6 @@ class _ProfileViewState extends State<ProfileView> {
     _vm.onAppear();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // Loading global themes notifies every open chat. Starting that work
-      // from initState can synchronously dirty an ancestor while this profile
-      // subtree is still being built, so begin it after the frame is complete.
       unawaited(_wallpaperController.loadGlobalChatThemes());
       unawaited(_wallpaperController.loadDefaultWallpaper(dark: false));
       unawaited(_wallpaperController.loadDefaultWallpaper(dark: true));
@@ -235,8 +211,6 @@ class _ProfileViewState extends State<ProfileView> {
     );
   }
 
-  // MARK: - Themed profile banner
-
   Widget _banner() => AnimatedBuilder(
     animation: _wallpaperController,
     builder: (context, _) => _themedBanner(),
@@ -281,7 +255,6 @@ class _ProfileViewState extends State<ProfileView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Top controls: theme toggle + profile + settings.
               Row(
                 children: [
                   const Spacer(),
@@ -368,7 +341,6 @@ class _ProfileViewState extends State<ProfileView> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // Edit profile — replaces the old duplicate 编辑资料 card.
                   GestureDetector(
                     key: const ValueKey('profile-banner-edit'),
                     onTap: () => _root.push(
@@ -425,8 +397,6 @@ class _ProfileViewState extends State<ProfileView> {
       ),
     );
   }
-
-  // MARK: - custom vertical rows
 
   Widget _rowsCard() {
     return Container(
@@ -527,8 +497,6 @@ class _ProfileViewState extends State<ProfileView> {
     );
   }
 
-  // MARK: - Account switcher
-
   Widget _accountsCard() {
     final c = context.colors;
     final accounts = context.watch<AccountStore>();
@@ -602,7 +570,6 @@ class _ProfileViewState extends State<ProfileView> {
   String _accountLabel(AccountSummary s) =>
       s.phone.isNotEmpty ? '${s.name}（${s.phone}）' : s.name;
 
-  /// Long-press or swipe an account row to remove it from this device only.
   Future<void> _confirmRemoveAccount(
     AccountStore accounts,
     AccountSummary s,
@@ -647,8 +614,6 @@ class _ProfileViewState extends State<ProfileView> {
     final avatarCacheSize = (36 * MediaQuery.devicePixelRatioOf(context))
         .ceil();
     return ConstrainedBox(
-      // A minimum rather than a fixed height: the two stacked lines grow with
-      // the text scale and would otherwise clip out of the row.
       constraints: const BoxConstraints(minHeight: 56),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -722,9 +687,6 @@ class _AccountActionRowState extends State<AccountActionRow> {
   static const double _actionsWidth = _actionWidth * 2;
   double _offset = 0;
 
-  // The swipe actions sit behind the row, so the row has to be a bounded box
-  // rather than one that sizes to its content. Grow it with the name and
-  // phone lines it holds instead.
   double _rowExtent(BuildContext context) =>
       AppMetric.rowExtentFor(context, base: 56, lines: const [15, 12]);
 

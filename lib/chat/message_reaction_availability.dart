@@ -12,11 +12,6 @@ class MessageReactionUnavailableException implements Exception {
   String toString() => 'Reaction is unavailable for this message';
 }
 
-/// Whether the action overlay carries reaction controls.
-///
-/// Touch layouts draw them as a rounded bar above the pressed message. Neither
-/// has anything to offer for a call log, or for a message the server allows
-/// no reactions on.
 bool messageActionShowsReactionControls({
   required bool isCall,
   required MessageReactionAvailability? availability,

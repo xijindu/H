@@ -1,11 +1,3 @@
-//
-//  audio_search_view.dart
-//
-//  Telegram audio search for the composer 音频 action. Uses TDLib's global
-//  searchMessages + searchMessagesFilterAudio, then copies the selected audio
-//  message into the current chat.
-//
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';

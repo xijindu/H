@@ -1,9 +1,3 @@
-//
-//  feature_settings_view.dart
-//
-//  功能: toggles for optional app sections and capability surfaces.
-//
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 

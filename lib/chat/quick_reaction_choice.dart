@@ -1,6 +1,4 @@
-﻿// Persisted representation of an item in the message quick-reaction strip.
-
-import 'package:flutter/foundation.dart';
+﻿import 'package:flutter/foundation.dart';
 
 @immutable
 class QuickReactionChoice {

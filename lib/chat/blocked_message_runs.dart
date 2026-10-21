@@ -1,8 +1,5 @@
 ﻿import '../tdlib/td_models.dart';
 
-/// Returns the exclusive end index of one uninterrupted blocked-message run.
-/// Date/unread boundaries are supplied by the transcript so those semantic
-/// separators remain visible even when the adjacent senders are blocked.
 int blockedMessageRunEnd(
   List<ChatMessage> messages,
   int start, {

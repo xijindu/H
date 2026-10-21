@@ -12,11 +12,6 @@ class ChatReturnToLatestFailure {
   final bool userInitiated;
 }
 
-/// Coordinates returning from an anchored history window to the latest edge.
-///
-/// TDLib requests cannot be physically cancelled once sent. A user drag
-/// invalidates application of the old response, while a later button tap waits
-/// for that request to finish before starting a fresh one.
 class ChatReturnToLatestCoordinator {
   factory ChatReturnToLatestCoordinator({
     required Future<bool> Function() loadLatest,
@@ -64,7 +59,6 @@ class ChatReturnToLatestCoordinator {
 
     _pending = true;
     if (source == ChatReturnToLatestSource.user) {
-      // A button tap upgrades an automatic request already in flight.
       _userInitiated = true;
     }
     _failure = null;
@@ -72,14 +66,12 @@ class ChatReturnToLatestCoordinator {
     _pump();
   }
 
-  /// Cancels the intent only after a real user drag, not a pointer hold.
   void cancelForUserDrag() {
     if (_automaticBlockedByDrag && !_pending) return;
     _automaticBlockedByDrag = true;
     _cancelPendingIntent();
   }
 
-  /// Cancels a competing navigation without changing drag gating.
   void cancel() {
     if (!_pending && _failure == null) return;
     _cancelPendingIntent();
@@ -139,7 +131,6 @@ class ChatReturnToLatestCoordinator {
     final shouldRetryAfterInvalidation = _inFlightWasInvalidated;
     _inFlightWasInvalidated = false;
 
-    // A drag cancelled the old intent and no newer button tap replaced it.
     if (!_pending) {
       _onChanged();
       return;
@@ -152,8 +143,6 @@ class ChatReturnToLatestCoordinator {
     }
 
     if (shouldRetryAfterInvalidation) {
-      // A new button tap arrived while an invalidated TDLib query was still
-      // winding down. It now owns a fresh request.
       _onChanged();
       _pump();
       return;

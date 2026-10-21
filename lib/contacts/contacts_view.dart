@@ -1,12 +1,4 @@
-﻿//
-//  contacts_view.dart
-//
-//  The 联系人 tab: a custom root header (avatar → drawer, title, add icon) over a
-//  search pill and indicator-text tabs. 好友 lists contacts; 群聊 / 频道 list chats;
-//  机器人 lists bot users. Port of the Swift `ContactsView` / `ContactsViewModel`.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
@@ -36,8 +28,6 @@ bool contactMatchesQuery(Contact contact, String rawQuery) => _contactMatches(
   rawQuery.trim().toLowerCase().replaceFirst(RegExp(r'^@+'), ''),
 );
 
-/// Takes the already-normalised query so the tab filters normalise once per
-/// build instead of once per row.
 bool _contactMatches(Contact contact, String query) {
   if (query.isEmpty) return true;
   return contact.name.toLowerCase().contains(query) ||
@@ -47,7 +37,6 @@ bool _contactMatches(Contact contact, String query) {
       (contact.username?.toLowerCase().contains(query) ?? false);
 }
 
-/// Contact-list row using the established touch layout.
 class ContactRowView extends StatelessWidget {
   const ContactRowView({
     super.key,
@@ -133,7 +122,7 @@ class ContactsView extends StatefulWidget {
 class _ContactsViewState extends State<ContactsView> {
   final _vm = ContactsViewModel();
   final _searchController = TextEditingController();
-  int _tab = 0; // 0 好友, 1 群聊, 2 频道, 3 机器人
+  int _tab = 0;
 
   @override
   void initState() {
@@ -183,10 +172,6 @@ class _ContactsViewState extends State<ContactsView> {
         children: [
           _header(),
           Expanded(
-            // Only the selected tab is filtered, and its rows are built lazily.
-            // The indexes are network-sized — 300 contacts, every joined group
-            // and channel — and the old Column inflated all of them on every
-            // keystroke and every view-model notification.
             child: CustomScrollView(
               slivers: [
                 SliverToBoxAdapter(child: _searchPill()),
@@ -422,8 +407,6 @@ class _ContactsViewState extends State<ContactsView> {
     );
   }
 
-  /// The card is a flat colour behind the rows, so a virtualised list only has
-  /// to repeat it per row instead of wrapping the whole (unbounded) column.
   Widget _rowCard(BuildContext context, Widget row, {required bool last}) {
     return ColoredBox(
       color: context.colors.card,
@@ -462,8 +445,6 @@ class _ContactsViewState extends State<ContactsView> {
                   context,
                   userId: contact.id,
                   name: contact.name,
-                  // The contacts tab owns a detail pane; a window would leave it
-                  // showing its "select a contact" placeholder.
                   preferInlinePane: widget.onOpenDetail != null,
                   openFallback: () => _openDetail(
                     ProfileDetailView(
@@ -720,10 +701,6 @@ class ContactsViewModel extends ChangeNotifier {
       final ids = res.int64Array('chat_ids') ?? const <int>[];
       for (final id in ids) {
         if (_disposed) return;
-        // getChats has no offset, so every pass returns the ids the previous
-        // pass already hydrated. Live edits arrive through _subscribe. Marked
-        // only once getChat has actually answered, or a chat whose fetch fails
-        // once would be skipped by every later pass and never appear at all.
         if (_hydratedChats.contains(id)) continue;
         try {
           final chat = await TdClient.shared.query({
@@ -763,8 +740,6 @@ class ContactsViewModel extends ChangeNotifier {
         passes < _prefetchPasses) {
       passes += 1;
       final loaded = await _loadChatList(list, _pageSize);
-      // Ask for everything loaded so far — with a flat _pageSize the chats past
-      // list position 100 were never ingested at all.
       await _hydrateChatList(list, _pageSize * (passes + 1));
       if (_disposed || !loaded) break;
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -861,8 +836,6 @@ class ContactsViewModel extends ChangeNotifier {
     _scheduleChatListRefresh();
   }
 
-  /// The prefetch ingests hundreds of chats one at a time; sorting both lists
-  /// and rebuilding the tab per chat was the bulk of its cost. Coalesce.
   void _scheduleChatListRefresh() {
     if (_disposed || _refreshTimer != null) return;
     _refreshTimer = Timer(const Duration(milliseconds: 80), _flushChatLists);
@@ -881,8 +854,6 @@ class ContactsViewModel extends ChangeNotifier {
     channels = _sortedByTitle(_channelIndex.values);
   }
 
-  /// Decorate-sort-undecorate: the old comparator lowercased both titles on
-  /// every comparison, i.e. O(n log n) string allocations per refresh.
   List<ChatSummary> _sortedByTitle(Iterable<ChatSummary> chats) {
     final keyed = [
       for (final chat in chats) (key: chat.title.toLowerCase(), chat: chat),

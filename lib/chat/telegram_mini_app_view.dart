@@ -1,11 +1,3 @@
-//
-//  telegram_mini_app_view.dart
-//
-//  In-app host for Telegram Mini Apps opened from bot menus and Web App
-//  keyboard buttons. TDLib supplies the authenticated launch URL; this view
-//  supplies the small native bridge surface expected by telegram-web-app.js.
-//
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -63,8 +55,6 @@ class TelegramMiniAppLaunch {
 typedef TelegramMiniAppPresenter =
     Future<bool> Function(TelegramMiniAppLaunch launch);
 
-/// A scoped presentation seam for end-to-end launch tests. Production callers
-/// use the platform-specific dialog/window path below.
 @visibleForTesting
 class TelegramMiniAppPresentationScope extends InheritedWidget {
   const TelegramMiniAppPresentationScope({
@@ -84,8 +74,6 @@ class TelegramMiniAppPresentationScope extends InheritedWidget {
       present != oldWidget.present;
 }
 
-/// Resolves account-bound launch material and discards it if the active
-/// Telegram identity changes before the asynchronous resolution completes.
 @visibleForTesting
 Future<T?> resolveTelegramMiniAppForPinnedAccount<T>({
   required TelegramMiniAppAccountScope account,
@@ -434,10 +422,6 @@ Future<TelegramMiniAppLaunch?> _resolveMiniAppLaunch(
     }
 
     if (menuWebApp) {
-      // TDLib recognises menu:// URLs and translates them to a
-      // messages.requestWebView call with from_bot_menu set. Stripping the
-      // marker turns BotFather's internal menu into a different request and
-      // produces BOT_INVALID.
       return await _openAuthorizedWebApp(
         chatId: chatId,
         botUserId: botUserId,
@@ -474,10 +458,6 @@ Future<TelegramMiniAppLaunch?> _resolveMiniAppLaunch(
         final resolved = await TdClient.shared.queryTo({
           '@type': 'getWebAppUrl',
           'bot_user_id': botUserId,
-          // TDLib uses this suffix to select messages.requestSimpleWebView for
-          // a reply-keyboard button. It is already present in current TDLib
-          // message objects, but retaining it here makes old cached messages
-          // use the same authenticated path.
           'url': _keyboardWebAppUrl(url),
           'parameters': parameters,
         }, clientId);
@@ -493,9 +473,6 @@ Future<TelegramMiniAppLaunch?> _resolveMiniAppLaunch(
           );
         }
       } catch (_) {
-        // Some TDLib builds return an unsigned simple-WebView URL for a
-        // reply-keyboard button. The regular Web App request remains signed
-        // and keeps the Mini App functional in that case.
       }
       return await _openAuthorizedWebApp(
         title: title,
@@ -604,9 +581,6 @@ String? _launchUrlFrom(Map<String, dynamic> response) {
       .where((url) => TelegramWebViewOrigin.fromUrl(url) != null)
       .toList();
   if (safeCandidates.isNotEmpty) {
-    // Prefer the URL that TDLib signed for Telegram.WebApp. Some generated
-    // bindings wrap an HTTP URL and may expose the original and resolved URLs
-    // together; loading the former drops the authentication payload.
     return safeCandidates.firstWhere(
       _containsWebAppInitData,
       orElse: () => safeCandidates.first,
@@ -644,8 +618,6 @@ Map<String, dynamic> _webAppOpenParameters(
   return {
     '@type': 'webAppOpenParameters',
     'theme': null,
-    // Match Telegram's supported Mini App platform identifiers. In
-    // particular, bots use this value when validating their launch data.
     'application_name': Platform.isIOS ? 'ios' : 'android',
     'mode': mode ?? {'@type': 'webAppOpenModeFullSize'},
   };
@@ -676,9 +648,6 @@ class TelegramMiniAppView extends StatefulWidget {
   final bool showSheetHandle;
   final bool closeTdLaunchOnDispose;
 
-  /// True when this view IS the window: the toolbar doubles as a
-  /// custom-rendered title bar (drag-to-move + traffic-light inset) because
-  /// the native one is hidden.
   final bool standaloneWindowChrome;
   final Future<void> Function()? onClose;
   final ValueChanged<bool>? onFullscreenChanged;
@@ -2051,9 +2020,6 @@ class _TelegramMiniAppViewState extends State<TelegramMiniAppView>
             color: header,
             child: _MiniAppToolbar(
               title: widget.launch.title,
-              // A standalone window closes from its own chrome and names
-              // itself in the page below, so its toolbar would otherwise
-              // repeat both. Back navigation is not redundant and stays.
               showLeading:
                   !widget.standaloneWindowChrome || _backButtonVisible,
               showTitle: !widget.standaloneWindowChrome,
@@ -2295,10 +2261,8 @@ class _MiniAppToolbar extends StatelessWidget {
   final double leadingSize;
   final VoidCallback onLeadingPressed;
 
-  /// False in a standalone window that already closes from its own chrome.
   final bool showLeading;
 
-  /// False where the page states its own name right below the toolbar.
   final bool showTitle;
   final VoidCallback? onSettings;
   final VoidCallback onReload;

@@ -1,10 +1,4 @@
-﻿//
-//  keyword_blocker_view.dart
-//
-//  关键词屏蔽 settings: user-managed local keyword list.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../components/app_icons.dart';

@@ -1,11 +1,6 @@
 ﻿import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// App-switcher privacy protection for a configured local app lock.
-///
-/// iOS covers the window before UIKit captures its background snapshot.
-/// Android temporarily applies `FLAG_SECURE` while the activity is away so the
-/// task preview cannot expose the unlocked conversation underneath the gate.
 class AppLockPrivacyPlatform {
   const AppLockPrivacyPlatform._();
 

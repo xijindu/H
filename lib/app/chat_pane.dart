@@ -8,8 +8,6 @@ class ChatPaneController {
   bool pop() => _handleBack?.call() ?? false;
 }
 
-/// Owns conversation mode changes inside a split detail pane.
-/// Replacing a mode must never replace the route that owns the app shell.
 class ChatPane extends StatefulWidget {
   const ChatPane({super.key, required this.controller, required this.child});
 
@@ -88,8 +86,6 @@ class _ChatPaneState extends State<ChatPane> {
   );
 }
 
-/// Utility routes pushed by a conversation share its pane bounds and retain
-/// the conversation underneath, including its selected topic and scroll state.
 class _ChatPanePage extends Page<void> {
   const _ChatPanePage({required this.child});
 

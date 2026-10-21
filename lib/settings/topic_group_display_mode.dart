@@ -1,10 +1,4 @@
-﻿//
-//  topic_group_display_mode.dart
-//
-//  Persists how forum/topic groups open from the chat list.
-//
-
-import 'package:shared_preferences/shared_preferences.dart';
+﻿import 'package:shared_preferences/shared_preferences.dart';
 
 enum TopicGroupDisplayMode {
   channel,

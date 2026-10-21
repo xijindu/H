@@ -1,17 +1,4 @@
-﻿//
-//  chat_folder_tag_controller.dart
-//
-//  文件夹标签 — the folder names drawn on a chat-list row, between the chat's
-//  name and its message preview.
-//
-//  Telegram puts `toggleChatFolderTags` behind Premium, so the preference has
-//  two homes: a Premium account writes it to the server the way every other
-//  client does, and everyone else keeps it on this device. Drawing the tags is
-//  local either way, so a non-Premium account loses only the cross-device sync
-//  it was never entitled to.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -21,7 +8,6 @@ import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 import '../theme/app_theme.dart';
 
-/// Telegram's folder palette, indexed by `chatFolderInfo.color_id`.
 const List<Color> chatFolderTagColors = [
   Color(0xFFE85D5D),
   Color(0xFFF09A44),
@@ -32,14 +18,11 @@ const List<Color> chatFolderTagColors = [
   Color(0xFFD85C9D),
 ];
 
-/// Null for a folder that carries no colour of its own (`color_id` -1), which
-/// the row then draws in the app accent.
 Color? chatFolderTagColor(int colorId) =>
     colorId >= 0 && colorId < chatFolderTagColors.length
     ? chatFolderTagColors[colorId]
     : null;
 
-/// One folder as it is drawn on a chat row.
 @immutable
 class ChatFolderTag {
   const ChatFolderTag({
@@ -84,8 +67,6 @@ class ChatFolderTagController extends ChangeNotifier {
         .listen(_applyFolders);
   }
 
-  /// Named after Telegram's own setting so the local mirror is recognisable in
-  /// a preferences dump, even though only Premium accounts get the server one.
   static const preferenceKey = 'mithka.chatFolderTags.v1';
 
   final SharedPreferences? _preferences;
@@ -96,22 +77,14 @@ class ChatFolderTagController extends ChangeNotifier {
   bool _enabled = false;
   bool _isPremium = false;
 
-  /// The server's own `are_tags_enabled`, once TDLib has reported it. Only a
-  /// Premium account is allowed to change it, so it is a read-only hint for
-  /// everyone else.
   bool? _serverEnabled;
 
-  /// Whether rows should draw folder tags at all.
   bool get enabled => _enabled;
 
-  /// True once TDLib confirms Premium; decides where [setEnabled] writes.
   bool get isPremium => _isPremium;
 
-  /// Every folder the account has, by id, in the account's own folder order.
   Map<int, ChatFolderTag> get folders => _folders;
 
-  /// The tags for one chat. Empty while the preference is off, so a row can
-  /// call this unconditionally.
   List<ChatFolderTag> tagsFor(Set<int> folderIds) {
     if (!_enabled || _folders.isEmpty || folderIds.isEmpty) {
       return const <ChatFolderTag>[];
@@ -122,8 +95,6 @@ class ChatFolderTagController extends ChangeNotifier {
     ];
   }
 
-  /// Reads Premium entitlement, then adopts the server's setting for a Premium
-  /// account and this device's for everyone else.
   Future<void> refresh() async {
     final isPremium = await _optionBool('is_premium') ?? false;
     final enabled = isPremium
@@ -139,18 +110,10 @@ class ChatFolderTagController extends ChangeNotifier {
     unawaited(_warmFolderLists());
   }
 
-  /// How deep each folder's list is loaded. Membership is only known for
-  /// chats TDLib has placed in a folder's list, so this bounds how far down
-  /// the chat list tags stay complete.
   static const _warmLimit = 500;
 
   final Set<int> _warmedFolders = {};
 
-  /// TDLib reports a chat's position in a folder only once that folder's chat
-  /// list has been loaded, so a fresh session knows membership for no folder
-  /// but the one on screen — which is why rows came up bare. Asking for each
-  /// folder's list is what makes `updateChatPosition` start naming folders,
-  /// and the chat list model turns those into [ChatSummary.folderIds].
   Future<void> _warmFolderLists() async {
     if (!_enabled) return;
     for (final id in _folders.keys.toList()) {
@@ -162,7 +125,6 @@ class ChatFolderTagController extends ChangeNotifier {
           'limit': _warmLimit,
         });
       } catch (_) {
-        // 404 here just means the folder is already fully loaded.
       }
     }
   }
@@ -172,8 +134,6 @@ class ChatFolderTagController extends ChangeNotifier {
     _enabled = value;
     notifyListeners();
     unawaited(_warmFolderLists());
-    // The device preference is written for every account, Premium included:
-    // it is what the next launch reads before TDLib has answered.
     await _preferences?.setBool(preferenceKey, value);
     if (!_isPremium) return;
     try {
@@ -182,8 +142,6 @@ class ChatFolderTagController extends ChangeNotifier {
         'are_tags_enabled': value,
       });
     } catch (_) {
-      // The device preference already holds the user's choice; a server that
-      // refuses the write must not undo what they just asked for.
     }
   }
 
@@ -213,8 +171,6 @@ class ChatFolderTagController extends ChangeNotifier {
     var changed = false;
     if (serverEnabled != null && serverEnabled != _serverEnabled) {
       _serverEnabled = serverEnabled;
-      // Only a Premium account's server value is authoritative; a locked one
-      // is always false and would silently undo the local choice.
       if (_isPremium && _enabled != serverEnabled) {
         _enabled = serverEnabled;
         changed = true;
@@ -225,7 +181,6 @@ class ChatFolderTagController extends ChangeNotifier {
       changed = true;
     }
     if (changed && notify) notifyListeners();
-    // A folder added since the last warm-up still needs its list loaded.
     unawaited(_warmFolderLists());
   }
 
@@ -254,11 +209,6 @@ class ChatFolderTagController extends ChangeNotifier {
   }
 }
 
-/// The chat-list row extent, told whether rows are currently drawing a folder
-/// tag line. Everything that virtualizes against the extent has to agree with
-/// the row itself, so they all read it from here rather than each deciding.
-///
-/// Pass `listen: false` outside a build — a scroll callback, a tap handler.
 double chatListRowExtentFor(BuildContext context, {bool listen = true}) =>
     AppMetric.chatListRowExtent(
       context,

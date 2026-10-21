@@ -68,9 +68,6 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       fit: StackFit.expand,
       children: [
         if (photo != null)
-          // Boundary outside the filter: every participant update repaints this
-          // screen, and without it the full-viewport gaussian is rastered again
-          // on each one instead of being re-composited.
           RepaintBoundary(
             child: ImageFiltered(
               imageFilter: ImageFilter.blur(sigmaX: 42, sigmaY: 42),
@@ -227,9 +224,6 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
 
     final columns = participants.length <= 2 ? 1 : 2;
     return GridView.builder(
-      // Roughly one tile row. A tile scrolled just off-screen keeps its platform
-      // view instead of destroying the EGL renderer — rebuilding one costs tens
-      // of milliseconds and drops every frame for that endpoint until it lands.
       scrollCacheExtent: const ScrollCacheExtent.pixels(260),
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -253,8 +247,6 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       compactVoiceTile: compactVoiceTile,
     );
     return DragTarget<String>(
-      // Without a key the grid matches tiles by index, so a reorder leaves the
-      // platform view bound to the previous participant's video endpoint.
       key: ValueKey(participant.key),
       onWillAcceptWithDetails: (details) => details.data != participant.key,
       onAcceptWithDetails: (details) {
@@ -366,9 +358,6 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   }
 }
 
-/// Elapsed call time, ticking on its own. Owning the timer here is what keeps
-/// the 1 Hz tick from rebuilding the whole screen — the participant getter, the
-/// backdrop and every video tile in the grid — once a second for the whole call.
 class _GroupCallDuration extends StatefulWidget {
   const _GroupCallDuration({required this.startedAt});
 

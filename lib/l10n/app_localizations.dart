@@ -3640,16 +3640,9 @@ abstract final class AppStringKeys {
 }
 
 abstract final class AppStrings {
-  // t() runs for every localized string render; re-parsing the Intl tag each
-  // call is measurable in list scrolling, so the resolved locale key is cached
-  // until the tag changes.
   static String? _cachedTag;
   static String _cachedLocaleKey = 'en';
 
-  /// Loads the catalogues for [locale] and the English fallback.
-  ///
-  /// Call this before `runApp`. Until it completes there is nothing to render
-  /// a string from, and [t] returns the key itself.
   static Future<void> ensureLoaded(Locale locale) =>
       LocaleCatalogues.ensureLoaded(
         AppLocalizations.localeKeyFor(AppLocalizations.resolve(locale)),
@@ -3657,12 +3650,6 @@ abstract final class AppStrings {
 
   static bool get isReady => LocaleCatalogues.isReady;
 
-  /// Sets the locale used by callers that cannot pass a [BuildContext].
-  ///
-  /// Most widgets resolve through `context.l10n`, but a few shared services
-  /// render strings without a localization context. Keep that path in sync
-  /// before the next rebuild so a locale change cannot briefly mix the
-  /// previous language with the new catalogue.
   static void setLocale(Locale locale) {
     final resolved = AppLocalizations.resolve(locale);
     final tag = resolved.toLanguageTag();
@@ -3675,11 +3662,6 @@ abstract final class AppStrings {
     return tForLocale(_currentLocaleKey, key, placeholders);
   }
 
-  /// Resolves a counted key, choosing the plural form for [count].
-  ///
-  /// `{count}` is supplied automatically, so a template only has to write it:
-  ///
-  ///     plural(AppStringKeys.chatMemberCount, members)
   static String plural(
     String key,
     num count, [
@@ -3731,8 +3713,6 @@ abstract final class AppStrings {
     num? count,
     Map<String, Object?> placeholders,
   ) {
-    // Country names live in their own map so the common message lookup does
-    // not pay for them; the two key spaces are disjoint by construction.
     final catalogue = LocaleCatalogues.forAppKey(localeKey);
     final fallback = LocaleCatalogues.fallback;
     final template =
@@ -3774,10 +3754,6 @@ class _AppLocalizationsDelegate
   Future<AppLocalizations> load(Locale locale) {
     final resolved = AppLocalizations.resolve(locale);
     AppStrings.setLocale(resolved);
-    // Resolve synchronously when the catalogue is already in memory, which is
-    // the normal case because main() preloads before runApp. An async future
-    // here would leave Localizations — and therefore the whole app — blank for
-    // a frame on every locale change.
     final appKey = AppLocalizations.localeKeyFor(resolved);
     if (LocaleCatalogues.isLoaded(appKey)) {
       return SynchronousFuture(AppLocalizations(resolved));

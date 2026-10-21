@@ -2,8 +2,6 @@ import 'package:flutter/widgets.dart';
 
 import '../chat/chat_wallpaper.dart';
 
-/// Per-surface message colours derived from an emoji chat theme's
-/// [ChatThemeStyle].
 @immutable
 class TelegramMessageColors {
   const TelegramMessageColors({

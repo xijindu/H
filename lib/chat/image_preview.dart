@@ -6,8 +6,6 @@ import 'full_image_viewer.dart';
 
 export 'full_image_viewer.dart';
 
-/// Opens the selected image in an in-app gallery above the tab navigators and
-/// their navigation bars.
 Future<void> openImagePreview(
   BuildContext context, {
   required List<TdFileRef> items,

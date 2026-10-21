@@ -1,13 +1,4 @@
-﻿//
-//  community_models.dart
-//
-//  Client-side models for Telegram Communities. TDLib exposes communities as
-//  independent objects and links chats through `community_id` in full chat or
-//  bot information. These models keep that relationship explicit and build the
-//  collapsed, one-row chat-list projection used by the iOS client.
-//
-
-import '../tdlib/json_helpers.dart';
+﻿import '../tdlib/json_helpers.dart';
 import '../tdlib/td_models.dart';
 
 Map<String, dynamic> communityFullInfoRequest(int communityId) => {

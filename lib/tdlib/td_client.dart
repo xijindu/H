@@ -1,22 +1,3 @@
-//
-//  td_client.dart
-//
-//  A thread-safe Dart wrapper around TDLib's `tdjson` JSON client, with
-//  multi-account support — the Flutter port of the Swift `TDLibClient`.
-//
-//  TDLib lets one process host several independent clients (one per account),
-//  each created via td_create_client_id() and bootstrapped with its own
-//  database directory. A single background **isolate** pumps events for ALL
-//  clients (each event carries "@client_id") back to the main isolate, which:
-//   • resolves the matching `query` (responses tagged with our "@extra")
-//   • bootstraps any client asking for parameters
-//   • broadcasts the ACTIVE client's updates to UI subscribers
-//
-//  Accounts are identified by a stable integer "slot" persisted in
-//  SharedPreferences; slot 0 uses the legacy "tdlib" directory so an existing
-//  login keeps working. Client ids are per-process and recreated each launch.
-//
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -34,7 +15,6 @@ import 'json_helpers.dart';
 import 'td_bindings.dart';
 import 'td_user_index.dart';
 
-/// An error returned by TDLib (its "error" object).
 class TdError implements Exception {
   TdError(Map<String, dynamic> object)
     : code = object.integer('code') ?? 0,
@@ -47,8 +27,6 @@ class TdError implements Exception {
   String toString() => 'TDLib error $code: $message';
 }
 
-/// An in-flight [TdClient.queryTo], remembered with the client it went to so a
-/// closing or dead client can fail exactly its own requests.
 class _PendingRequest {
   _PendingRequest(this.clientId, this.completer);
 
@@ -68,11 +46,6 @@ bool tdResponseMatchesRequestClient({
   required int requestClientId,
 }) => responseClientId == requestClientId;
 
-/// Transport used by a secondary Flutter engine.
-///
-/// The primary engine remains the sole TDLib/database owner. Secondary engines
-/// send ordinary TDLib JSON requests over bounded local IPC and receive the
-/// same update objects that the primary engine broadcasts.
 class TdClientProxyTransport {
   const TdClientProxyTransport({
     required this.accountSlot,
@@ -120,12 +93,6 @@ final class TdAccountLeaseReleasePlan {
   final bool deleteData;
 }
 
-/// Pure reference-count bookkeeping for long-lived account users.
-///
-/// Switching the foreground account never closes another slot, but secondary
-/// engines and in-flight file work can outlive an explicit account cleanup or
-/// session replacement. A requested close/delete is therefore held until the
-/// last owner releases its lease.
 @visibleForTesting
 final class TdAccountLeaseBook {
   final Map<int, int> _counts = {};
@@ -167,10 +134,6 @@ final class TdAccountLeaseBook {
   }
 }
 
-/// Pins one concrete TDLib client for a long-lived video/file owner.
-///
-/// Queries never consult the current foreground account. Releasing is
-/// idempotent so native window close/failure races cannot underflow the lease.
 final class TdAccountLease {
   TdAccountLease._(this.accountSlot, this.clientId, this._query, this._release);
 
@@ -201,8 +164,6 @@ class TdClient {
   static final TdClient shared = TdClient._();
   static const defaultQueryTimeout = Duration(seconds: 30);
 
-  // Lazy: only opened when first used, so demo/simulator builds (no tdjson) can
-  // touch the singleton (e.g. read activeSlot) without resolving symbols.
   late final TdBindings _bindings = TdBindings.open();
   TdClientProxyTransport? _proxyTransport;
   StreamSubscription<Map<String, dynamic>>? _proxyUpdateSub;
@@ -214,7 +175,6 @@ class TdClient {
   Future<bool>? _shutdownOperation;
   Timer? _debugReceiveTimer;
 
-  // Receive isolate management — stored as fields so we can restart on resume.
   ReceivePort? _receivePort;
   StreamSubscription<dynamic>? _receiveSub;
   Isolate? _receiveIsolate;
@@ -223,12 +183,10 @@ class TdClient {
   int _receiveIsolateGeneration = 0;
   bool _receiveIsolateDead = false;
 
-  // Request/response correlation, keyed by the "@extra" we attach.
   final Map<String, _PendingRequest> _pending = {};
   final Map<int, Completer<void>> _clientClosedWaiters = {};
   int _extraCounter = 0;
 
-  // Multicast of the ACTIVE account's updates.
   final StreamController<Map<String, dynamic>> _updates =
       StreamController.broadcast(sync: true);
   final StreamController<Map<String, dynamic>> _allUpdates =
@@ -243,7 +201,6 @@ class TdClient {
   final Map<int, Map<int, Map<String, dynamic>>> _latestCommunitiesByClient =
       {};
 
-  // Accounts
   final Map<int, int> _clientForSlot = {};
   final Map<int, int> _slotForClient = {};
   final TdAccountLeaseBook _accountLeases = TdAccountLeaseBook();
@@ -269,8 +226,6 @@ class TdClient {
   int? clientId(int slot) => _clientForSlot[slot];
   int? slotForClient(int clientId) => _slotForClient[clientId];
 
-  /// Every client currently registered, for callers that need to ask each
-  /// account something rather than only the active one.
   Iterable<int> get registeredClientIds => _slotForClient.keys;
   Map<String, dynamic>? get latestChatFoldersUpdate =>
       _latestChatFoldersByClient[_activeClientId];
@@ -291,8 +246,6 @@ class TdClient {
     int clientId,
   ) => _latestCommunitiesByClient[clientId]?.values ?? const [];
 
-  /// Configures this isolate as a read/write view onto the primary engine.
-  /// Must be called before any native TDLib lifecycle is started.
   void configureProxy(TdClientProxyTransport transport) {
     if (_isRunning || _proxyTransport != null) {
       throw StateError(
@@ -313,7 +266,6 @@ class TdClient {
     _proxyUpdateSub = transport.updates.listen(_routeProxyUpdate);
   }
 
-  /// Releases a secondary-engine transport when its native window exits.
   Future<void> closeProxy() async {
     await _proxyUpdateSub?.cancel();
     _proxyUpdateSub = null;
@@ -343,14 +295,10 @@ class TdClient {
       }
     }
     _dispatchToAllSubscribers(object);
-    // Same fan-out as the primary engine, so a secondary window's typed
-    // `updatesOf` listeners are fed too and not just `subscribe()`.
     _dispatchToActiveSubscribers(object);
   }
 
-  // MARK: - Lifecycle
 
-  /// Creates a client for every known account and starts the receive isolate.
   Future<void> start() {
     if (_proxyTransport != null) return Future<void>.value();
     if (_isShuttingDown || _shutdownComplete) return Future<void>.value();
@@ -375,14 +323,10 @@ class TdClient {
   }
 
   Future<void> _start() async {
-    // Keep TDLib quiet in the console; raise while debugging if needed.
     _bindings.execute(
       jsonEncode({'@type': 'setLogVerbosityLevel', 'new_verbosity_level': 1}),
     );
 
-    // Prefs, the support directory, and the app version are independent
-    // platform channels; resolving them serially costs a full round trip on
-    // the launch path.
     final (prefs, supportDir, appVersion) = await (
       SharedPreferences.getInstance(),
       getApplicationSupportDirectory(),
@@ -405,9 +349,6 @@ class TdClient {
         ? storedActive
         : loaded.first;
 
-    // Quit can be requested while secure storage is still resolving. Never
-    // create a native client after shutdown has taken ownership of the process
-    // lifecycle.
     if (_isShuttingDown) {
       _isRunning = false;
       return;
@@ -423,17 +364,12 @@ class TdClient {
     _activeClientId = _clientForSlot[active] ?? 0;
     if (kDebugMode) unawaited(_persistDebugLiveClientIds());
 
-    // Start receiving before the first asynchronous backend startup. If Quit
-    // lands in that window, shutdown must still receive every native
-    // authorizationStateClosed acknowledgement before AppKit exits.
     if (kDebugMode) {
       _startDebugReceivePump();
     } else {
       _spawnReceiveIsolate();
     }
 
-    // The first request "activates" each client; TDLib then emits its
-    // updateAuthorizationState(authorizationStateWaitTdlibParameters).
     for (final cid in _clientForSlot.values.where((id) => id > 0)) {
       _bindings.send(
         cid,
@@ -498,8 +434,6 @@ class TdClient {
           }),
     );
     _receiveSub = port.listen((message) {
-      // The isolate batches events into one list; the terminal fatal notice is
-      // still sent on its own so it can't sit behind a partial batch.
       if (message is List) {
         for (final event in message) {
           if (event is Map<String, dynamic>) {
@@ -516,8 +450,6 @@ class TdClient {
     });
   }
 
-  /// Restarts the receive isolate if it died (e.g. after app background→foreground
-  /// on Android where the FFI state became stale). Safe to call when healthy.
   void restartReceiveIsolate() {
     if (!_isRunning || _isShuttingDown) return;
     if (kDebugMode) return;
@@ -527,11 +459,6 @@ class TdClient {
     _spawnReceiveIsolate();
   }
 
-  /// Closes every process-owned Telegram client during orderly termination.
-  ///
-  /// This latch keeps termination cancelable until every native client confirms
-  /// authorizationStateClosed and the receive isolate itself has exited.
-  /// Persisted accounts, tokens, sessions, and local databases are untouched.
   Future<bool> shutdown() {
     if (_proxyTransport != null) {
       return closeProxy().then((_) => true);
@@ -559,10 +486,6 @@ class TdClient {
       }
       return closed;
     } catch (_) {
-      // Shutdown is a process-terminal latch. If Quit is cancelled because a
-      // native client failed to close, do not resume ordinary traffic or let a
-      // still-running startup operation create replacement clients. A later
-      // Quit request can retry the remaining close operation safely.
       rethrow;
     }
   }
@@ -573,9 +496,6 @@ class TdClient {
       try {
         await starting.timeout(const Duration(seconds: 3));
       } on TimeoutException {
-        // Startup checks the shutdown latch before creating clients, and Bot
-        // API startup checks it again after opening its store. Continue with
-        // the clients that already exist instead of hanging AppKit forever.
       } catch (error) {
         debugPrint('🔑 [Handy] startup ended during Quit: $error');
       }
@@ -671,7 +591,6 @@ class TdClient {
     }
   }
 
-  // MARK: - Account management
 
   void _ensureAcceptingNewClients() {
     if (_isShuttingDown || _shutdownComplete) {
@@ -679,8 +598,6 @@ class TdClient {
     }
   }
 
-  /// Creates a fresh account slot (a new TDLib client + database directory)
-  /// and returns its slot index. Does not change the active account.
   int addSlot() {
     _ensureAcceptingNewClients();
     final newSlot = _nextSlot();
@@ -701,10 +618,6 @@ class TdClient {
     }).timeout(const Duration(seconds: 20));
   }
 
-  /// Cancels an in-progress QR login and recreates the active unauthenticated
-  /// client on a clean database. TDLib persists QR authorization state, and it
-  /// rejects setAuthenticationPhoneNumber until the client returns to
-  /// authorizationStateWaitPhoneNumber.
   Future<void> resetActiveQrLogin() async {
     final slot = _activeSlot;
     final oldClientId = _activeClientId;
@@ -777,7 +690,6 @@ class TdClient {
     }
   }
 
-  /// Routes future query/send/broadcast to the given account slot.
   void setActive(int slot) {
     final cid = _clientForSlot[slot];
     if (cid == null || !_slots.contains(slot)) return;
@@ -788,10 +700,6 @@ class TdClient {
     if (changed) _activeSlotChanges.add(slot);
   }
 
-  /// Discards an account slot: closes its TDLib client and forgets it, so it
-  /// no longer appears in the switcher. Used to drop a freshly-added account
-  /// whose login was aborted. Refuses to remove the active slot (switch away
-  /// first) to avoid leaving the UI pointed at a dead client.
   void removeSlot(int slot) {
     if (slot == _activeSlot || !_slots.contains(slot)) return;
     unawaited(_closeAndForgetSlot(slot));
@@ -799,9 +707,6 @@ class TdClient {
     if (kDebugMode) unawaited(_persistDebugLiveClientIds());
   }
 
-  /// Deletes the local TDLib data for a forgotten slot without contacting
-  /// Telegram. Slot 0 is the legacy base directory, so keep account-* child
-  /// directories for other slots while removing slot-0 files.
   Future<void> deleteSlotData(int slot) async {
     if (!_accountLeases.requestDelete(slot)) return;
     final closing = _closingSlots[slot];
@@ -832,9 +737,6 @@ class TdClient {
     }
   }
 
-  /// Drops the current active slot and replaces it with a clean login client.
-  /// Used when the last account is cancelled/logged out: internally TDLib still
-  /// needs one active client, but the account switcher can remain empty.
   int replaceActiveWithFreshLoginSlot() {
     final oldSlot = _activeSlot;
     final newSlot = addSlot();
@@ -855,7 +757,6 @@ class TdClient {
     return Future<void>.value();
   }
 
-  /// Fails every stranded request, optionally only the ones sent to [clientId].
   void _failPending(String reason, {int? clientId}) {
     if (_pending.isEmpty) return;
     final stranded = [
@@ -913,9 +814,6 @@ class TdClient {
       if (identical(_clientClosedWaiters[cid], closed)) {
         _clientClosedWaiters.remove(cid);
       }
-      // A completer nothing will answer keeps its awaiting frame suspended
-      // forever, retaining everything that frame captured — the State, the view
-      // model, decoded bytes. This client is gone, so fail its requests.
       _failPending('TDLib client closed', clientId: cid);
       _slotForClient.remove(cid);
       TdUserIndex.shared.clearSlot(slot);
@@ -951,14 +849,11 @@ class TdClient {
         1;
   }
 
-  /// The database directory for a slot. Slot 0 keeps the legacy path so an
-  /// existing single-account login is preserved.
   String _databaseDirectory(int slot) {
     final base = '$_supportDir/tdlib';
     return slot == 0 ? base : '$base/account-$slot';
   }
 
-  // MARK: - Routing (on the main isolate)
 
   void _route(Map<String, dynamic> object) {
     final clientId = object.integer('@client_id') ?? -1;
@@ -969,12 +864,9 @@ class TdClient {
     AvatarAnimationIndex.shared.observe(slot, object);
     TdUserIndex.shared.observe(slot, object);
 
-    // Responses to our requests carry the "@extra" we attached (any client).
     final extra = object.str('@extra');
     if (extra != null) {
       final pending = _pending[extra];
-      // Timed-out replies must not escape into the update stream. Likewise, a
-      // response carrying another client's id must never complete this query.
       if (pending == null ||
           !tdResponseMatchesRequestClient(
             responseClientId: clientId,
@@ -999,8 +891,6 @@ class TdClient {
       final waiter = _clientClosedWaiters.remove(clientId);
       if (waiter != null && !waiter.isCompleted) waiter.complete();
     }
-    // Bootstrap ANY client that asks for parameters, so every account
-    // initializes and stays logged in (not just the active one).
     if (!_isShuttingDown &&
         object.type == 'updateAuthorizationState' &&
         object.obj('authorization_state')?.type ==
@@ -1029,16 +919,10 @@ class TdClient {
     }
 
     _dispatchToAllSubscribers(object);
-    // Most UI consumers only need the active account's updates.
     if (clientId == _activeClientId) _dispatchToActiveSubscribers(object);
 
-    // Internal: receive isolate reported a fatal error (e.g. td_receive threw
-    // after Android background→foreground). Mark it dead so a later resume
-    // restarts it.
     if (object.type == '_tdReceiveFatal') {
       _receiveIsolateDead = true;
-      // No response can arrive until the isolate is restarted, and a restart
-      // does not replay: everything in flight is stranded.
       _failPending('TDLib receive isolate died');
       debugPrint(
         '🔑 [Handy] receive isolate died: ${object['error'] ?? 'unknown'}',
@@ -1075,9 +959,6 @@ class TdClient {
         '🔑 [Handy] closing stale TDLib clients after hot restart: '
         '${closedIds.join(', ')}',
       );
-      // `close` is asynchronous inside TDLib. Give the native clients time to
-      // release their database handles before creating replacements that use
-      // the same account directories.
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }
     await _prefs.remove(_liveClientIdsKey);
@@ -1120,29 +1001,20 @@ class TdClient {
         'application_version': _appVersion,
       }),
     );
-    // Ask Telegram's transport for an early server acknowledgement. TDLib
-    // emits updateMessageSendAcknowledged only while this option is enabled;
-    // without it the delivery indicator must wait for the slower final result.
     _bindings.send(clientId, jsonEncode(quickAckTdlibOptionRequest()));
   }
 
-  /// Re-sends TDLib parameters for the active client. This is intentionally
-  /// idempotent for development hot restart, where Dart state restarts while
-  /// tdjson can still be waiting on the bootstrap request.
   void sendParametersForActiveClient() {
     final clientId = _activeClientId;
     if (clientId == 0) return;
     _sendParameters(clientId);
   }
 
-  // MARK: - Sending
 
-  /// Fire-and-forget request to the active account.
   void send(Map<String, dynamic> request) {
     sendTo(request, _activeClientId);
   }
 
-  /// Fire-and-forget request to a specific account client.
   void sendTo(Map<String, dynamic> request, int clientId) {
     if (_isShuttingDown || _shutdownComplete) return;
     if (!_slotForClient.containsKey(clientId)) return;
@@ -1154,7 +1026,6 @@ class TdClient {
     _bindings.send(clientId, jsonEncode(request));
   }
 
-  /// Sends a request to the active account and awaits its response.
   Future<Map<String, dynamic>> query(
     Map<String, dynamic> request, {
     Duration timeout = defaultQueryTimeout,
@@ -1162,11 +1033,6 @@ class TdClient {
     return queryTo(request, _activeClientId, timeout: timeout);
   }
 
-  /// Sends a request to the client that owns [accountSlot].
-  ///
-  /// File ids and chat ids are account-scoped. Long-lived views must keep
-  /// using the account that supplied those ids even if the user switches the
-  /// app's active account while the request is in flight.
   Future<Map<String, dynamic>> queryForSlot(
     Map<String, dynamic> request,
     int accountSlot, {
@@ -1179,11 +1045,6 @@ class TdClient {
     return queryTo(request, clientId, timeout: timeout);
   }
 
-  /// Retains the concrete client currently registered for [accountSlot].
-  ///
-  /// The returned query stays pinned to that client when another account is
-  /// selected. Explicit slot removal and local-data deletion are deferred
-  /// until every detached window/file owner releases its lease.
   TdAccountLease? retainAccountSlot(int accountSlot) {
     if (_isShuttingDown || _shutdownComplete) return null;
     final clientId = _clientForSlot[accountSlot];
@@ -1197,8 +1058,6 @@ class TdClient {
     );
   }
 
-  /// Sends a request to a SPECIFIC client and awaits its response (used to read
-  /// each account's identity for the switcher).
   Future<Map<String, dynamic>> queryTo(
     Map<String, dynamic> request,
     int clientId, {
@@ -1262,7 +1121,6 @@ class TdClient {
     }
   }
 
-  /// Synchronous, network-free request (e.g. log level). Returns parsed JSON.
   Map<String, dynamic>? execute(Map<String, dynamic> request) {
     if (_isShuttingDown || _shutdownComplete) return null;
     final result = _bindings.execute(jsonEncode(request));
@@ -1276,16 +1134,9 @@ class TdClient {
     return 'drachma_$_extraCounter';
   }
 
-  // MARK: - Updates (multicast)
 
-  /// A fresh stream of the ACTIVE account's TDLib updates.
   Stream<Map<String, dynamic>> subscribe() => _updates.stream;
 
-  /// Updates of exactly one @type from the active account, or from every
-  /// configured account when [allAccounts] is true. Prefer this over
-  /// [subscribe] + a type filter: during TDLib bursts (login sync, file
-  /// progress) every [subscribe] listener runs for every event, while typed
-  /// listeners run only for their own type.
   Stream<Map<String, dynamic>> updatesOf(
     String type, {
     bool allAccounts = false,
@@ -1296,27 +1147,12 @@ class TdClient {
         .stream;
   }
 
-  /// Updates of any of [types] from the active account, in arrival order.
-  /// With [allAccounts], inactive accounts are included too; consumers must
-  /// keep identifiers scoped by the update's `@client_id` as with [subscribeAll].
-  ///
-  /// The same win as [updatesOf] for a consumer that needs several types: a
-  /// [subscribe] listener is woken for every event in the app — including the
-  /// highest-rate ones, `updateFile` during a chunked download and the login
-  /// sync burst — only to walk its own `switch` and return.
-  ///
-  /// Order is preserved because every controller on this path is synchronous,
-  /// so an event is forwarded and delivered before the next one is dispatched.
   Stream<Map<String, dynamic>> updatesOfAny(
     Iterable<String> types, {
     bool allAccounts = false,
   }) {
     final wanted = types.toSet();
     final subscriptions = <StreamSubscription<Map<String, dynamic>>>[];
-    // Lives exactly as long as the stream it hands back; the source
-    // subscriptions are dropped in onCancel, so nothing is retained after the
-    // consumer lets go.
-    // ignore: close_sinks
     late final StreamController<Map<String, dynamic>> merged;
     merged = StreamController<Map<String, dynamic>>.broadcast(
       sync: true,
@@ -1345,8 +1181,6 @@ class TdClient {
     _allUpdates.add(update);
     final type = update['@type'];
     if (type is! String) return;
-    // Session-lifetime like _allUpdates itself; never closed by design.
-    // ignore: close_sinks
     final typed = _typedAllUpdates[type];
     if (typed != null && typed.hasListener) typed.add(update);
   }
@@ -1358,22 +1192,14 @@ class TdClient {
     _updates.add(update);
     final type = update['@type'];
     if (type is! String) return;
-    // Session-lifetime like _updates itself; never closed by design.
-    // ignore: close_sinks
     final typed = _typedUpdates[type];
     if (typed != null && typed.hasListener) typed.add(update);
   }
 
-  /// Updates from every configured account. Consumers must use @client_id to
-  /// keep account-scoped identifiers separate.
   Stream<Map<String, dynamic>> subscribeAll() => _allUpdates.stream;
 
   Stream<int> subscribeActiveSlotChanges() => _activeSlotChanges.stream;
 
-  /// Broadcasts a local state correction to the same subscribers as TDLib
-  /// updates. Use this only after sending the corresponding TDLib request, so
-  /// list and badge UI can converge immediately while waiting for TDLib's
-  /// eventual aggregate updates.
   void emitLocalUpdate(Map<String, dynamic> update) =>
       _dispatchToActiveSubscribers(update);
 
@@ -1396,17 +1222,7 @@ class TdClient {
   }
 }
 
-// MARK: - Receive isolate
 
-/// Runs on its own isolate: opens its own handle to the (process-global)
-/// tdjson library and pumps every incoming event back to the main isolate.
-/// Events are decoded here so the main isolate never pays for JSON parsing
-/// during TDLib bursts (login sync, file progress, …).
-///
-/// On Android, the OS may freeze the process when the app goes to background.
-/// After thaw, the native FFI state can be stale and td_receive may throw or
-/// crash. We catch the error, notify the main isolate, and exit gracefully —
-/// the main isolate will restart us on the next foreground transition.
 void _receiveEntry(SendPort toMain) {
   TdBindings bindings;
   try {
@@ -1416,11 +1232,6 @@ void _receiveEntry(SendPort toMain) {
     return;
   }
 
-  // One port message per event costs the main isolate one event-loop turn each,
-  // and a login sync emits thousands back to back. Batching removes that fixed
-  // overhead. The batch is deliberately SMALL: a large one only converts cost
-  // spread over many turns into a single uninterruptible chunk, which drops a
-  // frame instead of saving one.
   const batchLimit = 16;
   const batchWindowMicroseconds = 2000;
   var batch = <Object>[];
@@ -1438,8 +1249,6 @@ void _receiveEntry(SendPort toMain) {
   while (true) {
     Object? event;
     try {
-      // Only block when nothing is buffered — a partial batch must not wait a
-      // second for the next event before the UI sees it.
       event = bindings.receiveJson(batch.isEmpty ? 1.0 : 0.0);
     } catch (e) {
       flush();
@@ -1450,8 +1259,6 @@ void _receiveEntry(SendPort toMain) {
       flush();
       continue;
     }
-    // Malformed events arrive as raw text; the main isolate decides via
-    // _routeRaw, so the batch is mixed-type and order carries the meaning.
     if (event is Map<String, dynamic> || event is String) {
       batch.add(event);
     }

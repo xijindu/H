@@ -1,17 +1,6 @@
-﻿//
-//  json_helpers.dart
-//
-//  Typed accessors over the `Map<String, dynamic>` dictionaries TDLib produces.
-//  `jsonDecode` yields num/String for numbers, so we normalize here. TDLib
-//  serializes int64 fields (chat order, file sizes, …) as JSON **strings**; the
-//  helpers parse those transparently — mirroring the Swift `JSON+Helpers`.
-//
-
-/// Convenience for an untyped TDLib JSON object.
-typedef TdObject = Map<String, dynamic>;
+﻿typedef TdObject = Map<String, dynamic>;
 
 extension TdJson on Map<String, dynamic> {
-  /// The TDLib object type, e.g. "updateAuthorizationState".
   String? get type => this['@type'] as String?;
 
   String? str(String key) => this[key] as String?;
@@ -24,7 +13,6 @@ extension TdJson on Map<String, dynamic> {
     return null;
   }
 
-  /// TDLib serializes int64 as strings; parse those transparently.
   int? int64(String key) {
     final v = this[key];
     if (v is int) return v;

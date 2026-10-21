@@ -8,8 +8,6 @@ import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 import '../theme/app_theme.dart';
 
-/// Telegram-backed picker for the custom emoji drawn behind a profile photo.
-/// A result of zero means that the icon should be removed.
 enum ProfileIconSource { profile, status }
 
 class ProfileIconPickerView extends StatefulWidget {

@@ -1,12 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show SelectedContent;
 
-/// A message-scoped mobile selection region that reports when its transcript
-/// row is unmounted.
-///
-/// Chat transcript rows are intentionally not kept alive. Without the dispose
-/// callback, scrolling the selected row out of the sliver would leave the chat
-/// believing that the next long press is still the second press.
 class MobileMessageTextSelectionArea extends StatefulWidget {
   const MobileMessageTextSelectionArea({
     super.key,

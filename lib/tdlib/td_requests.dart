@@ -1,9 +1,4 @@
-﻿/// Builds the current TDLib request for a text draft in a chat or topic.
-///
-/// TDLib 1b08 stores draft text under [draftMessage.content] as
-/// [draftMessageContentText]. Older `message_thread_id` and
-/// `input_message_text` fields are not accepted by the pinned schema.
-Map<String, dynamic> setTextChatDraftRequest({
+﻿Map<String, dynamic> setTextChatDraftRequest({
   required int chatId,
   required Map<String, dynamic>? formattedText,
   Map<String, dynamic>? topicId,

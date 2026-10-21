@@ -1,10 +1,3 @@
-//
-//  td_video_stream_server.dart
-//
-//  TDLib-backed loopback HTTP range streaming for partially downloaded
-//  Telegram videos.
-//
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -66,18 +59,9 @@ TdVideoStreamQuery tdVideoStreamQueryForAccount(int? accountSlot) {
   return (request) => TdClient.shared.queryForSlot(request, accountSlot);
 }
 
-/// The private loopback endpoint exposed to the video player engines.
-///
-/// It reports byte counts only; no Telegram account, path, or media metadata
-/// crosses over to the player.
 Uri tdVideoStreamProgressUri(Uri videoUri) =>
     videoUri.replace(path: '${videoUri.path}.progress.json');
 
-/// A loopback range server for partially downloaded TDLib videos.
-///
-/// The class is public only so its HTTP behavior can be exercised without a
-/// native media player in tests. App code should treat it as an implementation
-/// detail of the Telegram video playback adapter.
 class TdVideoStreamServer {
   TdVideoStreamServer(
     this.fileId, {
@@ -170,10 +154,6 @@ class TdVideoStreamServer {
     _server = null;
   }
 
-  /// Makes the MP4 header and trailing metadata readable before a native
-  /// player probes the loopback URL. Many Telegram videos keep the `moov` atom
-  /// at EOF; exposing the URL before both ranges exist makes a transient TDLib
-  /// range miss look like an unsupported file to native media backends.
   Future<bool> prepareForPlayback() async {
     if (_closed || _total <= 0) return false;
     _playbackPreparationCount++;
@@ -192,15 +172,7 @@ class TdVideoStreamServer {
     }
   }
 
-  /// Serves nothing until [preparation] settles.
-  ///
-  /// A caller that hands the URL to a player before [prepareForPlayback] has
-  /// finished — the player opens right away so the user is not left waiting on
-  /// an idle chat — uses this so the first probe waits for the bootstrap ranges
-  /// instead of reading a transient range miss as an unsupported file.
   void holdRequestsUntilPrepared(Future<bool> preparation) {
-    // A failed preparation must release the gate rather than fail the request:
-    // the per-range download is still the authority on what can be served.
     final gate = preparation.then<bool>(
       (prepared) => prepared,
       onError: (_, _) => false,
@@ -221,10 +193,6 @@ class TdVideoStreamServer {
     }
   }
 
-  /// Creates TDLib's partial file using a bounded request. Keeping the first
-  /// request finite is important: an unlimited download can have many large
-  /// parts in flight, and changing that same download to a playback range
-  /// forces TDLib to cancel those parts before it can serve the player.
   Future<void> _primePlaybackRange(int offset, int length) async {
     if (_closed) return;
     try {
@@ -348,8 +316,6 @@ class TdVideoStreamServer {
       }
 
       if (request.method == 'HEAD') {
-        // Range applies to GET only. A metadata probe describes the full file
-        // without waiting for any media bytes to be downloaded.
         _writeRangeHeaders(request.response, 0, _total - 1, false);
         await request.response.close();
         return;
@@ -365,19 +331,10 @@ class TdVideoStreamServer {
         return;
       }
       final (start, end) = range ?? (0, _total - 1);
-      // TDLib keeps one download position per file, so two responses streaming
-      // different parts of it halve each other's throughput. A player that
-      // seeks opens a new range and abandons the previous response without
-      // closing it, so a response that is still streaming when a newer range
-      // arrives stops after its current read chunk.
       final generation = ++_streamGeneration;
       bool superseded() => generation != _streamGeneration;
       _releaseAbandonedDownloads();
       _playbackReadOffset = start;
-      // A read chunk reaches the player only once all of it is downloaded, so
-      // the full bound would keep a seek silent for however long those bytes
-      // take to arrive. Open small and grow back to the bound, which costs the
-      // extra TDLib round trips only while the player has nothing to decode.
       var readChunkBytes = math.min(_readChunkBytes, _openingReadChunkBytes);
       var chunkEnd = _readChunkEnd(start, end, readChunkBytes);
       var bytes = await _loadRange(
@@ -394,9 +351,6 @@ class TdVideoStreamServer {
         );
         return;
       }
-      // Bound each TDLib read, not the HTTP response. Native players can treat
-      // the end of a shortened response as EOF instead of requesting the next
-      // chunk, even when Content-Range advertises a larger file.
       _writeRangeHeaders(request.response, start, end, range != null);
       request.response.bufferOutput = false;
       while (true) {
@@ -416,25 +370,19 @@ class TdVideoStreamServer {
         );
         if (requestFinished) return;
         if (bytes == null) {
-          // Keep the advertised length: closing an incomplete body must be a
-          // transport failure, not a successful response ending the video.
           throw const HttpException('Video stream range is unavailable');
         }
       }
       await request.response.close();
     } catch (_) {
-      // The player may cancel a range request after headers were sent. Do not
-      // attempt to mutate that response again; just finish it if it is open.
       try {
         request.response.statusCode = HttpStatus.internalServerError;
         request.response.contentLength = 0;
       } catch (_) {
-        // Headers were already sent.
       }
       try {
         await request.response.close();
       } catch (_) {
-        // The client already closed the response.
       }
     }
   }
@@ -447,7 +395,6 @@ class TdVideoStreamServer {
       }).timeout(const Duration(seconds: 1));
       _updateFileInfo(file);
     } catch (_) {
-      // Last-known progress is still useful if TDLib is momentarily busy.
     }
 
     final downloaded = _downloadComplete
@@ -519,9 +466,6 @@ class TdVideoStreamServer {
     }
   }
 
-  /// Loads one complete read chunk without exposing sparse or truncated bytes.
-  /// The first chunk is validated before committing response headers so a
-  /// range miss can still become an empty retryable response.
   Future<List<int>?> _loadRange(
     int start,
     int end, {
@@ -616,10 +560,6 @@ class TdVideoStreamServer {
     if (existing != null) return existing;
 
     final task = _downloadQueue.then((_) async {
-      // Queued work runs behind whatever was already downloading, by which
-      // time every response that wanted this range can be gone. Moving TDLib's
-      // single download position there would only take bytes away from the
-      // range the player moved to.
       if (_closed || _rangeIsAbandoned(key)) return null;
       _continuousDownloadOffset = null;
       try {
@@ -655,21 +595,12 @@ class TdVideoStreamServer {
     return task;
   }
 
-  /// Whether every response that asked for this range has stopped waiting.
-  ///
-  /// Bootstrap ranges register no waiter, so they are never abandoned.
   bool _rangeIsAbandoned((int, int) key) {
     final waiters = _rangeDownloadWaiters[key];
     if (waiters == null || waiters.isEmpty) return false;
     return waiters.every((isCancelled) => isCancelled());
   }
 
-  /// Stops new ranges from queueing behind downloads nothing is waiting for.
-  ///
-  /// TDLib holds a synchronous range request until its bytes land, so a seek
-  /// that queues normally would first wait out however long the abandoned
-  /// stream's current chunk takes. Ranges that a live response is still
-  /// waiting on keep their place in the queue.
   void _releaseAbandonedDownloads() {
     if (_rangeDownloads.isNotEmpty &&
         _rangeDownloads.keys.every(_rangeIsAbandoned)) {

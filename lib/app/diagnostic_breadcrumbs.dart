@@ -6,10 +6,6 @@ import 'package:sentry_flutter/sentry_flutter.dart';
 
 import 'telemetry_config.dart';
 
-/// Privacy-safe operational breadcrumbs attached to crashes and feedback.
-///
-/// Request arguments and TDLib error messages are intentionally excluded: they
-/// can contain chat text, usernames, file paths, or authentication material.
 abstract final class DiagnosticBreadcrumbs {
   static final _safeType = RegExp(r'^[A-Za-z][A-Za-z0-9_]{0,79}$');
   static const _highValueTdlibOperations = <String>{
@@ -52,9 +48,6 @@ abstract final class DiagnosticBreadcrumbs {
   }) {
     if (!sentryEnabled) return;
     final operation = _cleanType(requestType);
-    // Successful getMessage and downloadFile calls can occur many times while
-    // loading one chat or media item. Recording each result displaces useful
-    // breadcrumbs and adds telemetry work to hot paths; failures are retained.
     if (!shouldRecordTdlibRequest(requestType: operation, failed: failed)) {
       return;
     }

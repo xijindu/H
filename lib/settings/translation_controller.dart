@@ -1,9 +1,3 @@
-//
-//  translation_controller.dart
-//
-//  Persisted message translation preferences.
-//
-
 import 'dart:async';
 import 'dart:convert';
 
@@ -25,10 +19,6 @@ typedef TranslationSecureRead = Future<String?> Function(String key);
 typedef TranslationSecureWrite =
     Future<void> Function(String key, String? value);
 
-/// Metadata for one user-configured Cloud Translation Basic provider.
-///
-/// API keys are deliberately absent and live in platform secure storage under
-/// a separate key for every provider ID.
 class GoogleCloudTranslationProvider {
   const GoogleCloudTranslationProvider({
     required this.id,
@@ -680,7 +670,6 @@ class TranslationController extends ChangeNotifier {
           parts.contains('sg')) {
         return 'zh';
       }
-      // 所有繁体中文地区统一映射到 zh
       if (parts.contains('hant') ||
           parts.contains('tw') ||
           parts.contains('hk') ||
@@ -698,8 +687,6 @@ class TranslationController extends ChangeNotifier {
       final normalized = normalizeLanguageCode(code);
       if (normalized == null) continue;
       if (normalized == 'zh') {
-        // Older builds collapsed both Chinese scripts into one `zh` value.
-        // 统一使用 zh
         result.add('zh');
       } else {
         result.add(normalized);

@@ -10,8 +10,6 @@ import '../theme/theme_controller.dart';
 import 'chat_appearance_preview.dart';
 import 'chat_wallpaper.dart';
 
-/// A visual service-message card for Telegram wallpaper and chat-theme
-/// changes. Reset or unavailable themes keep the existing text banner.
 class ChatAppearanceMessagePreview extends StatelessWidget {
   const ChatAppearanceMessagePreview({
     super.key,
@@ -63,8 +61,6 @@ class ChatAppearanceMessagePreview extends StatelessWidget {
   );
 }
 
-/// Shared compact preview used by service messages and background-link
-/// confirmation dialogs.
 class ChatAppearancePreviewCard extends StatelessWidget {
   const ChatAppearancePreviewCard({
     super.key,

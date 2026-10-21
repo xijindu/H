@@ -1,11 +1,3 @@
-//
-//  chat_row_view.dart
-//
-//  Reusable chat-list row: avatar with the unread count badged on its top-right
-//  corner; title + preview; and a right column holding the timestamp (top) and
-//  the mute bell at the row's bottom-right. Port of the Swift `ChatRowView`.
-//
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -164,9 +156,6 @@ class ChatRowView extends StatelessWidget {
     );
   }
 
-  /// 文件夹标签, on their own line along the bottom of the row, under the
-  /// message preview. Names only, in each folder's own colour — a chat in five
-  /// folders would turn the row into a wall of chips otherwise.
   Widget _folderTags(BuildContext context, List<ChatFolderTag> tags) {
     final fontSize = AppTextSize.chatListFolderTag();
     return SizedBox(
@@ -176,9 +165,6 @@ class ChatRowView extends StatelessWidget {
         children: [
           for (final tag in tags) ...[
             if (tag != tags.first) const SizedBox(width: AppSpacing.sm),
-            // Loose flex rather than a fixed width: a row of short folder
-            // names draws at its natural size, and only a set too wide for
-            // the row starts ellipsizing.
             Flexible(
               child: Text(
                 tag.title,

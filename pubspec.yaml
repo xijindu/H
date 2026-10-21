@@ -12,88 +12,55 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
-  # State management — mirrors SwiftUI's ObservableObject / @Published.
   provider: ^6.1.2
 
-  # Persisted preferences (UserDefaults equivalent).
   shared_preferences: ^2.3.2
 
-  # TDLib database / files directory (applicationSupportDirectory equivalent).
   path_provider: ^2.1.4
 
-  # FFI bindings to tdjson (td_create_client_id / td_send / td_receive / td_execute).
   ffi: ^2.1.3
 
-  # Chinese day-period date formatting.
   intl: ^0.20.3
 
-  # Animated .tgs stickers (gzipped Lottie JSON).
   lottie: ^3.5.1
   archive: ^4.2.0
 
-  # Voice notes: record + play Telegram's OGG/Opus (bundles libopus, so it works
-  # on iOS where AVFoundation can't decode Opus). + mic permission.
   audio_session: ^0.2.4
-  # 9.30.0 advertises plugins whose native registration metadata is incomplete.
-  # Keep the last release whose native registration is complete.
   flutter_sound: 9.28.0
   logger: ^2.7.0
-  # Record and send AAC/M4A, which TDLib accepts as a voice-note input alongside
-  # OGG/Opus.
   record: ^7.1.1
-  # 13.x hardcodes Android compileSdk 37, which is not installed in the pinned
-  # Flutter/Android toolchain. Keep the newest SDK-36-compatible release.
   permission_handler: ^12.0.3
 
-  # Media pickers for the composer's + panel: photos/camera, documents, location.
   image_picker: ^1.2.3
   camera: ^0.12.0+2
-  # 11.x assumes AGP 9 built-in Kotlin is enabled and omits its Kotlin plugin;
-  # this project keeps built-in Kotlin disabled for plugins that still apply KGP.
   file_picker: ^10.3.10
-  # Location services on mobile.
   geolocator: ^14.0.2
 
-  # QR business card (二维码名片) rendering.
   qr_flutter: ^4.1.0
 
-  # Proper international phone-number formatting (pure-Dart libphonenumber port).
   dlibphonenumber: ^1.1.71
 
-  # Bot API accounts keep the history they receive on-device. sqlite3 bundles
-  # SQLite through Dart native assets, so no platform plugin registration is
-  # needed on Android or iOS.
   sqlite3: ^3.5.2
 
-  # Open downloaded files in the system viewer; open external (non-t.me) links.
   open_filex: ^4.5.0
   url_launcher: ^6.3.1
 
-  # Map-based location picker (OpenStreetMap tiles — no API key required).
   flutter_map: ^8.3.2
   latlong2: ^0.10.1
   apple_maps_flutter: ^1.4.0
 
-  # Animated .webm (VP9 + alpha) video stickers. fvp is an MDK/FFmpeg backend for
-  # video_player that decodes VP8/VP9 transparent WebM (Telegram video stickers) —
-  # replaces the old ffmpeg_kit→WebP transcode.
   video_player: ^2.14.0
-  # Reusable player controls, scrub previews, and PiP.
   f_videoplayer:
     git:
       url: https://github.com/iebb/f-videoplayer.git
       ref: v0.5.8
       path: packages/f_videoplayer
-  # Optional FVP registration kept outside the reusable player core.
   f_videoplayer_fvp:
     git:
       url: https://github.com/iebb/f-videoplayer.git
       ref: v0.5.8
       path: packages/f_videoplayer_fvp
-  # Story video preparation: native 60-second segmentation and mobile-friendly
-  # re-encoding before TDLib's inputStoryContentVideo upload.
   light_compressor_v2: ^1.9.0
-  # Direct because Mithka also consumes FVP-specific controller and PiP APIs.
   fvp: ^0.37.3
   f_videoplayer_pip:
     git:
@@ -104,7 +71,6 @@ dependencies:
   google_fonts: ^8.2.1
   firebase_core: ^4.14.0
   firebase_analytics: ^12.5.0
-  # 10.x requires win32 6, while compatible file_picker 10.x requires win32 5.
   package_info_plus: ^9.0.1
   sentry_flutter: ^9.28.0
   http: ^1.6.0
@@ -112,7 +78,6 @@ dependencies:
   flutter_svg: ^2.3.0
   vector_graphics: ^1.2.3
   image: ^4.9.2
-  # Accelerometer-backed parallax for Telegram wallpaper Motion.
   sensors_plus: ^7.1.0
   heroicons_flutter: ^0.5.0
   mobile_scanner: ^7.4.0
@@ -131,7 +96,6 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
 
-  # Generates iOS/Android launcher icons from the Drachma app icon.
   flutter_launcher_icons: ^0.14.1
 
   video_player_platform_interface: any

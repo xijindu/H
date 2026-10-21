@@ -1,13 +1,4 @@
-﻿//
-//  hidden_senders_view.dart
-//
-//  The members whose messages are hidden on this device, with where each
-//  applies (one group, or all chats) and a Show button to undo it. Opened
-//  from Content Filters for every entry, or from a group's info for the
-//  entries that affect that group.
-//
-
-import 'package:flutter/widgets.dart';
+﻿import 'package:flutter/widgets.dart';
 
 import '../components/app_icons.dart';
 import '../components/app_interactive_surface.dart';
@@ -20,7 +11,6 @@ import 'hidden_sender_store.dart';
 class HiddenSendersView extends StatelessWidget {
   const HiddenSendersView({super.key, this.chatId, this.store});
 
-  /// Only the entries that affect this chat; null lists them all.
   final int? chatId;
   final HiddenSenderStore? store;
 

@@ -49,10 +49,6 @@ typedef AppLockBiometricAuthenticate =
 typedef AppLockPrivacyShieldApply = Future<void> Function(bool visible);
 typedef AppLockNow = DateTime Function();
 
-/// Owns the app-local lock credential and the current foreground lock state.
-///
-/// Only a salted PBKDF2 digest is persisted. The clear-text PIN or gesture is
-/// held for the duration of a single method call and is never written to disk.
 class LocalAppLockController extends ChangeNotifier {
   LocalAppLockController({
     AppLockSecureRead? secureRead,
@@ -163,10 +159,6 @@ class LocalAppLockController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reloads secure lock configuration from storage.
-  ///
-  /// Enabling a lock does not immediately cover the already-unlocked window;
-  /// its normal lifecycle transition will lock it.
   Future<void> reloadFromStorage() async {
     if (!_initialized) {
       await initialize();
@@ -377,9 +369,6 @@ class LocalAppLockController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Applies auto-lock timing and iOS app-switcher shielding to lifecycle
-  /// transitions. A disabled timeout preserves the current unlocked session
-  /// across brief background transitions, matching the official clients.
   void handleLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:

@@ -1,20 +1,8 @@
-﻿//
-//  search_token_suggestions.dart
-//
-//  What to offer while a `in:` or `from:` token is being typed.
-//
-//  `in:` always means a chat, so it draws on the chat list. `from:` means a
-//  sender, and what counts as a plausible sender depends on whether the search
-//  is already scoped: inside one chat it is that chat's participants, and
-//  across the whole account it is the people the chat list already knows.
-//
-
-import '../chat/chat_search_query.dart';
+﻿import '../chat/chat_search_query.dart';
 import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 import '../tdlib/td_models.dart';
 
-/// One row in the token suggestion list.
 class ChatSearchTokenSuggestion {
   const ChatSearchTokenSuggestion({
     required this.id,
@@ -27,24 +15,17 @@ class ChatSearchTokenSuggestion {
   final int id;
   final String title;
 
-  /// What gets written into the field when this row is picked. A username is
-  /// preferred over a display name — it is unambiguous and survives renames.
   final String token;
   final String? subtitle;
   final TdFileRef? photo;
 }
 
-/// Resolves suggestions for the token the caret is in.
 class ChatSearchTokenSuggester {
   ChatSearchTokenSuggester({TdClient? client})
     : _client = client ?? TdClient.shared;
 
   static const int _limit = 8;
 
-  /// How much history the sender fallback reads, and how many of its distinct
-  /// authors it will ever resolve. Both are per keystroke, so the page is kept
-  /// small enough to decode cheaply and the fan-out bounded well under the one
-  /// getUser per author a busy group would otherwise cost.
   static const int _historyProbeLimit = 40;
   static const int _historySenderCap = 32;
 
@@ -58,8 +39,6 @@ class ChatSearchTokenSuggester {
     ChatSearchTokenKind.from => _senders(token.value, scopeChatId),
   };
 
-  /// Chats for `in:`. An empty token offers the top of the chat list, so the
-  /// affordance is useful before anything is typed.
   Future<List<ChatSearchTokenSuggestion>> _chats(String query) async {
     try {
       final response = await _client.query(
@@ -79,8 +58,6 @@ class ChatSearchTokenSuggester {
       final ids = (response.int64Array('chat_ids') ?? const <int>[])
           .take(_limit)
           .toList(growable: false);
-      // One round trip per id, but all in flight at once — Future.wait keeps
-      // index order, so the suggestion order is still the server's.
       final chats = await Future.wait(ids.map(_chatSummary));
       final out = <ChatSearchTokenSuggestion>[];
       for (var i = 0; i < ids.length; i++) {
@@ -110,13 +87,6 @@ class ChatSearchTokenSuggester {
     }
   }
 
-  /// Senders for `from:`.
-  ///
-  /// An `@username` is taken at its word and resolved directly, which is the
-  /// only way to name someone the chat cannot enumerate. Otherwise a scoped
-  /// search asks the chat for matching members, and falls back to the senders
-  /// actually present in its history — a group that hides its member list
-  /// still has authors on its messages.
   Future<List<ChatSearchTokenSuggestion>> _senders(
     String query,
     int? scopeChatId,
@@ -182,11 +152,6 @@ class ChatSearchTokenSuggester {
     }
   }
 
-  /// Distinct authors of the chat's recent messages.
-  ///
-  /// This is the fallback for a chat whose members cannot be listed. It reads
-  /// history rather than membership, so anyone who has actually spoken is
-  /// offerable even when the member list is hidden.
   Future<List<ChatSearchTokenSuggestion>> _historySenders(
     int chatId,
     String query,
@@ -212,9 +177,6 @@ class ChatSearchTokenSuggester {
         if (userId == null || userId == 0 || !seen.add(userId)) continue;
         senderIds.add(userId);
       }
-      // The needle is only matchable against a resolved name, and each name is
-      // a round trip. Resolve a page's worth concurrently and stop as soon as
-      // the list is full, rather than fetching every author of the page.
       final ids = senderIds.take(_historySenderCap).toList(growable: false);
       final out = <ChatSearchTokenSuggestion>[];
       final needle = query.toLowerCase();
@@ -263,8 +225,6 @@ class ChatSearchTokenSuggester {
       return ChatSearchTokenSuggestion(
         id: userId,
         title: name,
-        // A username is stable and unambiguous; a display name is neither, so
-        // it is only the token when there is nothing better.
         token: username == null || username.isEmpty ? name : '@$username',
         subtitle: username == null || username.isEmpty ? null : '@$username',
         photo: TDParse.smallPhoto(user.obj('profile_photo')),

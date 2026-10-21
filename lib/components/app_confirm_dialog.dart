@@ -5,7 +5,6 @@ import '../theme/app_motion.dart';
 import '../theme/app_theme.dart';
 import 'app_interactive_surface.dart';
 
-/// Project-styled confirmation dialog without Material or Cupertino widgets.
 Future<bool> showAppConfirmDialog(
   BuildContext context, {
   required String title,

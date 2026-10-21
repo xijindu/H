@@ -1,11 +1,4 @@
-﻿//
-//  gif_preview.dart
-//
-//  Loops a visible saved GIF/MP4 animation and keeps its thumbnail on screen
-//  while TDLib downloads or initializes the animation file.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import 'gif_item.dart';

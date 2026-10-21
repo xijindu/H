@@ -1,14 +1,4 @@
-﻿//
-//  file_detail_view.dart
-//
-//  Full-screen file page shown when a document bubble is tapped, modeled on the reference app's
-//  file viewer: a large type glyph + name + size, a live download progress bar
-//  (downloaded / total) with a cancel button, then an 打开 (open) button once the
-//  download completes. Explicit message downloads join the global task list;
-//  progress is tracked from updateFile.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
@@ -129,8 +119,6 @@ class _FileDetailViewState extends State<FileDetailView> {
     setState(() => _canceling = true);
     final id = _fileId;
     try {
-      // A fast cancel must not race the addFileToDownloads response and leave
-      // a newly registered task running after this page closes.
       await _startFuture;
       if (id != 0) {
         await DataStorageService(
@@ -171,7 +159,6 @@ class _FileDetailViewState extends State<FileDetailView> {
       body: SafeArea(
         child: Column(
           children: [
-            // Header: back + centered filename.
             SizedBox(
               height: 52,
               child: Stack(
@@ -327,7 +314,6 @@ class _FileDetailViewState extends State<FileDetailView> {
     );
   }
 
-  /// Large version of the same extension-colored file glyph used in messages.
   Widget _glyph() {
     return SizedBox(
       width: 100,

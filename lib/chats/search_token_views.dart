@@ -1,13 +1,4 @@
-﻿//
-//  search_token_views.dart
-//
-//  The two things a search field shows about its tokens: the syntax it accepts
-//  while nothing is typed, and the chats or people to pick from once a token
-//  is. A single chat's search field draws them from here so the affordance
-//  reads the same wherever it appears.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../components/app_icons.dart';
 import '../components/app_interactive_surface.dart';
@@ -16,7 +7,6 @@ import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import 'search_token_suggestions.dart';
 
-/// One token the field understands, offered before anything is typed.
 class SearchTokenHint {
   const SearchTokenHint({
     required this.token,
@@ -29,7 +19,6 @@ class SearchTokenHint {
   final String titleKey;
   final AppIconData icon;
 
-  /// Values the token accepts, for a token whose vocabulary is closed.
   final String? exampleKey;
 }
 
@@ -52,10 +41,6 @@ const searchTokenHasHint = SearchTokenHint(
   exampleKey: AppStringKeys.searchTokenHasExample,
 );
 
-/// What a field accepts, shown while it is focused and empty.
-///
-/// A token syntax nobody can see is a token syntax nobody uses, so an empty
-/// field spends its space teaching rather than sitting blank.
 class SearchTokenHints extends StatelessWidget {
   const SearchTokenHints({
     super.key,
@@ -65,7 +50,6 @@ class SearchTokenHints extends StatelessWidget {
 
   final List<SearchTokenHint> hints;
 
-  /// Receives the token text, so tapping a hint starts it in the field.
   final ValueChanged<String> onPick;
 
   @override
@@ -155,7 +139,6 @@ class SearchTokenHints extends StatelessWidget {
   }
 }
 
-/// Chats or people to pick from while a token is being typed.
 class SearchTokenSuggestionList extends StatelessWidget {
   const SearchTokenSuggestionList({
     super.key,

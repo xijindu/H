@@ -102,8 +102,6 @@ class _ChatMediaDropRegionState extends State<ChatMediaDropRegion> {
     if (call.method == 'dropStartedAt') {
       final id = (args as Map)['id'];
       if (target != null && id is String) {
-        // Keep the original recipient while AppKit copies into our temporary
-        // directory. Changing chats during that work must not retarget a drop.
         _pendingDrops[id] = (target, target.widget.onImagesDropped);
       }
     } else if (call.method == 'dropImages') {

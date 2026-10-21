@@ -9,8 +9,6 @@ class AvatarOwner {
   final int id;
 }
 
-/// Associates a profile-photo file with its owner without changing every
-/// avatar call site. TDLib file ids are scoped to an account slot.
 class AvatarAnimationIndex {
   AvatarAnimationIndex._();
 

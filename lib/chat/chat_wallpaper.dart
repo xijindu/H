@@ -27,9 +27,6 @@ enum ChatThemeKind { emoji, gift }
 
 enum GlobalChatThemeStock { classic, dark, day, night }
 
-/// Chooses the wallpaper used by global chat surfaces and their previews.
-/// A wallpaper explicitly selected by the user takes precedence over the
-/// global chat theme's bundled wallpaper.
 ChatWallpaper? selectGlobalChatWallpaper({
   required ChatWallpaper? defaultWallpaper,
   required ChatWallpaper? globalThemeWallpaper,
@@ -120,7 +117,6 @@ class ChatWallpaper {
   final String? presetId;
   final String? imagePath;
 
-  /// Telegram's stable background name/slug, when supplied by TDLib.
   final String? backgroundName;
   final String? themeName;
   final ChatThemeKind themeKind;
@@ -171,9 +167,6 @@ class ChatWallpaper {
     darkThemeDimming: darkThemeDimming,
   );
 
-  /// A fill-only representation for compact theme cards. Pattern documents
-  /// are intentionally omitted so simply opening the picker doesn't download,
-  /// decompress, or rasterize every Telegram pattern.
   ChatWallpaper withoutPatternDocument() => ChatWallpaper.telegram(
     backgroundId: backgroundId,
     remoteType: remoteType ?? 'pattern',
@@ -635,11 +628,6 @@ class ChatWallpaperController extends ChangeNotifier {
   bool _notificationScheduled = false;
   bool _disposed = false;
 
-  /// A wallpaper load can be started by a widget while another route is still
-  /// building. ChangeNotifier dispatch is synchronous, so notifying an open
-  /// chat in that phase would make it call setState during the active build.
-  /// Defer and coalesce only those notifications; all other updates remain
-  /// synchronous.
   @override
   void notifyListeners() {
     if (_disposed) return;
@@ -647,9 +635,6 @@ class ChatWallpaperController extends ChangeNotifier {
     try {
       binding = SchedulerBinding.instance;
     } catch (_) {
-      // The controller also supports pure Dart consumers and unit tests that
-      // intentionally have no Flutter binding. There is no widget build to
-      // guard in that environment, so dispatch synchronously.
       super.notifyListeners();
       return;
     }
@@ -739,21 +724,15 @@ class ChatWallpaperController extends ChangeNotifier {
   ChatWallpaper resolvedWallpaper(ChatWallpaper wallpaper) =>
       _withResolvedFile(wallpaper);
 
-  /// Decodes a TDLib `background` for a transient preview without changing
-  /// the selected wallpaper.
   ChatWallpaper? previewWallpaperFromBackground(
     Map<String, dynamic>? background, {
     int darkThemeDimming = 0,
   }) => _parseBackground(background, dimming: darkThemeDimming);
 
-  /// Decodes the `chatBackground` wrapper carried by
-  /// `messageChatSetBackground`.
   ChatWallpaper? previewWallpaperFromChatBackground(
     Map<String, dynamic>? chatBackground,
   ) => _parseChatBackground(chatBackground);
 
-  /// Resolves the compact theme descriptor carried by
-  /// `messageChatSetTheme` against the current Telegram theme catalog.
   ChatThemeOption? previewThemeFromChatTheme(
     Map<String, dynamic>? chatTheme, {
     required bool dark,
@@ -928,9 +907,6 @@ class ChatWallpaperController extends ChangeNotifier {
       ),
   ];
 
-  /// Telegram's four app-level built-ins are separate from the emoji chat
-  /// theme carousel. During automatic night mode the official client limits
-  /// this list to the dark built-ins.
   List<GlobalChatThemeOption> stockGlobalThemeOptions({
     bool autoNightModeTriggered = false,
   }) => [
@@ -1132,8 +1108,6 @@ class ChatWallpaperController extends ChangeNotifier {
       _loadedGiftThemes.add(slot);
       notifyListeners();
     } catch (_) {
-      // Gift themes are optional; emoji themes must remain usable when this
-      // account has no eligible collectible themes or is temporarily offline.
       _giftThemes.putIfAbsent(slot, () => const []);
       _loadedGiftThemes.add(slot);
     } finally {
@@ -1154,7 +1128,6 @@ class ChatWallpaperController extends ChangeNotifier {
       _ingestChat(chat);
       await _loadBoostAccess(chatId, chat);
     } catch (_) {
-      // The legacy local value remains usable while TDLib reconnects.
     } finally {
       _loading.remove(id);
     }
@@ -1191,11 +1164,9 @@ class ChatWallpaperController extends ChangeNotifier {
         });
         _chatBoostLevels[id] = status.integer('level') ?? _chatBoostLevels[id]!;
       } catch (_) {
-        // Non-admins can still use the boost level included in supergroup.
       }
       notifyListeners();
     } catch (_) {
-      // Appearance remains visible, but gated, until TDLib can resolve levels.
     }
   }
 
@@ -1296,21 +1267,9 @@ class ChatWallpaperController extends ChangeNotifier {
   ChatWallpaper? defaultWallpaper({required bool dark}) =>
       _defaultBackgrounds[_globalId(dark)];
 
-  /// Brightnesses whose default background has been read from the client at
-  /// least once this session.
   final Set<bool> _defaultsLoaded = <bool>{};
   final Map<bool?, Future<void>> _defaultsInFlight = <bool?, Future<void>>{};
 
-  /// Reads the default background, preferring what is already cached.
-  ///
-  /// The only way to ask TDLib for it is `getCurrentState`, which serialises the
-  /// client's entire state — every chat, user and setting — to answer a question
-  /// about one field. Opening a chat asked for it twice, once per brightness, so
-  /// every chat open dumped that state twice and the garbage it made dominated
-  /// the frames after it. It does not need asking: the value is read once at
-  /// `authorizationStateReady` and TDLib pushes `updateDefaultBackground`
-  /// thereafter, so the cache is authoritative. [refresh] forces the read anyway,
-  /// for the settings screens where the user is looking straight at the value.
   Future<void> loadDefaultWallpaper({
     required bool dark,
     bool refresh = false,
@@ -1320,8 +1279,6 @@ class ChatWallpaperController extends ChangeNotifier {
   }
 
   Future<void> _loadDefaultWallpapers({bool? dark}) {
-    // A chat open fires light and dark together, and both would otherwise put
-    // their own getCurrentState on the wire.
     final existing = _defaultsInFlight[dark];
     if (existing != null) return existing;
     final load = _readDefaultWallpapers(dark: dark);
@@ -1342,9 +1299,6 @@ class ChatWallpaperController extends ChangeNotifier {
         _ingestDefaultBackground(update);
         ingested = true;
       }
-      // Marked on a clean read, not on a hit: a failed query must stay
-      // retryable, or a chat opened during a reconnect would cache nothing and
-      // never look again.
       if (dark != null) {
         _defaultsLoaded.add(dark);
       } else {
@@ -1406,9 +1360,6 @@ class ChatWallpaperController extends ChangeNotifier {
     final bot = await _photoSearchBot();
     Map<String, dynamic>? response;
     Object? lastError;
-    // TDLib normally accepts the bot's private chat here. Accounts that have
-    // never opened that dialog can still query the same inline bot with an
-    // unspecified chat, so try both contexts before reporting a failure.
     for (final chatId in <int>{bot.$3, 0}) {
       try {
         response = await _query({
@@ -1547,11 +1498,6 @@ class ChatWallpaperController extends ChangeNotifier {
         'only_for_self': onlyForSelf,
       });
     }
-    // A successful mutation is authoritative. TDLib can briefly return the old
-    // chat from getChat immediately afterwards, which used to overwrite the
-    // new wallpaper and leave the open chat unchanged until it was reopened.
-    // Keep an optimistic explicit value; updateChatBackground will replace it
-    // with TDLib's normalized remote representation when available.
     _serverBackgrounds[_id(chatId)] = wallpaper;
     await _discardLocalSilently(chatId, notify: false);
     if (wallpaper != null) await _rememberWallpaper(wallpaper);
@@ -1621,9 +1567,6 @@ class ChatWallpaperController extends ChangeNotifier {
               'name': themeName,
             },
     });
-    // setChatTheme returning successfully is the authoritative save result.
-    // Do not turn a successful save into an error because getChat is briefly
-    // stale/unavailable or local preference cleanup fails afterwards.
     _themeNames[id] = themeName == null || themeName.isEmpty ? null : themeName;
     if (themeName == null || themeName.isEmpty) {
       _themeKinds.remove(id);
@@ -1656,7 +1599,6 @@ class ChatWallpaperController extends ChangeNotifier {
     await refresh(chatId);
   }
 
-  // Legacy local APIs stay available for offline/debug builds and migration.
   Future<void> setPreset(int chatId, String presetId) async {
     if (chatWallpaperPreset(presetId) == null) return;
     await _replaceLocal(chatId, ChatWallpaper.preset(presetId));
@@ -1740,9 +1682,6 @@ class ChatWallpaperController extends ChangeNotifier {
         _themeKinds[_id(chatId)] = _chatThemeKind(theme);
         notifyListeners();
       case 'updateDefaultBackground':
-        // The push is the authoritative source, so it also satisfies the cache
-        // a later loadDefaultWallpaper would otherwise fill with a full
-        // getCurrentState.
         _defaultsLoaded.add(update.boolean('for_dark_theme') ?? false);
         _ingestDefaultBackground(update);
         notifyListeners();
@@ -1775,9 +1714,6 @@ class ChatWallpaperController extends ChangeNotifier {
     _ingestCurrentGiftTheme(theme);
     _themeNames[id] = _chatThemeName(theme);
     _themeKinds[id] = _chatThemeKind(theme);
-    // Once TDLib has returned the chat, its server-backed appearance is the
-    // source of truth. Keeping the old preference would resurrect a stale
-    // local wallpaper after it was reset from another Telegram client.
     if (_localValues[id] != null) unawaited(_discardLocal(chatId));
     notifyListeners();
   }
@@ -1997,8 +1933,6 @@ class ChatWallpaperController extends ChangeNotifier {
           notifyListeners();
         }
       } catch (_) {
-        // File preparation is opportunistic. A raw preview can remain visible
-        // when storage/plugins are unavailable (notably widget tests).
       } finally {
         _resolvingFiles.remove(key);
       }
@@ -2024,16 +1958,11 @@ class ChatWallpaperController extends ChangeNotifier {
       '${support.path}/chat_wallpapers/${_activeSlot()}/telegram',
     );
     await folder.create(recursive: true);
-    // Cache the rendered transparent mask rather than only the normalized SVG.
-    // Image.file then shares Flutter's in-memory image cache across previews
-    // and chats, while this file avoids parsing/rasterizing again after restart.
     final destination = File('${folder.path}/pattern_raster_v1_$fileId.png');
     if (await destination.exists() && await destination.length() > 0) {
       return destination.path;
     }
 
-    // Reuse the normalized v4 document left by an earlier build as the source
-    // for this one-time raster migration.
     var source = File(sourcePath);
     for (final extension in const ['png', 'svg']) {
       final prepared = File(
@@ -2044,12 +1973,6 @@ class ChatWallpaperController extends ChangeNotifier {
         break;
       }
     }
-    // Telegram's pattern documents are authored as the final alpha mask. In
-    // particular, the official Paris asset already contains fine, rounded
-    // `fill:none` strokes. flutter_svg does not resolve the Illustrator CSS
-    // class blocks used by these files, so preserve the authored declarations
-    // by moving them onto each element instead of inventing new fill/stroke
-    // rules. PNG payloads are already directly renderable.
     final document = await compute(
       _inflatePatternDocument,
       await source.readAsBytes(),
@@ -2109,11 +2032,6 @@ class ChatWallpaperController extends ChangeNotifier {
           };
         } else if (wallpaper.remoteType == 'wallpaper' &&
             (wallpaper.imagePath ?? '').isNotEmpty) {
-          // Imported `.attheme` / `.tgios-theme` wallpapers are represented as
-          // Telegram wallpapers so their theme metadata survives. They don't
-          // have a remote background id, though, and must be uploaded from the
-          // extracted local image instead of asking TDLib to invent an empty
-          // wallpaper for a null input background.
           final path = await _prepareWallpaperJpeg(wallpaper.imagePath!);
           background = {
             '@type': 'inputBackgroundLocal',
@@ -2245,8 +2163,6 @@ class ChatWallpaperController extends ChangeNotifier {
     try {
       await _discardLocal(chatId, notify: notify);
     } catch (_) {
-      // The remote appearance is already saved. A stale local preference can
-      // be cleaned up on a later load and must not report that save as failed.
     }
   }
 
@@ -2351,10 +2267,6 @@ class ChatWallpaperBackground extends StatelessWidget {
     final hasFreeformGradient = value.colors.length >= 3;
     final path = value.imagePath;
     final hasFile = path != null && path.isNotEmpty;
-    // TDLib exposes the downloaded pattern path before the asynchronous
-    // normalizer/rasterizer finishes. Rendering that raw file here can race a
-    // temporary-file move or feed malformed Telegram SVG into flutter_svg.
-    // Keep the fill visible until the controller publishes its cached PNG.
     final hasPreparedPattern =
         hasFile &&
         value.remoteType == 'pattern' &&
@@ -2369,10 +2281,6 @@ class ChatWallpaperBackground extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // The backdrop is a sibling layer, not the chat UI's parent. Sharing a
-        // layer meant a composer caret blink, a music-bar tick or the
-        // jump-to-bottom spinner re-shaded the full-screen fill and the three
-        // freeform radial gradients behind them.
         RepaintBoundary(
           child: Stack(
             fit: StackFit.expand,
@@ -2432,8 +2340,6 @@ class ChatWallpaperBackground extends StatelessWidget {
     if (path.toLowerCase().endsWith('.png')) {
       return ClipRect(
         child: Transform.scale(
-          // Telegram pattern documents sometimes carry a transparent edge.
-          // A tiny overscan prevents a one-pixel seam after aspect-fill.
           scale: 1.012,
           child: Image.file(
             file,
@@ -2470,14 +2376,9 @@ class ChatWallpaperBackground extends StatelessWidget {
       );
     }
     result = Transform.scale(scale: 1.08, child: result);
-    // The parallax offset changes up to 30x a second. Retain the blurred,
-    // scaled result so a sample only re-composites it instead of re-running
-    // the sigma-12 gaussian over the whole viewport.
     if (value.isMoving) {
       result = _WallpaperMotion(child: RepaintBoundary(child: result));
     }
-    // The outer boundary keeps those samples from marking the backdrop layer
-    // — and everything painted with it — dirty.
     return ClipRect(child: RepaintBoundary(child: result));
   }
 }
@@ -2518,8 +2419,6 @@ class _WallpaperMotionState extends State<_WallpaperMotion>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // A covered route keeps this element mounted. Without the ticker gate the
-    // sensor kept repainting a wallpaper nobody can see, at 30 Hz.
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
     if (_tickerEnabled) {
       _startListening();
@@ -2643,9 +2542,6 @@ bool get _supportsWallpaperTilt =>
     (defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS);
 
-/// Maps the gravity-vector change since a wallpaper was opened to a bounded
-/// parallax translation. The baseline keeps an upright phone centered just as
-/// a flat phone is, while real changes in device tilt move the wallpaper.
 @visibleForTesting
 Offset wallpaperParallaxOffset({
   required double gravityX,
@@ -2686,8 +2582,6 @@ BoxDecoration? _fillDecoration(List<int> colors, int rotationAngle) {
   );
 }
 
-/// TDLib's two-color gradients start at the top at zero degrees and rotate
-/// clockwise, matching Telegram iOS' Core Graphics wallpaper renderer.
 @visibleForTesting
 (Alignment, Alignment) telegramLinearGradientAlignments(int rotationAngle) {
   final radians = rotationAngle * math.pi / 180;
@@ -2704,8 +2598,6 @@ class _TelegramFreeformGradient extends StatelessWidget {
   Widget build(BuildContext context) => CustomPaint(
     painter: _TelegramFreeformGradientPainter(colors),
     size: Size.infinite,
-    // One full-screen radial shader per extra colour, and the colours never
-    // change while a chat is open: worth a raster-cache entry.
     isComplex: true,
   );
 }
@@ -2763,9 +2655,6 @@ Color _representativeFillColor(List<int> colors) {
   return color;
 }
 
-/// Inflating a pattern document and inlining its CSS are pure-Dart passes over
-/// hundreds of KB, and they run while the chat-open transition is animating.
-/// Keep them off the UI isolate; returns PNG bytes or the normalized SVG.
 Object _inflatePatternDocument(Uint8List bytes) {
   final isGzip = bytes.length >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b;
   final decoded = isGzip
@@ -2828,11 +2717,6 @@ bool _isPreparedPatternPath(String path) {
       (lower.contains('pattern_document_v4_') && lower.endsWith('.png'));
 }
 
-/// `flutter_svg` intentionally supports presentation attributes but not the
-/// `<style>.st0{...}</style>` blocks emitted by Telegram's Illustrator assets.
-/// Inline those declarations without changing their authored values. Without
-/// this step classed paths fall back to SVG's black fill, which turns the
-/// official Paris line art into large silhouettes.
 @visibleForTesting
 String inlineTelegramPatternSvgStyles(String source) {
   final styleBlocks = RegExp(
@@ -2873,8 +2757,6 @@ String inlineTelegramPatternSvgStyles(String source) {
     caseSensitive: false,
   );
   final classSeparator = RegExp(r'\s+');
-  // Compiling these per matched element per declaration was thousands of
-  // RegExp compiles per document; there are only a handful of property names.
   final attributePatterns = <String, RegExp>{};
   return withoutStyles.replaceAllMapped(element, (match) {
     final attributes = match.group(2) ?? '';

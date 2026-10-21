@@ -1,11 +1,5 @@
 ﻿import '../tdlib/json_helpers.dart';
 
-/// Telegram's safety metadata for a private chat started by another user.
-///
-/// TDLib exposes this only through
-/// `chat.action_bar.account_info`, even when the user's phone number itself is
-/// hidden. Keeping it as a typed value avoids leaking raw action-bar payloads
-/// into the view layer.
 class ChatFirstContactInfo {
   const ChatFirstContactInfo({
     required this.countryCode,

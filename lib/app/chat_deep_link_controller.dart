@@ -27,15 +27,6 @@ class ChatDeepLinkRequest {
   );
 }
 
-/// The slot a deep link must open in, or null when it must not be opened at
-/// all.
-///
-/// A chat id only means something inside the account that produced it. Opening
-/// one against whichever account happens to be active does not fail loudly —
-/// it lands on a different conversation that happens to share the id, which
-/// reads as the app having opened the wrong chat. So a link naming an account
-/// that is not signed in is dropped, and so is one naming no account while
-/// several are signed in, because there is nothing to disambiguate it with.
 int? resolveDeepLinkAccountSlot({
   required int? requestedSlot,
   required int? requestedUserId,
@@ -49,9 +40,6 @@ int? resolveDeepLinkAccountSlot({
         .map((account) => account.slot)
         .firstOrNull;
   }
-  // Naming no account is only safe when there is a single account it could
-  // have meant. A lone account is the common case, and the one that predates
-  // notifications carrying an identity at all.
   return accounts.length <= 1 ? activeSlot : null;
 }
 
@@ -87,10 +75,5 @@ class ChatDeepLinkController extends ChangeNotifier {
     return request;
   }
 
-  /// Whether a host (MainTabView) is listening and can act on a request.
-  ///
-  /// Callers route through this controller so a conversation lands in the
-  /// split pane; without a host they must open the chat themselves rather
-  /// than drop the request on the floor.
   bool get hasHost => hasListeners;
 }

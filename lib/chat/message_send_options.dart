@@ -180,9 +180,6 @@ Future<MessageSendConfiguration?> showMessageSendOptionsSheet(
   );
 }
 
-/// A button-anchored, non-modal send-options surface for keyboard and pointer
-/// composers. The mobile sheet and its scheduling controls remain available
-/// elsewhere.
 class MessageSendOptionsContextMenuHandle {
   const MessageSendOptionsContextMenuHandle(this.result, this.dismiss);
 
@@ -360,7 +357,6 @@ class _MessageSendOptionsSheetState extends State<_MessageSendOptionsSheet> {
         borderRadius: widget.contextMenu
             ? BorderRadius.circular(AppRadius.md)
             : widget.centeredModal
-            // A centered modal is the most prominent surface on screen.
             ? BorderRadius.circular(AppRadius.xl)
             : const BorderRadius.vertical(top: Radius.circular(18)),
         border: widget.centeredModal || widget.contextMenu

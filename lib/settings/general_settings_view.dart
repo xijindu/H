@@ -1,10 +1,3 @@
-//
-//  general_settings_view.dart
-//
-//  Data and storage controls plus Mithka's separate chat-behavior settings.
-//  Port of the Swift `GeneralSettingsView` / `GeneralSettingsViewModel`.
-//
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -174,7 +167,6 @@ class _GeneralSettingsViewState extends State<GeneralSettingsView> {
   }
 }
 
-/// Mithka-only chat behavior that was previously mixed into data and storage.
 class ChatBehaviorSettingsView extends StatefulWidget {
   const ChatBehaviorSettingsView({super.key});
 

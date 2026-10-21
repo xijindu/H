@@ -22,8 +22,6 @@ class DocumentFileVisual {
   Color get color => palette.color;
 }
 
-/// Matches Telegram's four folded-document color buckets. Unknown file types
-/// are assigned from their first extension character instead of appearing gray.
 DocumentFileVisual documentFileVisualFor({
   required String fileName,
   required String extension,

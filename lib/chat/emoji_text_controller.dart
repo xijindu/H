@@ -1,15 +1,4 @@
-﻿//
-//  emoji_text_controller.dart
-//
-//  A TextEditingController that supports inline Telegram custom (premium) emoji
-//  inside the composer. Each inserted custom emoji is stored as a private-use
-//  placeholder code unit (U+E000+); buildTextSpan renders those as inline
-//  animated emoji, and toFormatted() converts the field to TDLib formattedText
-//  (replacing each placeholder with its fallback emoji + a
-//  textEntityTypeCustomEmoji entity at the correct UTF-16 offset).
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../theme/theme_controller.dart';
@@ -49,10 +38,10 @@ class _ComposerTextEntity {
 }
 
 class EmojiTextEditingController extends TextEditingController {
-  final Map<int, _Emoji> _byCode = {}; // PUA code unit -> emoji
-  final Map<int, int> _codeForId = {}; // custom_emoji_id -> PUA code unit
+  final Map<int, _Emoji> _byCode = {};
+  final Map<int, int> _codeForId = {};
   final List<_ComposerTextEntity> _entities = [];
-  int _next = 0xE000; // BMP Private Use Area (single UTF-16 unit each)
+  int _next = 0xE000;
   String _lastText = '';
 
   @override
@@ -62,7 +51,6 @@ class EmojiTextEditingController extends TextEditingController {
     super.value = newValue;
   }
 
-  /// Inserts a custom emoji at the current selection.
   void insertCustomEmoji(int id, String fallback) {
     var code = _codeForId[id];
     if (code == null) {
@@ -81,12 +69,10 @@ class EmojiTextEditingController extends TextEditingController {
     );
   }
 
-  /// Inserts plain text (e.g. a standard unicode emoji) at the selection.
   void insertText(String s) {
     insertFormattedText(s);
   }
 
-  /// Replaces [start]..[end] with an ID-backed Telegram user mention.
   void insertTextMention({
     required int start,
     required int end,
@@ -119,7 +105,6 @@ class EmojiTextEditingController extends TextEditingController {
 
   bool _isWhitespace(String value) => value.trim().isEmpty;
 
-  /// Inserts text at the selection and optionally applies one entity over it.
   void insertFormattedText(String s, {String? type}) {
     final sel = selection;
     final start = sel.isValid ? sel.start : text.length;
@@ -299,12 +284,11 @@ class EmojiTextEditingController extends TextEditingController {
     notifyListeners();
   }
 
-  /// Converts the field to (plainText, entities) for inputMessageText.
   (String, List<Map<String, dynamic>>) toFormatted() {
     final buf = StringBuffer();
     final entities = <Map<String, dynamic>>[];
     final outputOffsets = List<int>.filled(text.length + 1, 0);
-    var outLen = 0; // UTF-16 length written so far
+    var outLen = 0;
     for (var i = 0; i < text.length; i++) {
       outputOffsets[i] = outLen;
       final unit = text.codeUnitAt(i);

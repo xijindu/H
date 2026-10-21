@@ -1,15 +1,4 @@
-﻿//
-//  file_opener.dart
-//
-//  Shared file-opening helper for every entry point that hands a downloaded
-//  file to the OS (file detail page, downloads list, retained downloads).
-//  It supplies the MIME type explicitly because TDLib download paths do not
-//  always preserve the original file extension, and it gates APK installs on
-//  the Android 8+ "install unknown apps" switch: without that switch the
-//  package installer finishes silently and the tap appears to do nothing.
-//
-
-import 'package:flutter/foundation.dart';
+﻿import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:handy/components/app_confirm_dialog.dart';
 import 'package:handy/components/toast.dart';
@@ -17,7 +6,6 @@ import 'package:handy/l10n/app_localizations.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-/// Contract for the install-packages switch so tests can drive the flow.
 abstract interface class InstallPackagesGateway {
   Future<bool> isGranted();
 
@@ -36,14 +24,12 @@ class SystemInstallPackagesGateway implements InstallPackagesGateway {
       (await Permission.requestInstallPackages.request()).isGranted;
 }
 
-/// Tests replace this gateway to drive the permission flow.
 InstallPackagesGateway installPackagesGateway =
     const SystemInstallPackagesGateway();
 
 typedef DownloadedFileOpen =
     Future<OpenResult> Function(String path, {String? type});
 
-/// Tests replace the OS boundary so they never launch external applications.
 @visibleForTesting
 DownloadedFileOpen downloadedFileOpen = OpenFilex.open;
 
@@ -91,8 +77,6 @@ const _mimeMap = <String, String>{
 
 const apkMime = 'application/vnd.android.package-archive';
 
-/// Maps a lowercase extension (without the dot) to a MIME type, falling back
-/// to null so the OS resolves the type from the file itself.
 String? mimeForExtension(String ext) {
   final normalized = ext.toLowerCase();
   if (normalized.isEmpty) return null;
@@ -101,8 +85,6 @@ String? mimeForExtension(String ext) {
 
 String? mimeForFileName(String name) => mimeForExtension(_extensionOf(name));
 
-/// Opens [path] through the OS, waiting for the install permission when the
-/// file is an APK the user has not yet allowed Mithka to install.
 Future<void> openDownloadedFile(
   BuildContext context,
   String path, {
@@ -126,7 +108,6 @@ Future<bool> _ensureInstallPermission(BuildContext context) async {
   final alreadyGranted = await installPackagesGateway.isGranted();
   if (!context.mounted) return false;
   if (alreadyGranted) return true;
-  // The dialog await can span frames, so every later use re-checks mounted.
   final proceed = await showAppConfirmDialog(
     context,
     title: AppStringKeys.fileDetailApkInstallTitle,
@@ -137,8 +118,6 @@ Future<bool> _ensureInstallPermission(BuildContext context) async {
   final granted = await installPackagesGateway.request();
   if (!granted || !context.mounted) return false;
   showToast(context, AppStringKeys.fileDetailApkInstallGranted);
-  // The special-permission screen finishes before the system re-reads the
-  // switch on some devices; a short pause keeps the installer from racing.
   await Future<void>.delayed(const Duration(milliseconds: 400));
   return context.mounted;
 }

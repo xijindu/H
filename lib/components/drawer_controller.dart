@@ -1,11 +1,4 @@
-﻿//
-//  drawer_controller.dart
-//
-//  Drives the left-sliding "我" profile drawer, shared across tabs so any tab
-//  header's avatar can open it. Port of the Swift `DrawerController`.
-//
-
-import 'package:flutter/scheduler.dart';
+﻿import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
 class DrawerController extends ChangeNotifier {
@@ -23,7 +16,6 @@ class DrawerController extends ChangeNotifier {
   }
 }
 
-/// Tracks per-tab navigation depth so the classic bar hides on pushes.
 class TabBarVisibility extends ChangeNotifier {
   final Map<int, int> _depths = {};
   bool _notifyScheduled = false;
@@ -50,8 +42,6 @@ class TabBarVisibility extends ChangeNotifier {
   }
 }
 
-/// A [NavigatorObserver] that reports the current stack depth of one tab's
-/// Navigator into [TabBarVisibility] (depth 0 = root → show the tab bar).
 class TabDepthObserver extends NavigatorObserver {
   TabDepthObserver(this.tab, this.visibility);
   final int tab;

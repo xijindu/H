@@ -54,8 +54,6 @@ private final class NativeBottomTabBar: NSObject, FlutterPlatformView {
   deinit { channel.setMethodCallHandler(nil) }
 }
 
-/// The native bar remains unstyled: UIKit supplies Liquid Glass on iOS 26+,
-/// and the system's translucent tab appearance on earlier releases.
 @MainActor
 private final class NativeTabBarHost: UIView, UITabBarDelegate, UIContextMenuInteractionDelegate {
   private let bar = SafeInsetTabBar()
@@ -124,7 +122,6 @@ private final class NativeTabBarHost: UIView, UITabBarDelegate, UIContextMenuInt
     bar.frame = CGRect(x: 0, y: bounds.height - height, width: bounds.width, height: height)
     if height > 0 && height != lastHeight {
       lastHeight = height
-      // Flutter updates its layout on the next turn, outside UIKit layout.
       DispatchQueue.main.async { [weak self] in self?.onHeight?(height) }
     }
   }
@@ -153,8 +150,6 @@ private final class NativeTabBarHost: UIView, UITabBarDelegate, UIContextMenuInt
     }
   }
 
-  /// Render the same bundled Heroicons glyphs used by AppIcon, without SF
-  /// Symbols, substitute icons, or a separate asset set that can drift.
   private func icon(_ descriptor: [String: Any]) -> UIImage? {
     let fonts = [
       "Heroicons Solid": "solid", "Heroicons Outline": "outline",

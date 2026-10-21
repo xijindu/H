@@ -1,11 +1,4 @@
-﻿//
-//  add_members_view.dart
-//
-//  邀请成员: pick contacts and add them to an existing group via addChatMembers.
-//  Reached from the member grid's 邀请 tile in Chat Info.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../app/ipad_window_chrome.dart';

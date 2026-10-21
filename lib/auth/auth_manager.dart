@@ -1,11 +1,3 @@
-//
-//  auth_manager.dart
-//
-//  Owns app startup and TDLib's authorization flow. Subscribes to the update
-//  stream, reacts to updateAuthorizationState, and exposes a simple `step` that
-//  the UI gates on. Port of the Swift `AuthManager`.
-//
-
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -225,7 +217,6 @@ class AuthManager extends ChangeNotifier {
     try {
       _credentialsMissing = !Secrets.isConfigured;
 
-      // Subscribe before start so no early update is missed.
       if (!_subscribed) {
         _subscribed = true;
         _client
@@ -297,8 +288,6 @@ class AuthManager extends ChangeNotifier {
     _startupWatchdog = null;
   }
 
-  // MARK: - Authorization state machine
-
   void _handle(Map<String, dynamic> state) {
     if (_credentialsMissing) {
       _set(const AuthMissingCredentials());
@@ -315,9 +304,6 @@ class AuthManager extends ChangeNotifier {
     }
     switch (state.type) {
       case 'authorizationStateWaitTdlibParameters':
-        // The lower-level router normally sends these before broadcasting the
-        // state. On Flutter hot restart, Dart-side lifecycle can be rebuilt
-        // while tdjson is still alive, so repeat the active bootstrap here.
         _client.sendParametersForActiveClient();
       case 'authorizationStateWaitPhoneNumber':
         _set(const AuthWaitPhoneNumber());
@@ -365,9 +351,6 @@ class AuthManager extends ChangeNotifier {
         _errorMessage = null;
         _set(const AuthReady());
       case 'authorizationStateLoggingOut':
-        // Slots are reused by whoever signs in next, and the cache is keyed by
-        // slot — drop every strip rather than risk painting one account's
-        // members under another's chat.
         ChatMembersCache.shared.clear();
         _set(const AuthLoggingOut());
       case 'authorizationStateClosing':
@@ -380,8 +363,6 @@ class AuthManager extends ChangeNotifier {
     }
   }
 
-  /// Re-reads the active account's authorization state (after an account
-  /// switch) and updates `step` so the UI gates on the right account.
   void reloadAuthState() {
     final action = ++_actionSerial;
     final clientId = _client.activeClientId;
@@ -420,8 +401,6 @@ class AuthManager extends ChangeNotifier {
     }
   }
 
-  // MARK: - User actions
-
   Future<bool> submitPhone(String phone) async {
     if (_isWorking) return false;
     final normalizedPhone = phone.trim();
@@ -459,7 +438,6 @@ class AuthManager extends ChangeNotifier {
     }
   }
 
-  /// Leaves TDLib's persisted QR state before the phone-number form is used.
   Future<bool> switchToPhoneLogin() async {
     if (_isWorking) return false;
     final action = _beginAuthorizationTransition();
@@ -561,8 +539,6 @@ class AuthManager extends ChangeNotifier {
     _isWorking = false;
     notifyListeners();
   }
-
-  // MARK: - Helpers
 
   int _beginAuthorizationTransition() {
     final action = ++_actionSerial;

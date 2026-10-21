@@ -1,9 +1,6 @@
 ﻿import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
-/// Tracks only laid-out transcript rows for viewport reads and scroll anchors.
-/// Pagination can retain thousands of messages; a scroll frame needs the
-/// handful of render boxes attached by the two lazy slivers.
 class TranscriptEntryBoundary extends SingleChildRenderObjectWidget {
   const TranscriptEntryBoundary({
     super.key,

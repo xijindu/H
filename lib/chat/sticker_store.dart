@@ -1,13 +1,4 @@
-﻿//
-//  sticker_store.dart
-//
-//  Loads the user's Telegram stickers grouped by pack for the composer's
-//  sticker tab. "最近" (recent) comes first; each installed set is its own
-//  tab — covers load up front, a pack's full list lazily when its tab opens.
-//  Port of the Swift `StickerStore`.
-//
-
-import 'package:flutter/foundation.dart';
+﻿import 'package:flutter/foundation.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../tdlib/json_helpers.dart';
@@ -26,7 +17,7 @@ class StickerPack {
   });
   final int id;
   final String title;
-  final StickerItem? cover; // format-aware so tgs/webm set icons render
+  final StickerItem? cover;
   List<StickerItem> stickers;
   bool loaded;
 }
@@ -56,8 +47,6 @@ class StickerStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reloads after the installed sets changed elsewhere; a store nobody has
-  /// opened yet stays lazy.
   void invalidate() {
     if (!_loaded) return;
     _loaded = false;
@@ -139,8 +128,6 @@ class StickerStore extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Cover for the set-icon tab. The tab itself renders only a static thumbnail
-  /// so tiny cells never spin up animated sticker decoders.
   StickerItem? _coverItem(Map<String, dynamic> info) {
     final covers = info.objects('covers');
     if (covers != null && covers.isNotEmpty) {

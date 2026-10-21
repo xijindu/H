@@ -10,9 +10,6 @@ import '../tdlib/td_models.dart';
 import '../theme/app_theme.dart';
 import 'chat_first_contact_info.dart';
 
-/// Inline identity card for an unaccepted private conversation. The card uses
-/// a 22 px radius, a subtle brand-tinted gradient and border, and an 18 px soft
-/// shadow. It stays in the transcript and never blocks reading or replying.
 class ChatFirstContactCard extends StatelessWidget {
   const ChatFirstContactCard({
     super.key,

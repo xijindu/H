@@ -1,12 +1,5 @@
 ﻿import 'package:handy/l10n/app_localizations.dart';
 
-//
-//  emoji_catalog.dart
-//
-//  The standard Telegram emoji set, grouped into the categories Telegram's own
-//  keyboard uses. Port of the Swift `EmojiCatalog`.
-//
-
 class EmojiCategory {
   const EmojiCategory(this.name, this.emojis);
   final String name;

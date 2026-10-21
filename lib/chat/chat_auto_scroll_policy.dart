@@ -6,8 +6,6 @@
 
   bool _preserveViewport;
 
-  /// After [requestReturnToBottom], ignore ballistic scroll updates that would
-  /// otherwise re-lock [preservesViewport] before the jump finishes.
   bool _suppressViewportPreservation = false;
 
   bool get preservesViewport => _preserveViewport;
@@ -27,20 +25,16 @@
     }
   }
 
-  /// Clear viewport lock (e.g. already at bottom). Does not suppress re-locking.
   void returnToBottom() {
     _preserveViewport = false;
     _suppressViewportPreservation = false;
   }
 
-  /// Explicit navigation to the latest edge. Ignores inertia-driven re-locks
-  /// until settled at bottom or [allowViewportPreservation].
   void requestReturnToBottom() {
     _preserveViewport = false;
     _suppressViewportPreservation = true;
   }
 
-  /// User took over the transcript; allow viewport locking again.
   void allowViewportPreservation() {
     _suppressViewportPreservation = false;
   }
@@ -72,9 +66,6 @@ ChatReopenDisposition resolveChatReopenDisposition({
   return ChatReopenDisposition.defaultPosition;
 }
 
-/// Existing unread messages displace a saved viewport only when that viewport
-/// still points into already-read history. A saved anchor inside the unread
-/// range is reading progress and must be preserved.
 bool shouldPrioritizeUnreadOnChatReopen({
   required int currentUnreadCount,
   required int currentLastReadInboxId,
@@ -93,9 +84,6 @@ bool shouldLoadLatestChatHistory({
   required bool historyReachesLatest,
 }) => anchoredHistory || !historyReachesLatest;
 
-/// Whether one concrete message proves that a new unread arrived after the
-/// saved session. Counts are intentionally excluded: reads on another device,
-/// deletions, and an exit-time read can all make the count stay flat or fall.
 bool isNewIncomingUnreadSinceChatSession({
   required int messageId,
   required bool isOutgoing,
@@ -124,15 +112,11 @@ bool shouldContinueChatSessionUnreadHistoryProbe({
   int maximumPages = 5,
 }) => pagesScanned < maximumPages;
 
-/// A delayed initial `getChat` response must not replace a newer live inbox
-/// boundary received while that request was in flight.
 bool shouldApplyInitialChatReadState({
   required int readInboxRevisionAtRequestStart,
   required int currentReadInboxRevision,
 }) => readInboxRevisionAtRequestStart == currentReadInboxRevision;
 
-/// Invalidates asynchronous session-reopen work when a newer resolution starts
-/// or the user claims/exits the viewport.
 class ChatSessionReopenNavigationGuard {
   int _generation = 0;
 
@@ -174,11 +158,6 @@ bool shouldSaveChatSessionScrollSnapshot({
   required bool preservingSnapshotAfterFailedJump,
 }) => !sessionReopenPending && !preservingSnapshotAfterFailedJump;
 
-/// Protects the first real gesture after restoring a non-bottom viewport.
-///
-/// Centered history windows can report their loaded edge as "near latest".
-/// Consuming the first gesture prevents that edge from immediately replacing
-/// the restored window with the newest messages.
 class ChatRestoredPositionGuard {
   ChatRestoredPositionGuard(this._armed);
 
@@ -204,9 +183,6 @@ class ChatRestoredPositionGuard {
   }
 }
 
-/// Reaching an anchored window's edge should continue its history, never
-/// replace it with the latest page. Wait for an idle gesture before changing
-/// anchored mode, respecting explicit targets and restored positions.
 bool shouldContinueAnchoredHistory({
   required bool anchoredHistory,
   required bool restoredPositionProtected,
@@ -223,10 +199,6 @@ bool shouldContinueAnchoredHistory({
       isNearLatestEdge;
 }
 
-/// Session restoration must distinguish an exact latest-edge position from a
-/// viewport that merely happens to be close to it. A generous "near bottom"
-/// threshold is useful for read markers and UI affordances, but using it here
-/// discards the final partially visible reading position on reopen.
 bool isChatSessionAtLoadedBottom({
   required bool anchoredHistory,
   required double distanceToLoadedBottom,
@@ -253,12 +225,6 @@ class ChatInitialViewportTarget {
   final int? messageId;
 }
 
-/// Resolves one shared initial-position contract for both the estimate and
-/// post-layout correction passes.
-///
-/// In particular, an around-last-read history window is anchored, but its
-/// unread boundary still takes precedence over preserving an arbitrary window
-/// offset. Explicit search/reply targets remain the highest priority.
 ChatInitialViewportTarget resolveChatInitialViewportTarget({
   required int? explicitMessageId,
   required int? pendingMessageId,
@@ -320,9 +286,6 @@ ChatInitialScrollPlan chatInitialScrollPlan({
   bool openAtBottom = false,
 }) {
   final finiteSavedPixels = savedPixels?.isFinite == true ? savedPixels! : 0.0;
-  // A cached latest window without a "was at bottom" snapshot still opens at
-  // the latest edge. Without a post-layout correction, center-keyed transcripts
-  // paint from offset zero and leave a one-bubble gap above empty space.
   return ChatInitialScrollPlan(
     initialOffset: hasCachedTranscript ? finiteSavedPixels : 0.0,
     correctToBottomAfterLayout:
@@ -348,10 +311,6 @@ class ChatBottomCorrectionCoordinator {
   }
 }
 
-/// Drives bottom correction from actual laid-out geometry instead of timers.
-///
-/// Each correction gets a generation. User navigation cancels the generation,
-/// so a queued frame can never reclaim the viewport after the user scrolls.
 class ChatBottomFollowCoordinator {
   int _generation = 0;
 
@@ -435,8 +394,6 @@ bool shouldRestoreChatSessionOffset({
   return !hasExplicitTarget && hasSnapshot && !snapshotWasAtBottom;
 }
 
-/// A cold window replacement may keep the saved coordinate, but an explicit
-/// history invalidation (for example clearing the chat) must discard it.
 bool shouldPreserveChatSessionAnchorAcrossWindowChange({
   required bool anchorMaintenanceActive,
   required bool hasSavedPivot,

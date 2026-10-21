@@ -1,8 +1,6 @@
 ﻿import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
-/// Scrollable roots use this as trailing content padding, never viewport
-/// padding: rows can paint under the bar and still scroll fully above it.
 class BottomBarInset extends InheritedWidget {
   const BottomBarInset({super.key, required this.bottom, required super.child});
 
@@ -16,8 +14,6 @@ class BottomBarInset extends InheritedWidget {
       bottom != oldWidget.bottom;
 }
 
-/// Preserves the body element when switching between reserved and overlay
-/// chrome. Measures the whole footer, including an optional music player.
 class BottomBarLayout extends StatefulWidget {
   const BottomBarLayout({
     super.key,

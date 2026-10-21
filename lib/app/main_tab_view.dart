@@ -1,12 +1,3 @@
-//
-//  main_tab_view.dart
-//
-//  Tab shell: 消息 / optional 频道、联系人、动态, plus the left-sliding "我" profile drawer
-//  overlaid above the tab bar. The bottom tab bar is either a custom flat bar
-//  ("classic", default) or an optional liquid glass bar. Port of
-//  the Swift `MainTabView`.
-//
-
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -91,8 +82,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
   ChatDeepLinkController? _chatDeepLinks;
   AccountStore? _observedAccounts;
   int? _observedAccountSlot;
-  // Held in a notifier so a divider drag moves two pane widths instead of
-  // rebuilding the rail, the chat list and the conversation per pointer move.
   final _splitSidebarWidth = ValueNotifier<double?>(null);
   bool? _wasUsingSplitSelection;
   final _androidShareIntent = AndroidShareIntentController.shared;
@@ -109,8 +98,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
         unawaited(_presentPendingAndroidShare());
       });
     }
-    // Check GitHub Releases once per launch for a newer build this platform
-    // can install: an APK on Android.
     if (checkForUpdates) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) UpdateChecker.maybePrompt(context);
@@ -318,7 +305,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
     final tabIndex = tabs[i].index;
     final shouldToggleMessages = tabIndex == 0;
     if (tabIndex == _selection) {
-      // Tapping the active tab pops to its root.
       if (_usesSplitSelection(context) &&
           tabIndex == 0 &&
           _selectedArchivedChats != null) {
@@ -361,17 +347,12 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
           (slot: account.slot, userId: account.userId),
       ],
     );
-    // Nothing to place the chat id against safely; opening it here would show
-    // a different conversation with the same id.
     if (requestedSlot == null) return;
     if (requestedSlot != accounts.activeSlot) {
       accounts.switchTo(requestedSlot, context.read<AuthManager>());
       final controller = _chatDeepLinks;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final replay = request.scopedToAccountSlot(requestedSlot);
-        // A conversation from another account cannot remain a valid back
-        // destination after the account-keyed app subtree is rebuilt, so the
-        // replay intentionally uses the default replacement policy.
         controller?.openChat(
           chatId: replay.chatId,
           title: replay.title,
@@ -440,8 +421,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
         ChangeNotifierProvider.value(value: _tabBar),
         ChangeNotifierProvider.value(value: _unread),
       ],
-      // Material ancestor so the tab content (bare Containers) gets a proper
-      // DefaultTextStyle instead of the debug red/yellow-underline fallback.
       child: Material(
         type: MaterialType.transparency,
         child: PopScope(
@@ -459,7 +438,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
     return Stack(children: [_classicTabs(), _drawerOverlay()]);
   }
 
-  // MARK: - Per-tab navigators
 
   Widget _tabNavigator(int i) {
     return _TabNavigator(
@@ -481,7 +459,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
     builder: (tab) => _tabNavigator(tab.index),
   );
 
-  // MARK: - Classic (flat) tab bar
 
   Widget _classicTabs() {
     final theme = context.watch<ThemeController>();
@@ -516,8 +493,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
     return AnimatedBuilder(
       animation: _tabBar,
       builder: (context, _) {
-        // A route opened on the outer display stays mounted while opening
-        // the device. Adopt the split shell after returning to the tab root.
         if (_usesTabletSplit(context) && !_hasCompactNavigationStack) {
           return _tabletSplitTabs(tabs, selection, activeTabIndex);
         }
@@ -958,9 +933,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
     _messageChatExitController.prepareExit();
   }
 
-  /// Swaps the selected chat to one of its topics (or back to the whole chat)
-  /// through the shell, so the transcript keeps the live info pane, back
-  /// button and other shell-owned wiring.
   void _openSelectedChatTopic(int chatId, int? topicId) {
     final current = _selectedMessageChat;
     if (current == null ||
@@ -991,8 +963,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
         usesSplitSelectionLayout(MediaQuery.sizeOf(context));
   }
 
-  // Closing a foldable display must keep the active detail (and its nested
-  // navigator) mounted. Back returns to the compact tab navigator normally.
   bool get _retainsCompactDetail =>
       !kIsWeb &&
       defaultTargetPlatform == TargetPlatform.iOS &&
@@ -1003,16 +973,11 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
       _navKeys[_selection].currentState != null &&
       _tabBar.depth(_selection) > 0;
 
-  // MARK: - Drawer overlay (the "我" profile drawer)
 
   Widget _drawerOverlay() =>
       _ProfileDrawerOverlay(controller: context.read<dc.DrawerController>());
 }
 
-/// The draggable split divider.
-///
-/// It owns its hover state so growing the line from 1px to 2px on mouse-over
-/// does not setState the shell, which rebuilds both panes.
 class _SplitResizeHandle extends StatefulWidget {
   const _SplitResizeHandle({
     required this.onDragStart,
@@ -1422,9 +1387,6 @@ class _LazyTabStackState extends State<_LazyTabStack>
     final selected = tab.index == selectedTabIndex;
     final departing = tab.index == _departingTabIndex;
     final visible = selected || departing;
-    // The incoming page stays fully opaque: RenderOpacity short-circuits at
-    // alpha 255, so only the departing page pushes a full-viewport saveLayer
-    // for the length of the switch instead of both.
     final opacity = selected ? 1.0 : 1 - progress;
     final offset = selected
         ? _direction * 20 * (1 - progress)
@@ -1463,7 +1425,6 @@ class _LazyTabStackState extends State<_LazyTabStack>
   }
 }
 
-/// Hosts one tab's navigation stack so pushes stay within the tab.
 class _TabNavigator extends StatefulWidget {
   const _TabNavigator({
     required this.navigatorKey,
@@ -1481,8 +1442,6 @@ class _TabNavigator extends StatefulWidget {
 }
 
 class _TabNavigatorState extends State<_TabNavigator> {
-  // Keep the observer's route stack across window-size rebuilds, but create
-  // a fresh stack when this navigator is replaced by the split shell.
   late final _observer = dc.TabDepthObserver(
     widget.tabIndex,
     widget.visibility,
@@ -1499,7 +1458,6 @@ class _TabNavigatorState extends State<_TabNavigator> {
   }
 }
 
-/// Shared tab controls with an optional glass surface.
 class _MainBottomBar extends StatelessWidget {
   const _MainBottomBar({
     required this.selection,
@@ -1519,8 +1477,6 @@ class _MainBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    // The icons and their badges keep their size, so the bar only has to grow
-    // by what the labels underneath them gain from the text scale.
     final sideGeometry = SideNavigationGeometry.of(context);
     const sideItemHeight = SideNavigationGeometry.itemExtent;
     if (!kIsWeb &&

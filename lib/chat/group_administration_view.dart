@@ -1010,7 +1010,6 @@ class _ChatInviteLinksAdministrationViewState
             if (count.int64('user_id') case final int id) id,
         };
       } catch (_) {
-        // Only owners may enumerate links created by other administrators.
       }
       final activeSets = await Future.wait([
         for (final creatorId in creatorIds)
@@ -1511,8 +1510,6 @@ class _InviteLinkAnalyticsViewState extends State<InviteLinkAnalyticsView> {
                           ],
                         ),
                       )
-                    // The member list is whatever the link produced — the old
-                    // Column inflated every row of it.
                     : _AdminSectionSliver(
                         title: _membersTitle,
                         itemCount: _members.length,
@@ -1705,8 +1702,6 @@ class _ChatJoinRequestsAdministrationViewState
                         ),
                       )
                     else
-                      // A channel can hold thousands of pending requests; the
-                      // old Column inflated a row for every one of them.
                       _AdminSectionSliver(
                         title: _pendingTitle,
                         itemCount: _requests.length,
@@ -2603,8 +2598,6 @@ class _AdminSection extends StatelessWidget {
   );
 }
 
-/// Sliver twin of [_AdminSection] for the two pages whose row count is
-/// network-sized. Same card, but only the visible rows are inflated.
 class _AdminSectionSliver extends StatelessWidget {
   const _AdminSectionSliver({
     required this.title,

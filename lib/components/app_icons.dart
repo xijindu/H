@@ -22,11 +22,6 @@ class AppIcon extends StatelessWidget {
   }
 }
 
-/// Owned ten-second seek glyph used by video transport controls.
-///
-/// The bundled Heroicons set has generic U-turn and fast-forward symbols but
-/// no ten-second seek icon. Drawing the arc and numeral here keeps the control
-/// visually precise without falling back to a platform icon set.
 class AppSeekTenIcon extends StatelessWidget {
   const AppSeekTenIcon({
     super.key,
@@ -136,11 +131,6 @@ class _AppSeekTenIconPainter extends CustomPainter {
       oldDelegate.backwards != backwards || oldDelegate.color != color;
 }
 
-/// Owned push-pin glyph for pinned-item status.
-///
-/// Heroicons does not include a push pin; using its bookmark glyph made pinned
-/// chats look like Saved Messages. This compact outline keeps the visual
-/// language of the owned icon set without falling back to platform icons.
 class AppPinIcon extends StatelessWidget {
   const AppPinIcon({super.key, this.size = 16, this.color});
 
@@ -158,11 +148,6 @@ class AppPinIcon extends StatelessWidget {
   }
 }
 
-/// Owned "jump to earlier message" glyph.
-///
-/// The horizontal rule is the destination and the arrow moves toward it. The
-/// bundled Heroicons set has arrows and trays, but no upward arrow terminating
-/// at a line, so the chat quote control draws that exact shape here.
 class AppArrowUpToLineIcon extends StatelessWidget {
   const AppArrowUpToLineIcon({super.key, this.size = 18, this.color});
 
@@ -312,8 +297,6 @@ class HeroAppIcons {
   static const crop = AppIconData(HeroiconsOutline.viewfinderCircle);
   static const cpuChip = AppIconData(HeroiconsOutline.cpuChip);
 
-  /// Bot chats and the bot menu. Heroicons has no robot; the chip is what
-  /// the app already uses for machine-driven features.
   static const bot = AppIconData(HeroiconsOutline.cpuChip);
   static const cube = AppIconData(HeroiconsOutline.cubeTransparent);
   static const download = AppIconData(HeroiconsOutline.arrowDownTray);
@@ -331,8 +314,6 @@ class HeroAppIcons {
   static const filter = AppIconData(HeroiconsOutline.funnel);
   static const fingerprint = AppIconData(HeroiconsOutline.fingerPrint);
   static const flash = AppIconData(HeroiconsOutline.bolt);
-  /// Flashlight/torch toggle. Heroicons 0.5.0 ships no dedicated flashlight
-  /// glyph; the light-bulb outline is the closest available representation.
   static const flashlight = AppIconData(HeroiconsOutline.lightBulb);
   static const folder = AppIconData(HeroiconsOutline.folder);
   static const briefcase = AppIconData(HeroiconsOutline.briefcase);
@@ -346,8 +327,6 @@ class HeroAppIcons {
   static const trophy = AppIconData(HeroiconsOutline.trophy);
   static const font = AppIconData(HeroiconsOutline.documentText);
 
-  /// Message, post, and story forwarding. Generic share/export actions keep
-  /// using [share] so the two commands stay visually distinct.
   static const forward = AppIconData(HeroiconsOutline.arrowUturnRight);
   static const gear = AppIconData(HeroiconsOutline.cog6Tooth);
   static const gif = AppIconData(HeroiconsOutline.gif);

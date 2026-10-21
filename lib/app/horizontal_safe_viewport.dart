@@ -5,9 +5,6 @@ import 'package:flutter/services.dart';
 
 import 'package:flutter/widgets.dart';
 
-/// Reserves side-mounted system chrome for every route, sheet, and overlay.
-/// Descendants receive the usable window size so adaptive panes and interface
-/// scaling do not lay themselves out beneath a vertical status area.
 class HorizontalSafeViewport extends StatefulWidget {
   const HorizontalSafeViewport({
     super.key,
@@ -46,10 +43,7 @@ class _HorizontalSafeViewportState extends State<HorizontalSafeViewport> {
             .invokeMapMethod<String, dynamic>('sideNavigationGeometry');
         fraction = (geometry?['topFraction'] as num?)?.toDouble();
       } on MissingPluginException {
-        // Older native builds and widget tests retain a conservative fallback.
-      } on PlatformException {
-        // Geometry will be refreshed on the next window change.
-      }
+      } on PlatformException {}
       if (!mounted || !identical(_queriedMedia, media)) return;
       if (fraction != _sideTopFraction) {
         _sideTopFraction = fraction;
@@ -117,7 +111,6 @@ class _HorizontalSafeViewportState extends State<HorizontalSafeViewport> {
   }
 }
 
-/// The outer window geometry remains available after horizontal safe padding.
 class SideNavigationGeometry extends InheritedWidget {
   const SideNavigationGeometry({
     super.key,
@@ -131,13 +124,11 @@ class SideNavigationGeometry extends InheritedWidget {
   final double? sideTopFraction;
   double get sideTop => window.size.height * (sideTopFraction ?? 0.5);
 
-  /// Icon-only navigation retains generous targets at every text size.
   static const itemExtent = 56.0;
 
   static SideNavigationGeometry? of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<SideNavigationGeometry>();
 
-  /// Ordinary landscape camera insets are too narrow for navigation controls.
   bool fits(int count, double itemHeight) =>
       enabled &&
       window.size.height >= 600 &&
@@ -153,8 +144,6 @@ class SideNavigationGeometry extends InheritedWidget {
       sideTopFraction != oldWidget.sideTopFraction;
 }
 
-/// Paints and hit-tests controls in the side strip of the full window overlay.
-/// This overlay belongs to the unlocked app, below calls and the lock screen.
 class SideNavigationPortal extends StatefulWidget {
   const SideNavigationPortal({
     super.key,

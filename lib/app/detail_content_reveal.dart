@@ -3,13 +3,6 @@
 import '../theme/app_motion.dart';
 import '../theme/app_theme.dart';
 
-/// Immediately swaps heavy detail content while keeping every transition
-/// frame fully painted.
-///
-/// The arriving child always occupies the complete pane. A short, low-opacity
-/// tint using the active chat background provides the entrance cue without
-/// translating or fading the child itself, so list/detail boundaries cannot
-/// expose an ancestor canvas during chat switches.
 class DetailContentReveal extends StatefulWidget {
   const DetailContentReveal({
     super.key,

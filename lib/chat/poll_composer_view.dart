@@ -1,12 +1,4 @@
-﻿//
-//  poll_composer_view.dart
-//
-//  Telegram poll composer. The result deliberately mirrors inputMessagePoll so
-//  callers can send every server-supported poll mode without rebuilding UI
-//  state in the chat view model.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';

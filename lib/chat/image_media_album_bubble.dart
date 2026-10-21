@@ -31,9 +31,6 @@ typedef MediaAlbumImageBuilder =
       double height,
     );
 
-/// The production visual-media album row shared by chats and appearance
-/// previews. Keeping the preview on this renderer ensures album geometry,
-/// sender titles, name treatments, timestamps, and bubble colors stay honest.
 class ImageMediaAlbumBubble extends StatelessWidget {
   const ImageMediaAlbumBubble({
     super.key,
@@ -151,8 +148,6 @@ class ImageMediaAlbumBubble extends StatelessWidget {
           context,
           outgoing: outgoing,
           captionMessage: captionMessage,
-          // An album is chat media like any other: a wide transcript must not
-          // stretch it past the box a single photo would get.
           maxWidth: math.max(
             1.0,
             math.min(chatWidth * 0.75, chatMediaPreviewMaxSide),
@@ -649,11 +644,6 @@ class ImageMediaAlbumBubble extends StatelessWidget {
     required double height,
     required int extraCount,
   }) {
-    // A GlobalKey minted here would change identity every build, so Flutter
-    // could not match the old element: the whole tile — TDImage state and its
-    // in-flight file lookup included — was deactivated and re-inflated on every
-    // album rebuild. The key only ever resolved a RenderBox, which the tile's
-    // own context gives for free.
     return Builder(
       builder: (tileContext) {
         void showActions({Offset? pointerPosition}) {
@@ -850,9 +840,6 @@ class ImageMediaAlbumBubble extends StatelessWidget {
       (logical * MediaQuery.devicePixelRatioOf(context)).ceil();
 }
 
-/// Album geometry is a search over every row plan, each allocating a list and a
-/// Rect per tile. The inputs only move when TDLib replaces a message, so memoize
-/// it rather than re-running the search on every transcript rebuild.
 final Map<String, MediaAlbumLayout> _albumLayouts = {};
 const _maxMemoizedAlbumLayouts = 32;
 

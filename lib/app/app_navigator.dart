@@ -7,11 +7,6 @@ final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 const double _maximumBackSwipeScrimOpacity = 0.16;
 
-/// The shared route for app-level conversation surfaces.
-///
-/// Its controller is also the single source of truth for a full-page back
-/// swipe, so the navigator can paint the real previous route as soon as the
-/// current page starts moving.
 class AppChatPageRoute<T> extends PageRoute<T>
     implements FullPageBackSwipeDriver {
   AppChatPageRoute({
@@ -279,9 +274,6 @@ Future<T?> pushAppChatRoute<T>(BuildContext context, Route<T> route) {
   return navigator.push(route);
 }
 
-/// Replaces the current conversation route. If the caller is still on a
-/// tab-local utility page (for example the create-group form), close that page
-/// before opening the conversation in the app-level chat navigator.
 Future<T?> replaceWithAppChatRoute<T, TO>(
   BuildContext context,
   Route<T> route, {
@@ -292,8 +284,6 @@ Future<T?> replaceWithAppChatRoute<T, TO>(
       appNavigatorKey.currentState ??
       Navigator.of(context, rootNavigator: true);
   if (identical(sourceNavigator, rootNavigator)) {
-    // A pane can share the root navigator without owning its route. Keep the
-    // shell underneath the conversation, including roots with local history.
     if (ModalRoute.of(context)?.isFirst != false) {
       return rootNavigator.push<T>(route);
     }

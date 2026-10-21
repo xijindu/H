@@ -1,12 +1,4 @@
-﻿//
-//  photo_avatar.dart
-//
-//  Avatar that shows a real TDLib profile photo when available (with an instant
-//  minithumbnail placeholder), falling back to a colored monogram. Callers choose
-//  circle vs rounded-square. Port of the Swift `PhotoAvatar`/`TDImage`.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -30,13 +22,6 @@ import '../theme/theme_controller.dart';
 import 'app_icons.dart';
 import 'app_interactive_surface.dart';
 
-/// Sizes its child to the avatar box, clips it to a circle or rounded square,
-/// and optionally fills the shape and centres the child inside it.
-///
-/// This is one render object where the composition it replaces — clip, sized
-/// box, coloured container, alignment — was four. Every chat row and every
-/// message carries an avatar, so those four were among the priciest widgets in
-/// the app by total count.
 class AvatarSurface extends SingleChildRenderObjectWidget {
   const AvatarSurface({
     super.key,
@@ -50,10 +35,8 @@ class AvatarSurface extends SingleChildRenderObjectWidget {
   final double size;
   final bool square;
 
-  /// Painted behind the child, inside the clip.
   final Color? background;
 
-  /// Lay the child out loosely and centre it, instead of stretching it to fill.
   final bool centerChild;
 
   @override
@@ -74,7 +57,6 @@ class AvatarSurface extends SingleChildRenderObjectWidget {
         ..centerChild = centerChild;
 }
 
-/// Render object behind [AvatarSurface].
 class RenderAvatarSurface extends RenderShiftedBox {
   RenderAvatarSurface() : super(null);
 
@@ -116,8 +98,6 @@ class RenderAvatarSurface extends RenderShiftedBox {
   final LayerHandle<ClipRRectLayer> _roundedLayer =
       LayerHandle<ClipRRectLayer>();
 
-  // A `Path` is a native allocation and a scrolling list repaints every avatar
-  // every frame, so the shape is built once per size like `RenderClipOval` does.
   Rect? _shapeBounds;
   Path? _ovalShape;
   RRect? _roundedShape;
@@ -245,9 +225,6 @@ bool avatarAnimationIsEligible({
     tickerEnabled &&
     appIsActive;
 
-/// FVP/MDK creates a native player and worker set for every video controller.
-/// Keep avatar playback globally bounded even outside the chat list so a dense
-/// surface cannot exhaust native threads while it is coming on screen.
 abstract final class _AvatarPlayerBudget {
   static const maxPlayers = 2;
   static int _reservedPlayers = 0;
@@ -273,7 +250,6 @@ final class _AvatarPlayerLease {
   }
 }
 
-/// Profile/group avatar with a real TDLib photo, placeholder, and monogram.
 class PhotoAvatar extends StatefulWidget {
   const PhotoAvatar({
     super.key,
@@ -291,8 +267,6 @@ class PhotoAvatar extends StatefulWidget {
   final bool square;
   final bool showOnlineDot;
 
-  /// Whether this surface may create a video decoder for an animated avatar.
-  /// Dense scrolling lists should leave this off and use the static photo.
   final bool allowAnimation;
 
   @override
@@ -343,9 +317,7 @@ class _PhotoAvatarState extends State<PhotoAvatar> with WidgetsBindingObserver {
     var themeAllowsAnimation = true;
     try {
       themeAllowsAnimation = context.watch<ThemeController>().animateAvatars;
-    } on ProviderNotFoundException catch (_) {
-      // Standalone widget tests and previews may not install app providers.
-    }
+    } on ProviderNotFoundException catch (_) {}
     _themeAllowsAnimation = themeAllowsAnimation;
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
     _updateAnimationEligibility();
@@ -365,8 +337,6 @@ class _PhotoAvatarState extends State<PhotoAvatar> with WidgetsBindingObserver {
       appIsActive: _appIsActive,
     );
     final photo = widget.photo;
-    // With nothing to play and nothing to tear down the async pass only
-    // re-reads the account slot, and every avatar in a list pays for it.
     if (_animationController == null &&
         !_animationLoadPending &&
         (photo == null || !photo.hasAnimation)) {
@@ -487,22 +457,17 @@ class _PhotoAvatarState extends State<PhotoAvatar> with WidgetsBindingObserver {
       _loadedSlot = null;
       return;
     }
-    // File ids are per-account; reload when either id or active account changes.
     if (_loadedId == ref.id && _loadedSlot == slot) return;
     _loadedId = ref.id;
     final previousPhotoId = _loadedPhotoId;
     _loadedPhotoId = ref.photoId;
     _loadedSlot = slot;
-    // TDLib can replace the small-file id while it finishes hydrating the
-    // same profile photo. Keep the already sharp image in that case instead
-    // of flashing the low-resolution minithumbnail until the replacement
-    // download completes.
     final samePhoto =
         ref.photoId != null &&
         previousPhotoId != null &&
         ref.photoId == previousPhotoId;
     if (!samePhoto && _file != null) {
-      setState(() => _file = null); // reset to placeholder
+      setState(() => _file = null);
     }
     final cachedPath = TdFileCenter.shared.cachedPath(ref, accountSlot: slot);
     final initialPath = cachedPath ?? ref.localPath;
@@ -515,8 +480,6 @@ class _PhotoAvatarState extends State<PhotoAvatar> with WidgetsBindingObserver {
     });
   }
 
-  /// True while nothing but the monogram can paint, which the surface can then
-  /// draw itself instead of stacking a fill and an alignment on top of it.
   bool get _showsMonogramOnly {
     final animation = _animationController;
     if (animation != null && animation.value.isInitialized) return false;
@@ -610,7 +573,6 @@ class _PhotoAvatarState extends State<PhotoAvatar> with WidgetsBindingObserver {
     return _placeholder();
   }
 
-  /// Used when an image fails to decode, so it has to fill the box itself.
   Widget _placeholder() => Container(
     color: AppTheme.avatarColor(widget.title),
     alignment: Alignment.center,
@@ -630,7 +592,6 @@ class _PhotoAvatarState extends State<PhotoAvatar> with WidgetsBindingObserver {
 int _cacheSizePx(BuildContext context, double logicalSize) =>
     (logicalSize * MediaQuery.devicePixelRatioOf(context)).ceil();
 
-/// Circular monogram avatar (fallback / simple cases like "我").
 class MonogramAvatar extends StatelessWidget {
   const MonogramAvatar({
     super.key,
@@ -656,7 +617,6 @@ class MonogramAvatar extends StatelessWidget {
   }
 }
 
-/// Generic TDLib-file image (e.g. photo-message thumbnails).
 class TDImage extends StatefulWidget {
   const TDImage({
     super.key,
@@ -849,10 +809,6 @@ class _TDImageState extends State<TDImage> {
         setState(() => _file = File(path));
         return;
       }
-      // The bounded resolver expired. Stop painting its last active percent
-      // and make one mounted-only, fire-and-forget resume request. A later
-      // completion event will resolve the cached file through
-      // _resolveCompletedFile without keeping another long waiter alive.
       _progressPaintTimer?.cancel();
       _progressPaintTimer = null;
       final stalledDownloaded = _progress?.downloaded ?? -1;
@@ -928,10 +884,6 @@ class _TDImageState extends State<TDImage> {
     _resumeDownloadOnce(ref, slot, downloaded);
   }
 
-  /// A completion can arrive after path()'s bounded waiter has returned null.
-  /// TdFileCenter has already cached the completed path before dispatching the
-  /// terminal progress event, so resolve it again instead of leaving the
-  /// minithumbnail and its last active percentage on screen forever.
   Future<void> _resolveCompletedFile(TdFileRef ref, int slot) async {
     final path = await TdFileCenter.shared.pathFor(ref, accountSlot: slot);
     if (!mounted ||
@@ -949,10 +901,6 @@ class _TDImageState extends State<TDImage> {
     return _progressSub == null;
   }
 
-  /// Replaces an unreadable local file with the placeholder and fetches it
-  /// again. TDLib deletes cached media behind the app's back, and a path that
-  /// resolved earlier then makes `Image.file` throw — which used to paint
-  /// Flutter's broken-image box across the whole media frame.
   Widget _recoverFromUnreadableFile(File file, {required bool isThumbnail}) {
     final ref = widget.photo;
     final target = isThumbnail ? ref?.thumbnail : ref;
@@ -962,7 +910,6 @@ class _TDImageState extends State<TDImage> {
         _missingFileRecoveries < _maxMissingFileRecoveries) {
       _missingFileRecoveries++;
       TdFileCenter.shared.forget(target.id, accountSlot: slot);
-      // errorBuilder runs inside build, so the state change waits for the frame.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         unawaited(
@@ -1016,8 +963,6 @@ class _TDImageState extends State<TDImage> {
 
   @override
   Widget build(BuildContext context) {
-    // Callers that already know their decode size skip the LayoutBuilder, whose
-    // performLayout re-enters the build phase on every relayout.
     final Widget child = widget.cacheWidth != null && widget.cacheHeight != null
         ? _image(context, widget.cacheWidth, widget.cacheHeight)
         : LayoutBuilder(
@@ -1029,8 +974,6 @@ class _TDImageState extends State<TDImage> {
                   _cacheSizePxFromConstraint(context, constraints.maxHeight),
             ),
           );
-    // A zero-radius ClipRRect still costs a clip op per paint, and 25 of the
-    // TDImage call sites ask for one.
     if (widget.cornerRadius <= 0) return child;
     return ClipRRect(
       borderRadius: BorderRadius.circular(widget.cornerRadius),
@@ -1148,8 +1091,6 @@ class _MediaLoadingProgress extends StatelessWidget {
     final text = value == null || value <= 0 || value >= 1
         ? null
         : '${(value * 100).clamp(1, 99).round()}%';
-    // Without a boundary the indeterminate sweep repaints the whole media
-    // bubble — decoded image, clip and blurred frame — on every frame.
     return RepaintBoundary(
       child: Center(
         child: Container(

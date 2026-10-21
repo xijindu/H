@@ -1,14 +1,4 @@
-﻿//
-//  chat_message_search_bar.dart
-//
-//  The surfaces in-chat search draws over an open conversation: the header
-//  field that replaces the chat title, the compact navigator that replaces the
-//  composer on a phone, and the results list a wide chat keeps beside the
-//  transcript. None of them touch TDLib — they read and drive
-//  `ChatMessageSearchController`.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,8 +17,6 @@ import '../theme/app_theme.dart';
 import '../theme/date_text.dart';
 import 'chat_message_search_controller.dart';
 
-/// The chat header while search is on: back out of search, type, and — where
-/// there is room for them — step between hits without leaving the field.
 class ChatSearchHeaderBar extends StatelessWidget {
   const ChatSearchHeaderBar({
     super.key,
@@ -46,8 +34,6 @@ class ChatSearchHeaderBar extends StatelessWidget {
   final Color? backgroundColor;
   final bool showDivider;
 
-  /// Wide layouts keep the up/down controls in the header because the composer
-  /// stays put; narrow ones get them in [ChatSearchNavigator] instead.
   final bool showSteppers;
 
   @override
@@ -118,8 +104,6 @@ class ChatSearchHeaderBar extends StatelessWidget {
   );
 }
 
-/// A resolved `from:` token, shown so the narrowed search is visible rather
-/// than implied by a shrinking result list.
 class _ChatSearchSenderChip extends StatelessWidget {
   const _ChatSearchSenderChip({required this.name, required this.onRemove});
 
@@ -183,10 +167,6 @@ class _ChatSearchSenderChip extends StatelessWidget {
   }
 }
 
-/// Narrows a chat's search to one kind of message.
-///
-/// The strip stays out of the way until search is actually open, and scrolls
-/// horizontally so a narrow phone never truncates the last chip.
 class ChatSearchFilterStrip extends StatelessWidget {
   const ChatSearchFilterStrip({super.key, required this.controller});
 
@@ -244,8 +224,6 @@ class _ChatSearchField extends StatelessWidget {
     switch (event.logicalKey) {
       case LogicalKeyboardKey.enter:
       case LogicalKeyboardKey.numpadEnter:
-        // Enter walks back through time, matching the up control; shift
-        // reverses it, the way a find bar behaves everywhere else.
         if (shift) {
           controller.stepNewer();
         } else {
@@ -356,8 +334,6 @@ class _ChatSearchField extends StatelessWidget {
   }
 }
 
-/// Up (older) / down (newer) hit controls, sized for both a header row and a
-/// thumb-height navigator.
 class ChatSearchSteppers extends StatelessWidget {
   const ChatSearchSteppers({super.key, required this.controller});
 
@@ -427,8 +403,6 @@ class _ChatSearchStepper extends StatelessWidget {
   }
 }
 
-/// Replaces the composer while searching a narrow chat: how many hits there
-/// are, a way to see them all, and the two stepper controls.
 class ChatSearchNavigator extends StatelessWidget {
   const ChatSearchNavigator({
     super.key,
@@ -513,7 +487,6 @@ class ChatSearchNavigator extends StatelessWidget {
   }
 }
 
-/// One-line state for the navigator and the results header.
 String chatSearchStatusLabel(
   BuildContext context,
   ChatMessageSearchController controller,
@@ -532,8 +505,6 @@ String chatSearchStatusLabel(
       : AppStringKeys.chatSearchNoMessagesFound.l10n(context);
 }
 
-/// The hit list a wide chat keeps beside the transcript. The same list is what
-/// a narrow chat shows in its results sheet.
 class ChatSearchResultsPane extends StatelessWidget {
   const ChatSearchResultsPane({
     super.key,
@@ -549,8 +520,6 @@ class ChatSearchResultsPane extends StatelessWidget {
   final ValueChanged<ChatMessage> onSelect;
   final bool showHeader;
 
-  /// Defaults to the trailing-pane wash. A full screen passes the page
-  /// background so the list does not read as a pane floating on itself.
   final Color? backgroundColor;
 
   @override
@@ -561,8 +530,6 @@ class ChatSearchResultsPane extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     final c = context.colors;
-    // A token being typed is a question about who, so the surface answers that
-    // instead of listing hits for a half-written filter.
     final token = controller.activeToken;
     if (token != null) {
       return ColoredBox(
@@ -665,7 +632,6 @@ class ChatSearchResultsPane extends StatelessWidget {
   }
 }
 
-/// One hit: who said it, when, and the matched run inside the message.
 class ChatSearchResultRow extends StatelessWidget {
   const ChatSearchResultRow({
     super.key,
@@ -765,8 +731,6 @@ class ChatSearchResultRow extends StatelessWidget {
   }
 }
 
-/// The narrow-layout equivalent of the results pane, presented as a sheet so
-/// the transcript stays behind it.
 Future<void> showChatSearchResultsSheet({
   required BuildContext context,
   required ChatMessageSearchController controller,

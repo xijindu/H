@@ -54,9 +54,7 @@ class _CountryMessageFilterViewState extends State<CountryMessageFilterView> {
       if (mounted && names.isNotEmpty) {
         setState(() => _telegramNames = names);
       }
-    } catch (_) {
-      // Keep the offline fallback when Telegram's list isn't available.
-    }
+    } catch (_) {}
   }
 
   String _displayName(Country country) => country.displayName(_telegramNames);

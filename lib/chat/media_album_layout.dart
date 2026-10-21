@@ -29,9 +29,6 @@ class MediaAlbumLayout {
   final List<Rect> tiles;
 }
 
-/// [maxHeight] bounds the whole album the way a single preview is bounded: an
-/// album that lays out taller is scaled down as a unit, keeping its
-/// arrangement and every tile's aspect ratio.
 MediaAlbumLayout buildTelegramMediaAlbumLayout({
   required List<MediaAlbumItem> items,
   required double maxWidth,

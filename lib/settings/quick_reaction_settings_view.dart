@@ -117,9 +117,6 @@ class _QuickReactionSettingsViewState extends State<QuickReactionSettingsView> {
         vertical: AppSpacing.sm,
       ),
       child: SizedBox(
-        // A horizontal viewport must have a bounded cross-axis extent. The
-        // unbounded list used to collapse the selected strip (and hide the
-        // picker) on Android.
         height: 62,
         child: ListView.separated(
           scrollDirection: Axis.horizontal,

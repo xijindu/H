@@ -2,7 +2,6 @@
 import '../chat/sticker_item.dart';
 import '../tdlib/json_helpers.dart';
 
-/// Extracts the display sticker from each profile-visible received gift.
 List<StickerItem> parseReceivedGiftStickers(Map<String, dynamic> response) {
   final stickers = <StickerItem>[];
   for (final received

@@ -1,6 +1,5 @@
 ﻿import 'package:flutter/services.dart';
 
-/// Brightness control used by fullscreen video gestures.
 class PlayerBrightness {
   PlayerBrightness._();
 
@@ -17,28 +16,16 @@ class PlayerBrightness {
   static Future<void> set(double value) async {
     try {
       await _channel.invokeMethod<void>('set', value.clamp(0.01, 1.0));
-    } catch (_) {
-      // Brightness gestures are best-effort on unsupported platforms.
-    }
+    } catch (_) {}
   }
 
-  /// Restores the opening brightness without leaving a player-owned override.
-  ///
-  /// Android treats a window brightness of `-1` as "use the system setting";
-  /// the native implementation clears its window override while iOS restores
-  /// the captured screen value passed here.
   static Future<void> restore(double value) async {
     try {
       await _channel.invokeMethod<void>('restore', value.clamp(0.01, 1.0));
-    } catch (_) {
-      // Brightness gestures are best-effort on unsupported platforms.
-    }
+    } catch (_) {}
   }
 }
 
-/// A video-scoped brightness override that restores the level present when the
-/// player opened. Writes are serialized so a late gesture update cannot land
-/// after the restore performed while the player is closing.
 class PlayerBrightnessSession {
   PlayerBrightnessSession._(this.initialBrightness);
 

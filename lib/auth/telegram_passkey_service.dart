@@ -218,9 +218,7 @@ class TelegramPasskeyService {
         }
       } on TelegramPasskeyException {
         rethrow;
-      } catch (_) {
-        // A stale secondary slot must not block login to the active slot.
-      }
+      } catch (_) {}
     }
   }
 }

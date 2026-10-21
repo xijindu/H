@@ -17,9 +17,6 @@ import '../theme/app_theme.dart';
 import 'business_service.dart';
 import 'business_tools_views.dart';
 
-/// Telegram Business settings which belong to the current account. The data is
-/// sourced from `userFullInfo.business_info`, so the editor never relies on a
-/// locally cached business profile.
 class BusinessSettingsView extends StatefulWidget {
   const BusinessSettingsView({super.key});
 
@@ -58,15 +55,11 @@ class _BusinessSettingsViewState extends State<BusinessSettingsView> {
         });
         business = full.obj('business_info');
       } catch (_) {
-        // Profile summaries may be unavailable while TDLib refreshes the user;
-        // capability loading below must still populate the settings rows.
       }
       BusinessCapabilities? capabilities;
       try {
         capabilities = await _businessService.capabilities();
       } catch (_) {
-        // Keep all editing controls capability-gated if TDLib can't describe
-        // the feature set for this account.
       }
       if (!mounted) return;
       setState(() {
@@ -81,7 +74,6 @@ class _BusinessSettingsViewState extends State<BusinessSettingsView> {
         );
       });
     } catch (_) {
-      // Requests below will surface a useful TDLib error through a toast.
     } finally {
       if (mounted) setState(() => _loading = false);
     }

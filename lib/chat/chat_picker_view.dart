@@ -1,11 +1,3 @@
-//
-//  chat_picker_view.dart
-//
-//  A searchable chat chooser. Pushed when the user forwards a message or shares
-//  content; returns the picked `ChatSummary` via Navigator.pop. Reuses
-//  `ChatListViewModel` so it shows the same live, sorted chat list as 消息.
-//
-
 import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
@@ -187,9 +179,6 @@ class _ChatPickerViewState extends State<ChatPickerView> {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    // The chat model can update while ListView is asking for children. Keep one
-    // snapshot for both itemCount and indexing so a shrinking list cannot
-    // surface a RangeError from a stale child request.
     final filtered = _filtered;
     return Scaffold(
       backgroundColor: c.background,

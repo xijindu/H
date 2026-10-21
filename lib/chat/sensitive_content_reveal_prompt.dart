@@ -8,10 +8,6 @@ import '../theme/app_theme.dart';
 
 enum SensitiveContentRevealChoice { enableGlobally, keepOff, revealOnce }
 
-/// Shows the three sensitive-content choices beside the message interaction.
-///
-/// The route has a transparent barrier: clicking outside is equivalent to
-/// keeping the account setting off, without dimming or relaying out the chat.
 Future<SensitiveContentRevealChoice> showSensitiveContentRevealPrompt(
   BuildContext context, {
   Rect? anchor,

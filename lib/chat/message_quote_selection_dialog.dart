@@ -6,8 +6,6 @@ import '../tdlib/td_models.dart';
 import '../theme/app_theme.dart';
 import 'message_text_quote.dart';
 
-/// Selection offsets address an immutable copy of the original message, not
-/// translated text, sender labels, timestamps, or the first matching substring.
 class MessageQuoteSelectionDialog extends StatefulWidget {
   const MessageQuoteSelectionDialog({
     super.key,
@@ -87,7 +85,6 @@ class _MessageQuoteSelectionDialogState
                 border: InputBorder.none,
                 isCollapsed: true,
               ),
-              // The dialog owns its actions; selection handles remain native.
               contextMenuBuilder: (_, _) => const SizedBox.shrink(),
             ),
             const SizedBox(height: 12),

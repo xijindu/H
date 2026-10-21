@@ -5,8 +5,6 @@ import 'package:flutter/widgets.dart';
 import '../theme/app_motion.dart';
 import '../theme/app_theme.dart';
 
-/// Glass fallback for non-iOS hosts. The shell overlays this transparent
-/// surface above the scrollable content, with no opaque backing strip.
 class LiquidGlassBottomBar extends StatelessWidget {
   const LiquidGlassBottomBar({
     super.key,
@@ -22,18 +20,13 @@ class LiquidGlassBottomBar extends StatelessWidget {
   final int itemCount;
   final Widget child;
 
-  /// Optional trailing widget rendered to the right of the glass bar. It is
-  /// wrapped in an identical glass surface for visual cohesion.
   final Widget? trailing;
 
-  /// Horizontal gap between the glass pill and the trailing glass button.
   final double trailingGap;
 
-  // Fixed palette primitives — hoisted out of the build hot path.
   static const _white = Color(0xFFFFFFFF);
   static const _black = Color(0xFF000000);
 
-  /// Shared theme-derived values extracted once per build.
   static ({
     Color rim,
     Color tint,
@@ -172,7 +165,6 @@ class LiquidGlassBottomBar extends StatelessWidget {
 
     Widget content = glass;
     if (trailing != null) {
-      // glass's intrinsic height = controls(46) + inner Padding(5*2) = 56.
       const trailingSize = 56.0;
       content = Row(
         crossAxisAlignment: CrossAxisAlignment.center,

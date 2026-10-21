@@ -1,11 +1,4 @@
-﻿//
-//  create_group_view.dart
-//
-//  发起群聊: pick contacts and a title, then createNewBasicGroupChat. On success
-//  the new group's chat opens. Contacts are loaded with getContacts/getUser.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
@@ -91,7 +84,6 @@ class _CreateGroupViewState extends State<CreateGroupView> {
         'user_ids': _selected.toList(),
         'title': title,
       });
-      // TDLib may return a Chat or a CreatedBasicGroupChat { chat_id }.
       final chatId = chat.int64('id') ?? chat.int64('chat_id');
       if (!mounted) return;
       if (chatId != null) {

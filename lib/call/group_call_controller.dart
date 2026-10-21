@@ -187,8 +187,6 @@ class GroupCallController extends ChangeNotifier {
   bool useFrontCamera = true;
   bool isMinimized = false;
 
-  /// Cached until the roster changes: this runs on every build and on every
-  /// participant update, and it allocates three lists each time.
   List<GroupCallParticipant> get participants {
     final cached = _participantsCache;
     if (cached != null) return cached;
@@ -610,8 +608,6 @@ class GroupCallController extends ChangeNotifier {
       );
       _participants[key] = participant;
       if (!_displayOrder.contains(key)) _displayOrder.add(key);
-      // The name/photo carried over above is all this resolves; re-querying it
-      // on every refresh costs a TDLib round trip and a second notification.
       if (participant.name.isEmpty) unawaited(_resolveParticipant(participant));
     }
     _participants.removeWhere((key, _) => !keep.contains(key));
@@ -642,18 +638,11 @@ class GroupCallController extends ChangeNotifier {
     _displayOrder.add(parsed.key);
     _ensureDisplayOrder();
     _syncMediaSubscriptions();
-    // Speaking / mute / video updates arrive constantly and carry no name, and
-    // the previous one was copied forward above — resolving again would cost a
-    // TDLib query plus a second notifyListeners per update.
     if (parsed.name.isEmpty) unawaited(_resolveParticipant(parsed));
     _updateSystemMembers();
     notifyListeners();
   }
 
-  /// Both engine calls re-marshal their whole list over the platform channel,
-  /// and this runs on every participant update — where a speaking, mute or
-  /// volume blip leaves both sets identical. The signatures skip the object
-  /// construction and the encode entirely when nothing subscribable changed.
   void _syncMediaSubscriptions() {
     final audioParticipants = _participants.values
         .where((participant) => participant.audioSourceId != 0)
@@ -693,11 +682,6 @@ class GroupCallController extends ChangeNotifier {
       <= 4 => GroupCallVideoQuality.medium,
       _ => GroupCallVideoQuality.thumbnail,
     };
-    // maxQuality is derived from the participant count, so it belongs in the
-    // key: a 4→5 transition changes the request without changing the endpoints.
-    // audioSourceId is in it for the same reason — it is marshalled with every
-    // channel, so a participant that re-joins on a new audio source has to be
-    // re-sent even when its endpoint and source groups are unchanged.
     final channelSignature = [
       maxQuality.name,
       for (final participant in videoParticipants)
@@ -776,9 +760,6 @@ class GroupCallController extends ChangeNotifier {
   void _updateSystemMembers() {
     final current = session;
     if (current == null) return;
-    // CallKit only: LiveCommunicationBridge.updateMembers returns immediately
-    // off iOS, so everywhere else this walked the roster for nobody. It also
-    // runs up to three times per participant update, hence the name memo.
     if (!Platform.isIOS) return;
     final names = participants
         .map((participant) => participant.name)

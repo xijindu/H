@@ -344,14 +344,11 @@ final class ApplePCCBridge {
       var userPromptTokenCount = Self.estimatedTokenCount(prompt)
       if #available(iOS 26.4, *) {
         do {
-          // Counting the session transcript includes the initial instruction
-          // entry and its model framing, which a plain string estimate misses.
           initialPromptTokenCount = try await model.tokenCount(
             for: session.transcript
           )
           userPromptTokenCount = try await model.tokenCount(for: Prompt(prompt))
         } catch {
-          // The conservative estimate still enforces the 4K hard ceiling.
         }
       }
       let inputTokenCount =

@@ -25,9 +25,6 @@ class MusicPlaylist {
   );
 }
 
-/// Stores playlists as Telegram chats inside a dedicated `_Playlist` folder.
-/// Tracks are ordinary audio messages, so the library follows the account and
-/// can be inspected or recovered without Mithka-specific local state.
 class MusicPlaylistService {
   MusicPlaylistService({
     MusicPlaylistQuery? query,

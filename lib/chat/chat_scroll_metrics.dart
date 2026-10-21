@@ -3,24 +3,10 @@
 const pinnedMessageScrollAlignment = 0.08;
 const pinnedMessageTargetTopInset = 72.0;
 
-/// Distance from the viewport to the oldest loaded chat content.
-///
-/// Chat history is ordered so that the oldest edge is represented by
-/// [ScrollMetrics.minScrollExtent]. The returned distance is zero while
-/// overscrolling beyond that edge.
 double distanceToOldest(ScrollMetrics metrics) => metrics.extentBefore;
 
-/// Distance from the viewport to the latest loaded chat content.
-///
-/// Chat history is ordered so that the latest edge is represented by
-/// [ScrollMetrics.maxScrollExtent]. The returned distance is zero while
-/// overscrolling beyond that edge.
 double distanceToLatest(ScrollMetrics metrics) => metrics.extentAfter;
 
-/// Tracks a pull beyond the oldest edge and fires once per drag after the
-/// configured distance. It supports both clamping physics (which reports a
-/// signed overscroll delta) and bouncing physics (which moves `pixels` beyond
-/// `minScrollExtent`).
 class OldestHistoryPullController {
   OldestHistoryPullController({this.triggerDistance = 52})
     : assert(triggerDistance > 0);
@@ -58,31 +44,19 @@ class OldestHistoryPullController {
   }
 }
 
-/// Whether the viewport is within [threshold] pixels of the oldest edge.
 bool isNearOldest(ScrollMetrics metrics, {required double threshold}) {
   assert(threshold >= 0);
   return distanceToOldest(metrics) <= threshold;
 }
 
-/// Whether the viewport is within [threshold] pixels of the latest edge.
 bool isNearLatest(ScrollMetrics metrics, {required double threshold}) {
   assert(threshold >= 0);
   return distanceToLatest(metrics) <= threshold;
 }
 
-/// Clamps [offset] to the complete scroll range described by [metrics].
-///
-/// Unlike clamping to `0..maxScrollExtent`, this also supports viewports whose
-/// content before a center sliver gives them a negative minimum extent.
 double clampScrollOffset(ScrollMetrics metrics, double offset) =>
     offset.clamp(metrics.minScrollExtent, metrics.maxScrollExtent);
 
-/// Resolves a pinned-message jump so the target's leading edge clears the
-/// floating pinned banner.
-///
-/// The coordinates are global because both render boxes are measured after
-/// layout. The scroll delta is the target's current leading edge minus its
-/// desired leading edge within the transcript viewport.
 double pinnedMessageTargetScrollOffset(
   ScrollMetrics metrics, {
   required double targetTop,
@@ -93,11 +67,6 @@ double pinnedMessageTargetScrollOffset(
   metrics.pixels + targetTop - (viewportTop + topInset),
 );
 
-/// Returns the normalized position of [offset] in the complete scroll range.
-///
-/// When [offset] is omitted, [ScrollMetrics.pixels] is used. Values outside
-/// the range are clamped to `0..1`. A range with no scrollable extent is at
-/// fraction zero.
 double scrollFraction(ScrollMetrics metrics, {double? offset}) {
   final extent = metrics.maxScrollExtent - metrics.minScrollExtent;
   if (extent <= 0) return 0;
@@ -105,10 +74,6 @@ double scrollFraction(ScrollMetrics metrics, {double? offset}) {
   return (clampedOffset - metrics.minScrollExtent) / extent;
 }
 
-/// Converts [fraction] in `0..1` to an offset in the complete scroll range.
-///
-/// Fractions outside the range are clamped. A range with no scrollable extent
-/// always resolves to its single available offset.
 double scrollOffsetForFraction(ScrollMetrics metrics, double fraction) {
   final extent = metrics.maxScrollExtent - metrics.minScrollExtent;
   if (extent <= 0) return metrics.minScrollExtent;

@@ -1,13 +1,4 @@
-﻿//
-//  accent_color_picker_view.dart
-//
-//  A full-page custom swatch picker for a Telegram accent color (the name
-//  color via setAccentColor, or the profile color via setProfileAccentColor).
-//  Returns the chosen id via Navigator.pop (or -1 for “none” when allowed).
-//  No Material dialog — flat NavHeader + 保存.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../components/app_icons.dart';
@@ -15,17 +6,14 @@ import '../components/app_interactive_surface.dart';
 import '../components/ui_components.dart';
 import '../theme/app_theme.dart';
 
-/// The 7 built-in Telegram peer/name accent colors (ids 0–6, light theme).
-/// These ids are universal across clients; higher ids are premium palettes
-/// delivered via updateAccentColors and are out of scope here.
 const List<Color> kAccentColors = [
-  Color(0xFFCC5049), // 0 red
-  Color(0xFFD67722), // 1 orange
-  Color(0xFF955CDB), // 2 purple
-  Color(0xFF40A920), // 3 green
-  Color(0xFF309EBA), // 4 cyan
-  Color(0xFF368AD1), // 5 blue
-  Color(0xFFC7508B), // 6 pink
+  Color(0xFFCC5049),
+  Color(0xFFD67722),
+  Color(0xFF955CDB),
+  Color(0xFF40A920),
+  Color(0xFF309EBA),
+  Color(0xFF368AD1),
+  Color(0xFFC7508B),
 ];
 
 class AccentColorPickerView extends StatefulWidget {
@@ -39,7 +27,7 @@ class AccentColorPickerView extends StatefulWidget {
 
   final String title;
   final int selectedId;
-  final bool allowNone; // profile color may be cleared (id -1)
+  final bool allowNone;
   final String? footnote;
 
   @override

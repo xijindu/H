@@ -1,14 +1,4 @@
-﻿//
-//  custom_emoji.dart
-//
-//  Telegram custom (premium) emoji: a batching resolver that turns
-//  custom_emoji_ids into their sticker files (getCustomEmojiStickers), and an
-//  inline widget that renders one at text size — animated (.tgs/Lottie) or
-//  static (webp). Also a shared sticker-array parser (port of the Swift
-//  `StickerStore.parse`) used by the sticker + emoji stores.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -24,8 +14,6 @@ import 'animated_sticker_view.dart';
 import 'sticker_item.dart';
 import 'video_sticker_view.dart';
 
-/// Parses a TDLib `stickers` array into pickable items (regular or custom
-/// emoji). Captures `custom_emoji_id` + animated flag + display thumbnail.
 List<StickerItem> parseStickers(List<Map<String, dynamic>>? array) {
   if (array == null) return [];
   final out = <StickerItem>[];
@@ -66,9 +54,9 @@ class CustomEmojiSticker {
   });
   final TdFileRef? file;
   final TdFileRef? thumb;
-  final bool isTgs; // Lottie (animate)
-  final bool isWebm; // video — render its static thumbnail, not the file
-  final bool needsRepainting; // monochrome — tint to the surrounding text color
+  final bool isTgs;
+  final bool isWebm;
+  final bool needsRepainting;
 }
 
 enum CustomEmojiPresentation { staticThumbnail, tgs, webm, image }
@@ -89,8 +77,6 @@ CustomEmojiPresentation customEmojiPresentation(
   return CustomEmojiPresentation.image;
 }
 
-/// Resolves custom_emoji_ids → sticker files, batched + cached, so many inline
-/// emoji in a transcript resolve in a few TDLib calls.
 class CustomEmojiCenter {
   CustomEmojiCenter._();
   static final CustomEmojiCenter shared = CustomEmojiCenter._();
@@ -153,7 +139,6 @@ class CustomEmojiCenter {
   }
 }
 
-/// Inline rendering of a single custom emoji at [size] (defaults to text size).
 class CustomEmojiView extends StatefulWidget {
   const CustomEmojiView({
     super.key,
@@ -164,7 +149,7 @@ class CustomEmojiView extends StatefulWidget {
   });
   final int id;
   final double size;
-  final Color? color; // tint for monochrome (needs_repainting) emoji
+  final Color? color;
   final bool animate;
 
   @override
@@ -194,8 +179,6 @@ class _CustomEmojiViewState extends State<CustomEmojiView> {
       center.request(widget.id);
       _sub = center.onResolved.listen((rid) {
         if (rid != widget.id) return;
-        // One-shot: once resolved the cache serves every later build, so stop
-        // paying for broadcast fan-out in long transcripts.
         _sub?.cancel();
         _sub = null;
         if (mounted) setState(() {});
@@ -213,17 +196,11 @@ class _CustomEmojiViewState extends State<CustomEmojiView> {
   Widget build(BuildContext context) {
     final s = CustomEmojiCenter.shared.get(widget.id);
     if (s == null) return SizedBox(width: widget.size, height: widget.size);
-    // The glyph box is square and tight, so the decode size is known here —
-    // handing it to TDImage keeps inline emoji off its LayoutBuilder path.
     final cacheSize = (widget.size * MediaQuery.devicePixelRatioOf(context))
         .ceil();
-    // tgs → animate via Lottie. webm is a video Image.file can't decode, so use
-    // its static thumbnail. webp/other → the sticker file (falls back to thumb).
     Widget child;
     switch (customEmojiPresentation(s, animate: widget.animate)) {
       case CustomEmojiPresentation.staticThumbnail:
-        // Status emoji can stay entirely on their static TDLib thumbnail when
-        // animation is disabled, avoiding Lottie work and video decoders.
         child = TDImage(
           photo: s.thumb!,
           cornerRadius: 0,
@@ -233,8 +210,6 @@ class _CustomEmojiViewState extends State<CustomEmojiView> {
         );
         break;
       case CustomEmojiPresentation.tgs:
-        // Inline emoji render at text size; 30 fps is indistinguishable there
-        // and halves the repaint cost of emoji-heavy messages.
         child = AnimatedStickerView(
           file: s.file!,
           frameRate: const FrameRate(30),
@@ -258,8 +233,6 @@ class _CustomEmojiViewState extends State<CustomEmojiView> {
         );
         break;
     }
-    // Monochrome (needs_repainting) emoji are white glyphs — tint to the
-    // surrounding text color so they're visible on light bubbles.
     if (s.needsRepainting && widget.color != null) {
       child = ColorFiltered(
         colorFilter: ColorFilter.mode(widget.color!, BlendMode.srcATop),
@@ -270,12 +243,6 @@ class _CustomEmojiViewState extends State<CustomEmojiView> {
   }
 }
 
-/// Keeps the Unicode fallback of a message custom emoji in the surrounding
-/// selection region while rendering its resolved Telegram asset normally.
-///
-/// A bare [WidgetSpan] contributes no text to Flutter selection. The
-/// transparent paragraph is painted above the asset so its selection highlight
-/// remains visible and copying preserves [fallbackText].
 class SelectableCustomEmojiView extends StatelessWidget {
   const SelectableCustomEmojiView({
     super.key,
@@ -316,9 +283,6 @@ class SelectableCustomEmojiView extends StatelessWidget {
   );
 }
 
-/// A custom emoji used specifically as an account or chat status. Status
-/// surfaces honor the battery-saving animation preference while other custom
-/// emoji, such as reactions and message entities, keep their normal behavior.
 class StatusEmojiView extends StatelessWidget {
   const StatusEmojiView({
     super.key,
@@ -339,9 +303,7 @@ class StatusEmojiView extends StatelessWidget {
     if (animate == null) {
       try {
         shouldAnimate = context.watch<ThemeController>().animateStatusEmoji;
-      } on ProviderNotFoundException catch (_) {
-        // Standalone previews without the app provider keep normal playback.
-      }
+      } on ProviderNotFoundException catch (_) {}
     }
     return CustomEmojiView(
       id: id,

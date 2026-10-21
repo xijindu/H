@@ -1,15 +1,9 @@
 ﻿import 'dart:math' as math;
 import 'dart:ui';
 
-/// Ordinary chat media stays inside a 430 x 430 logical-pixel box, and at least
-/// 100 logical pixels are reserved for either preview dimension.
 const double chatMediaPreviewMaxSide = 430;
 const double chatMediaPreviewMinSide = 100;
 
-/// Chat media fits into a 320 x 320 box, and only a landscape video may grow
-/// wider than that. Height therefore stops short of the square media box: at
-/// the full 430 a portrait photo or clip becomes a strip that pushes the rest
-/// of the message off screen, taller than the layout intends.
 const double telegramChatMediaPreviewMaxHeight = 320;
 
 class MediaPreviewGeometry {
@@ -18,11 +12,8 @@ class MediaPreviewGeometry {
     required this.frameSize,
   });
 
-  /// Aspect-preserving source size, never enlarged beyond its source pixels.
   final Size contentSize;
 
-  /// Stable layout box. Very small or extremely narrow media can use a
-  /// low-resolution blurred fill around [contentSize].
   final Size frameSize;
 
   bool get needsBlurredFill =>
@@ -30,12 +21,6 @@ class MediaPreviewGeometry {
       (contentSize.height - frameSize.height).abs() > 0.5;
 }
 
-/// Chat-media preview geometry at Flutter logical-pixel scale: downscale into
-/// the fixed media box, downscale again for a narrow chat pane, never upscale
-/// the source, then enforce a small stable layout box.
-///
-/// [maxHeight] lets a caller keep tall media shorter than the square media box
-/// — see [telegramChatMediaPreviewMaxHeight].
 MediaPreviewGeometry chatMediaPreviewGeometry({
   required int? sourceWidth,
   required int? sourceHeight,

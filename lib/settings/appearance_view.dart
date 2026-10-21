@@ -1,14 +1,7 @@
-//
-//  appearance_view.dart
-//
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-//  外观 is the hub for theme, interface, font, and app-icon settings. Each
-//  interface surface owns its controls and a live account-backed preview.
-//
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -209,12 +202,6 @@ class SenderNameReadabilitySettingsView extends StatelessWidget {
   }
 }
 
-/// Every name colour a sender can be assigned, over the background they will
-/// actually be read on.
-///
-/// One treatment can be legible on the palette's dark blue and lost on its
-/// yellow, so the choice is only answerable by seeing all of them at once
-/// against the current wallpaper rather than one sample name.
 class _SenderNameReadabilityPreview extends StatelessWidget {
   const _SenderNameReadabilityPreview();
 
@@ -234,15 +221,9 @@ class _SenderNameReadabilityPreview extends StatelessWidget {
           ),
         );
         final bubbleColor = c.bubbleIncoming;
-        // Blend meets this halfway, so the preview has to read it from the
-        // same place a real incoming bubble does.
         final bubbleTextColor = c.bubbleIncomingText;
         final colors = messageNameColorsForTheme();
         final sample = AppStrings.t(AppStringKeys.appearancePreviewUsersSample);
-        // The wallpaper expands to its constraints, and a settings list gives
-        // its children unbounded height, so wrapping the names in it forces an
-        // infinite height and the page lays out blank. It fills behind them
-        // instead, leaving the names to decide how tall the preview is.
         return ClipRRect(
           key: const ValueKey('senderNameReadabilityPreview'),
           borderRadius: BorderRadius.circular(AppRadius.card),
@@ -274,9 +255,6 @@ class _SenderNameReadabilityPreview extends StatelessWidget {
                         textColor: bubbleTextColor,
                         name: sample,
                         nameStyle: TextStyle(fontSize: 12, color: color),
-                        // The background treatment is a tag joined to the name,
-                        // so previewing it without a tag would hide half of what
-                        // is being chosen.
                         role:
                             theme.senderNameReadabilityMode ==
                                 SenderNameReadabilityMode.background
@@ -1113,7 +1091,6 @@ class ArchivedChatsSettingsView extends StatelessWidget {
 }
 
 extension _DisplayAppearanceHelpers on AppearanceView {
-  /// What a single conversation looks like.
   Widget _chatViewNavigationRow(BuildContext context) => KeyedSubtree(
     key: const ValueKey('chat-view-settings-row'),
     child: _navigationRow(
@@ -2068,7 +2045,6 @@ class _FontCacheManagementViewState extends State<FontCacheManagementView> {
       try {
         await entry.deleteFiles();
       } catch (_) {
-        // The cache may have been removed by the font loader or the OS.
       }
     }
     if (!mounted) return;
@@ -2085,7 +2061,6 @@ class _FontCacheManagementViewState extends State<FontCacheManagementView> {
     try {
       await entry.deleteFiles();
     } catch (_) {
-      // The cache may have been removed by the font loader or the OS.
     }
     if (!mounted) return;
     final snapshot = await _loadSnapshot();
@@ -2202,7 +2177,6 @@ class _FontCacheEntry {
       try {
         if (await file.exists()) await file.delete();
       } catch (_) {
-        // Individual cache files can disappear while the list is open.
       }
     }
   }
@@ -2837,9 +2811,6 @@ class _EmojiFontPickerViewState extends State<EmojiFontPickerView> {
       _previewAssets[key] ?? _fallbackPreviewAsset;
 }
 
-/// Draws the preview glyph with the platform emoji font itself, so the row
-/// shows what the system default actually looks like instead of a bundled
-/// picture of somebody else's emoji set.
 class _SystemEmojiPreview extends StatelessWidget {
   const _SystemEmojiPreview();
 
@@ -3041,8 +3012,6 @@ class _FontAddViewState extends State<FontAddView> {
             child: SettingsSearchField(
               controller: _searchController,
               hintText: AppStringKeys.appearanceSearchFont,
-              // Each filter pass scans the ~1900 Google families; a keystroke
-              // burst should only pay for the query the user settles on.
               onChanged: (value) {
                 final next = value.trim();
                 _searchDebounce?.cancel();
@@ -3245,8 +3214,6 @@ class _FontCandidate {
 
   final String label;
   final String family;
-  // Search keys for the ~1900 candidates, folded once at construction instead
-  // of twice per candidate per keystroke.
   final String lowerLabel;
   final String lowerFamily;
   final String preview;

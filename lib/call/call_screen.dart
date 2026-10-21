@@ -1,15 +1,4 @@
-﻿//
-//  call_screen.dart
-//
-//  Full-screen 1:1 call UI driven by a `CallManager`, styled after the reference app's voice /
-//  video call screens: a blurred-avatar backdrop, a large rounded-square avatar
-//  with name + status, the端到端 verification emojis, and a row of frosted
-//  translucent controls (mute / speaker / camera) over a red 挂断 — with
-//  green 接听 / red 拒绝 for an incoming call. Video calls fill the screen with
-//  the remote feed and a small local preview (PiP).
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:ui';
 
@@ -19,7 +8,7 @@ import 'package:handy/l10n/app_localizations.dart';
 
 import '../components/app_icons.dart';
 import '../components/app_interactive_surface.dart';
-import '../components/photo_avatar.dart'; // PhotoAvatar + TDImage
+import '../components/photo_avatar.dart';
 import '../theme/app_theme.dart';
 import 'call_manager.dart';
 
@@ -208,17 +197,12 @@ class _CallScreenState extends State<CallScreen> {
     );
   }
 
-  /// the reference app's blurred-avatar backdrop (falls back to a dark gradient). For an active
-  /// video call this is the (placeholder) remote feed area.
   Widget _backdrop(ActiveCall call, bool isVideoActive) {
     final hasPhoto = call.peerPhoto != null;
     return Stack(
       fit: StackFit.expand,
       children: [
         if (hasPhoto)
-          // Boundary outside the filter: every manager notification repaints
-          // this screen, and without it the full-viewport gaussian is rastered
-          // again on each one instead of being re-composited.
           RepaintBoundary(
             child: ImageFiltered(
               imageFilter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
@@ -235,8 +219,6 @@ class _CallScreenState extends State<CallScreen> {
               ),
             ),
           ),
-        // Remote camera feed — fills the screen over the
-        // blurred-avatar fallback once decoded frames arrive (black until then).
         if (isVideoActive && (Platform.isAndroid || Platform.isIOS))
           _nativeVideoView('remote'),
       ],
@@ -259,7 +241,6 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Widget _localPreview(bool isLandscape) {
-    // Show our own camera feed when it's on; otherwise a placeholder glyph.
     final showVideo =
         (Platform.isAndroid || Platform.isIOS) && widget.manager.isVideoEnabled;
     return Positioned(
@@ -330,9 +311,6 @@ class _CallScreenState extends State<CallScreen> {
     );
   }
 
-  /// Transform the current call between voice and video without reconnecting.
-  /// Re-enabling video keeps the lens the user last selected; the adjacent
-  /// rotate control remains available while video is active.
   void _onCameraToggle() {
     _keepOverlayVisible();
     final m = widget.manager;
@@ -397,8 +375,6 @@ class _CallScreenState extends State<CallScreen> {
           ),
         }),
       CallPhase.exchangingKeys => AppStrings.t(AppStringKeys.callConnecting),
-      // The elapsed time is the only line that changes on its own; it owns the
-      // 1 Hz tick so the rest of the call screen isn't relaid out every second.
       CallPhase.active => null,
       CallPhase.ending => AppStrings.t(AppStringKeys.callEnded),
     };
@@ -564,9 +540,6 @@ class _CallScreenState extends State<CallScreen> {
   }
 }
 
-/// Elapsed call time, ticking on its own. Keeping the timer here instead of on
-/// the screen state is what stops the 1 Hz tick from rebuilding the video
-/// platform views, the scrim and every control once a second for the whole call.
 class _CallDuration extends StatefulWidget {
   const _CallDuration({required this.startedAt, required this.style});
 
@@ -690,8 +663,6 @@ class _CallButton extends StatelessWidget {
   }
 }
 
-/// custom frosted translucent toggle (white when active). `hidden` keeps the
-/// row balanced by reserving the slot without drawing the control.
 class _CallToggle extends StatelessWidget {
   const _CallToggle({
     required this.icon,

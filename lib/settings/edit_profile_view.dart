@@ -1,13 +1,3 @@
-//
-//  edit_profile_view.dart
-//
-//  编辑资料 — avatar + name / username / phone / birthday / bio / name &
-//  profile accent colors, loaded from getMe/getUserFullInfo and saved back via
-//  setName / setUsername / setBirthdate / setBio / setAccentColor /
-//  setProfileAccentColor. Port of the Swift `EditProfileView`, wired to live
-//  TDLib.
-//
-
 import 'dart:async';
 import 'dart:io';
 
@@ -48,7 +38,6 @@ class EditProfileView extends StatefulWidget {
 
   final bool openAvatarPicker;
 
-  /// False when there is nothing behind this screen to go back to.
   final bool showBackButton;
 
   @override
@@ -133,8 +122,6 @@ class _EditProfileViewState extends State<EditProfileView> {
     }
   }
 
-  /// The account's photo stack. An empty list is a normal answer here — it
-  /// only means the strip has nothing to draw — so a failure is not surfaced.
   Future<void> _loadPhotos(int userId) async {
     try {
       final response = await _client.query(
@@ -284,10 +271,9 @@ class _EditProfileViewState extends State<EditProfileView> {
         canClear: _bDay != null,
       ),
     );
-    if (result == null) return; // cancelled
+    if (result == null) return;
     try {
       if (result.clear) {
-        // birthdate: null removes it (TDLib setBirthdate).
         await _client.query({'@type': 'setBirthdate', 'birthdate': null});
         setState(() {
           _bDay = null;
@@ -295,7 +281,6 @@ class _EditProfileViewState extends State<EditProfileView> {
           _bYear = null;
         });
       } else {
-        // year 0 = "no year" (month/day only).
         await _client.query({
           '@type': 'setBirthdate',
           'birthdate': {
@@ -625,7 +610,6 @@ class _EditProfileViewState extends State<EditProfileView> {
   Future<void> _finishAvatarUpdate() async {
     if (!mounted) return;
     _toast(AppStrings.t(AppStringKeys.editProfileAvatarUpdated));
-    // The new photo propagates via updateUser after upload; re-read shortly.
     await Future<void>.delayed(const Duration(milliseconds: 800));
     try {
       final me = await _client.query({'@type': 'getMe'});
@@ -703,8 +687,6 @@ class _EditProfileViewState extends State<EditProfileView> {
                     const InsetDivider(
                       leadingInset: AppMetric.settingsLeadingInset,
                     ),
-                    // The phone number can only change through an OTP
-                    // flow, so this row is a readout, not a control.
                     SettingsRow(
                       title: AppStrings.t(AppStringKeys.editProfilePhone),
                       value: _phone.isEmpty
@@ -825,12 +807,6 @@ class _EditProfileViewState extends State<EditProfileView> {
     );
   }
 
-  /// Avatar, identity, and the account's photo stack in one card.
-  ///
-  /// The stack used to be two screens away under Profile tools, so an account
-  /// with several photos looked like an account with one. Here every photo is
-  /// on the screen you go to when you want to change your photo: tap one to
-  /// wear it, tap the leading tile to add a new one.
   Widget _identityCard() {
     final c = context.colors;
     final name = '$_firstName $_lastName'.trim();
@@ -1017,8 +993,6 @@ class _EditProfileViewState extends State<EditProfileView> {
       ? kAccentColors[colorId]
       : null;
 
-  /// An unset accent reads as a word, not an absent swatch, so the row still
-  /// says something. [SettingsRow] draws whichever of the two is non-null.
   String _accentColorLabel(int colorId) => _accentColor(colorId) == null
       ? AppStrings.t(AppStringKeys.editProfileDefault)
       : '';
@@ -1053,7 +1027,6 @@ class _EditProfileViewState extends State<EditProfileView> {
   );
 }
 
-/// Result of [_BirthdayPickerSheet]: either a value (year 0 = no year) or clear.
 class _BdayResult {
   const _BdayResult.set(this.day, this.month, this.year) : clear = false;
   const _BdayResult.clear() : day = 0, month = 0, year = 0, clear = true;
@@ -1061,8 +1034,6 @@ class _BdayResult {
   final bool clear;
 }
 
-/// A Cupertino month/day(/optional year) wheel picker for the birthday, with a
-/// "无年份" (no-year) option and a 清除生日 (clear) action. No Material.
 class _BirthdayPickerSheet extends StatefulWidget {
   const _BirthdayPickerSheet({
     this.day,
@@ -1078,13 +1049,12 @@ class _BirthdayPickerSheet extends StatefulWidget {
 }
 
 class _BirthdayPickerSheetState extends State<_BirthdayPickerSheet> {
-  // Max day per month (Feb allows 29 so leap birthdays work without a year).
   static const _maxDays = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-  late int _month = widget.month ?? 1; // 1..12
-  late int _day = widget.day ?? 1; // 1..31
-  late final List<int> _years; // [thisYear .. 1900]
-  late int _yearIdx; // 0 = 无年份, else _years[idx-1]
+  late int _month = widget.month ?? 1;
+  late int _day = widget.day ?? 1;
+  late final List<int> _years;
+  late int _yearIdx;
   late final FixedExtentScrollController _mc, _dc, _yc;
 
   @override

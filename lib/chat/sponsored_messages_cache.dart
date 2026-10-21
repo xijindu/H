@@ -1,7 +1,5 @@
 ﻿import 'dart:async';
 
-/// The unrendered TDLib response retained until sponsored-message rendering is
-/// enabled. Keeping the complete payload preserves sponsor and reporting data.
 class SponsoredMessagesSnapshot {
   const SponsoredMessagesSnapshot({
     required this.response,
@@ -12,8 +10,6 @@ class SponsoredMessagesSnapshot {
   final DateTime fetchedAt;
 }
 
-/// Caches `getChatSponsoredMessages` results for Telegram's required five
-/// minutes and coalesces concurrent requests for the same account and chat.
 class SponsoredMessagesCache {
   SponsoredMessagesCache({
     this.ttl = const Duration(minutes: 5),

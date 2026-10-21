@@ -1,10 +1,3 @@
-//
-//  sticker_viewer.dart
-//
-//  Dedicated fullscreen viewer for sticker messages. Static stickers are not
-//  photos, so they must not enter the chat image gallery.
-//
-
 import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 

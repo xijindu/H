@@ -24,10 +24,6 @@ class ClipboardImageData {
   final String mimeType;
 }
 
-/// Copies clipboard image payloads into owned temporary files for the composer.
-///
-/// Mithka's owned channel hands the composer every image item the platform can
-/// expose.
 class ClipboardImageService {
   const ClipboardImageService._();
 

@@ -1,14 +1,4 @@
-﻿//
-//  chat_members_cache.dart
-//
-//  Resolving a group's member strip costs one getSupergroupMembers plus a
-//  getUser per member, awaited in sequence. Paying that again every time the
-//  user switches back to a chat they already opened is the whole reason the
-//  strip appears to rebuild itself. Keep the resolved list per chat so a
-//  revisit paints immediately and the network pass only revalidates.
-//
-
-import 'dart:collection';
+﻿import 'dart:collection';
 
 import 'chat_info_view.dart' show ChatMember;
 
@@ -17,13 +7,9 @@ class ChatMembersSnapshot {
 
   final List<ChatMember> members;
 
-  /// The group's full size, which is larger than [members] — the strip only
-  /// resolves the first page.
   final int memberCount;
 }
 
-/// Small in-memory LRU of resolved member strips, keyed per account so two
-/// signed-in accounts that share a chat id never read each other's entries.
 class ChatMembersCache {
   ChatMembersCache({this.capacity = 32}) : assert(capacity > 0);
 
@@ -49,8 +35,6 @@ class ChatMembersCache {
   }) {
     final key = (accountSlot: accountSlot, chatId: chatId);
     _entries.remove(key);
-    // An empty resolve is usually a failed or permission-denied page rather
-    // than a genuinely empty group; caching it would pin the blank state.
     if (members.isEmpty) return;
     _entries[key] = ChatMembersSnapshot(
       members: List<ChatMember>.unmodifiable(members),

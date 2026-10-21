@@ -57,9 +57,6 @@ class _DownloadItem {
 
   bool get needsResume => isPaused || !active;
 
-  /// Bumped per updateFile chunk. TDLib emits those tens of times a second per
-  /// active download, and only this row's progress moves — the page-wide
-  /// setState rebuilt the header, the search field and every visible row.
   final ValueNotifier<int> revision = ValueNotifier(0);
 }
 
@@ -326,8 +323,6 @@ class _DownloadsViewState extends State<DownloadsView> {
       if (paused) {
         await _service.pauseDownload(item.fileId);
       } else if (item.completeDate > 0 && !item.completed) {
-        // Completed download history can outlive the cached file. Unpausing
-        // that historical task is a no-op in TDLib; re-register it explicitly.
         final file = await _service.addDownload(
           fileId: item.fileId,
           chatId: item.chatId,

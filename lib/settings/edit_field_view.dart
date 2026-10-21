@@ -1,12 +1,4 @@
-﻿//
-//  edit_field_view.dart
-//
-//  custom single-field editor: a flat nav header with a 保存 action and a
-//  clean borderless field on a white card — no Material dialog / underlined
-//  input. Returns the edited string via Navigator.pop.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../components/app_icons.dart';
 import '../components/app_interactive_surface.dart';

@@ -1,10 +1,4 @@
-﻿//
-//  system_font_catalog.dart
-//
-//  Lists platform-installed font families for the text font picker.
-//
-
-import 'package:flutter/services.dart';
+﻿import 'package:flutter/services.dart';
 
 class SystemFontCatalog {
   SystemFontCatalog._();

@@ -1,12 +1,4 @@
-﻿//
-//  hide_sender_dialog.dart
-//
-//  Asks where to hide a member's messages: in this group, or in every chat.
-//  Styled like showAppConfirmDialog — 320pt card, 50pt stacked actions — but
-//  with two choices above Cancel.
-//
-
-import 'package:flutter/widgets.dart';
+﻿import 'package:flutter/widgets.dart';
 
 import '../components/app_interactive_surface.dart';
 import '../l10n/app_localizations.dart';

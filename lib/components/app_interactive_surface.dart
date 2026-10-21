@@ -5,11 +5,6 @@ import '../theme/app_motion.dart';
 import '../theme/app_theme.dart';
 import 'app_press_ripple.dart';
 
-/// Project-owned pointer, keyboard, focus, and touch behavior for controls.
-///
-/// The visual child remains entirely app-owned. This widget only adds the
-/// interaction contract the app expects while retaining touch ripple,
-/// long-press, and secondary-click support.
 class AppInteractiveSurface extends StatefulWidget {
   const AppInteractiveSurface({
     super.key,

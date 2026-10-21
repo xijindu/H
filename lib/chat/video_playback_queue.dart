@@ -45,9 +45,6 @@ class VideoPlaybackQueue {
   final List<VideoPlaybackItem> items;
   final int index;
 
-  /// Host-controlled revision for queue state that is not represented by the
-  /// playback items themselves. Incrementing it forces a new queue snapshot to
-  /// supersede an otherwise value-equivalent one.
   final int revision;
 
   late final List<_VideoPlaybackItemSnapshot> _itemSnapshots;

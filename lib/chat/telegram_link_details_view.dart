@@ -11,8 +11,6 @@ class TelegramLinkDetail {
   final String value;
 }
 
-/// A compact in-app destination for Telegram links whose data is provided by
-/// TDLib but doesn't otherwise have a dedicated Mithka screen yet.
 class TelegramLinkDetailsView extends StatelessWidget {
   const TelegramLinkDetailsView({
     super.key,

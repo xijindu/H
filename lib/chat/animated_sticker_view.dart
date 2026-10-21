@@ -1,13 +1,4 @@
-﻿//
-//  animated_sticker_view.dart
-//
-//  Renders a Telegram `.tgs` sticker — gzipped Lottie JSON. We resolve the file
-//  via TDFileCenter, gunzip it (the `archive` package), and play it with the
-//  `lottie` package. Port of the Swift `AnimatedStickerView` + `Gzip` (which
-//  used the Compression framework + lottie-ios).
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -25,23 +16,13 @@ Uint8List _inflateTgsSticker(Uint8List bytes) {
 
 final Map<String, Future<Uint8List?>> _inflatedTgsCache = {};
 
-/// Releases inflated sticker JSON after an OS memory warning. Visible stickers
-/// retain their own bytes and continue rendering; reopened stickers inflate on
-/// demand away from the UI isolate.
 void clearAnimatedStickerMemoryCache() {
   _inflatedTgsCache.clear();
-  // Without this the parsed compositions — and, through their keys, the byte
-  // buffers we just dropped — stay pinned by lottie, so a memory warning frees
-  // nothing. Mounted widgets hold their own composition future and keep playing.
   Lottie.cache.clear();
 }
 
 bool _lottieCacheBounded = false;
 
-/// lottie's shared composition cache holds 1000 entries by default and nothing
-/// ever trims it, so every sticker parsed this session is retained. Its key is
-/// the byte buffer's identity, so a sticker evicted from `_inflatedTgsCache`
-/// and re-inflated parks a *second* composition under a new key.
 void _boundLottieCache() {
   if (_lottieCacheBounded) return;
   _lottieCacheBounded = true;
@@ -75,11 +56,6 @@ Future<Uint8List?> _loadInflatedTgsSticker(String cacheKey, String path) {
   return future;
 }
 
-/// Lottie parses the inflated JSON on whichever isolate asks for it, so a
-/// composition that first loads inside `build` costs that frame a 50 KB–1 MB
-/// JSON parse. We warm it off the UI isolate instead — capped, because
-/// `compute` spawns an isolate per call and an emoji grid mounts dozens of
-/// distinct stickers at once.
 const int _maxConcurrentTgsParses = 2;
 int _activeTgsParses = 0;
 final List<Completer<void>> _tgsParseQueue = <Completer<void>>[];
@@ -93,9 +69,6 @@ Future<void> _prewarmTgsComposition(
     final turn = Completer<void>();
     _tgsParseQueue.add(turn);
     await turn.future;
-    // A flick through a sticker pack queues every cell it passes. Parsing the
-    // ones already recycled would push the cells still on screen behind them,
-    // so hand the slot straight on instead.
     if (!stillWanted()) {
       if (_tgsParseQueue.isNotEmpty) _tgsParseQueue.removeAt(0).complete();
       return;
@@ -103,11 +76,8 @@ Future<void> _prewarmTgsComposition(
   }
   _activeTgsParses++;
   try {
-    // Lands in lottie's own `sharedLottieCache`, keyed on the byte buffer, so
-    // the `Lottie.memory` in build resolves without parsing again.
     await MemoryLottie(bytes, backgroundLoading: true).load();
   } catch (_) {
-    // Let the Lottie widget surface a broken composition on its own.
   } finally {
     _activeTgsParses--;
     if (_tgsParseQueue.isNotEmpty) _tgsParseQueue.removeAt(0).complete();
@@ -126,9 +96,6 @@ class AnimatedStickerView extends StatefulWidget {
   final VoidCallback? onReady;
   final bool animate;
 
-  /// Playback frame rate; null keeps the composition's own rate. Inline
-  /// custom emoji pass a reduced rate — at text size the difference is
-  /// invisible but the repaint cost is not.
   final FrameRate? frameRate;
 
   @override
@@ -161,8 +128,6 @@ class _AnimatedStickerViewState extends State<AnimatedStickerView> {
 
     final path = await TdFileCenter.shared.pathFor(ref);
     if (!mounted || path == null || _loadedId != ref.id) return;
-    // .tgs = gzipped Lottie JSON. Inflate away from the UI isolate and reuse
-    // decoded bytes across recycled chat rows / emoji-grid cells.
     final inflated = await _loadInflatedTgsSticker('$slot:${ref.id}', path);
     if (!mounted || _loadedId != ref.id || inflated == null) return;
     await _prewarmTgsComposition(

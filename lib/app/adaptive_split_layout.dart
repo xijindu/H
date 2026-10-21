@@ -9,8 +9,6 @@ const double splitSidebarDefaultMaxWidth = 420;
 const double splitDetailMinWidth = 440;
 const double splitResizeHandleWidth = 8;
 
-/// Wide-layout group context pane. The width leaves enough room for member
-/// names while avoiding a visually empty trailing gutter beside the chat.
 const double wideInfoPaneWidth = 224;
 const double wideInfoPaneHandleWidth = 1;
 
@@ -28,8 +26,6 @@ bool usesAdaptiveSplitLayout(
   final target = platform ?? defaultTargetPlatform;
   final hasSplitWidth =
       size.width >= splitSidebarMinWidth + splitDetailMinWidth;
-  // An opened iPhone can provide enough room for two panes in either
-  // orientation. Use the current window's space, not its aspect ratio.
   if (!isWeb && target == TargetPlatform.iOS) {
     return hasSplitWidth && size.height >= 600;
   }

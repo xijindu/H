@@ -8,11 +8,6 @@ allprojects {
     }
 }
 
-// Some plugins (e.g. file_picker) pin an older compileSdk than newer transitive
-// deps (flutter_plugin_android_lifecycle) require. Force every Android subproject
-// to compileSdk 36. Registered first — before the evaluationDependsOn block below
-// triggers evaluation — so the afterEvaluate hook lands before each subproject is
-// evaluated. Reflection avoids a compile-time AGP dependency on the root script.
 subprojects {
     afterEvaluate {
         val android = extensions.findByName("android") ?: return@afterEvaluate
@@ -29,9 +24,6 @@ subprojects {
         }
     }
 
-    // camera_android_camerax 0.7.4+1 compiles against CameraX 1.6.0. With
-    // AGP 9's stricter compile classpath, CameraX's public class metadata also
-    // needs the Jetpack artifact that owns CallbackToFutureAdapter.
     if (name == "camera_android_camerax") {
         pluginManager.withPlugin("com.android.library") {
             dependencies.add(

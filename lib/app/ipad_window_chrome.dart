@@ -1,33 +1,18 @@
-﻿//
-//  ipad_window_chrome.dart
-//
-//  iPadOS 26 draws persistent traffic-light window controls over the top-left
-//  corner of floating windows while reporting no matching safe-area inset.
-//  This helper reserves extra top clearance so headers keep their leading
-//  content (e.g. the chat-list avatar) below the controls.
-//
-
-import 'dart:io' show Platform;
+﻿import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
-/// Extra top inset, in logical pixels, reserved for the iPadOS window
-/// controls shown over the top-left corner of a floating window.
 const double iPadWindowControlsTopInset = 40;
 
-/// First iPadOS major version that shows the traffic-light window controls.
 const int _windowControlsMinimumMajorVersion = 26;
 
-/// Comparison tolerance, in physical pixels, for the floating-window check.
 const double _sizeTolerance = 2;
 
 final RegExp _versionPattern = RegExp(r'Version (\d+)');
 
 int? _cachedHostMajorVersion;
 
-/// Extra top inset that clears the iPadOS window controls for the view
-/// owning [context]; returns 0 whenever the controls are not shown.
 double iPadWindowChromeInsetOf(BuildContext context) {
   final view = View.of(context);
   return iPadWindowChromeInset(
@@ -37,19 +22,6 @@ double iPadWindowChromeInsetOf(BuildContext context) {
   );
 }
 
-/// Pure variant of [iPadWindowChromeInsetOf].
-///
-/// The controls only exist on iPadOS 26+ floating windows; fullscreen
-/// windows and every other platform keep a zero inset. Two signals detect
-/// a floating window:
-///
-/// * The view is smaller than its display in both dimensions. Sizes are
-///   compared orientation-independent because `Display.size` keeps the
-///   panel's native portrait orientation while `FlutterView.physicalSize`
-///   follows the current interface orientation.
-/// * The top safe-area inset is the small window-chrome margin (~10pt)
-///   instead of the fullscreen menu-bar inset (~32pt). iPhone landscape
-///   reports 0 there, so only a strictly positive inset counts.
 double iPadWindowChromeInset({
   required Size viewSize,
   required Size displaySize,

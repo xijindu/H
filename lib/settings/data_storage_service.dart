@@ -103,8 +103,6 @@ class DataStorageService {
     accountSlot ?? client.activeSlot,
   );
 
-  /// Only explicit whole-file downloads belong in the persistent task list.
-  /// Playback ranges and automatic previews must not register here.
   Future<Map<String, dynamic>> addDownload({
     required int fileId,
     required int chatId,
@@ -125,13 +123,10 @@ class DataStorageService {
     }, accountSlot ?? client.activeSlot);
   }
 
-  /// A whole-file task and a playback range can both own the same transfer.
-  /// Explicit pause stops both, without removing already cached bytes.
   Future<void> pauseDownload(int fileId) async {
     try {
       await toggleDownload(fileId, paused: true);
     } on TdError catch (error) {
-      // Playback-only files have no managed task. Other errors must surface.
       if (error.code != 400 || error.message != "Can't find file") rethrow;
     }
     await client.queryForSlot({

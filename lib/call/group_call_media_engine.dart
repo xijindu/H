@@ -69,9 +69,6 @@ class GroupCallMediaChannelDescription {
   };
 }
 
-/// Media transport used by Telegram video chats. TDLib owns the Telegram
-/// signaling objects, while this engine creates the tgcalls join payload and
-/// carries the actual microphone, speaker, camera, and remote video streams.
 abstract class GroupCallMediaEngine {
   Future<bool> get isSupported;
 
@@ -85,28 +82,19 @@ abstract class GroupCallMediaEngine {
   void setMuted(bool muted);
   void setSpeaker(bool speaker);
 
-  /// Telegram's native group-call engine emits a fresh join payload when local
-  /// video is enabled or disabled. Android's engine currently returns `null`
-  /// because it renegotiates internally.
   Future<GroupCallJoinPayload?> setVideoEnabled(
     bool enabled, {
     bool front = true,
   });
   void switchCamera();
 
-  /// Replaces the complete requested-channel set, matching Telegram iOS's
-  /// `setRequestedVideoChannels` subscription model.
   void setRequestedVideoChannels(List<GroupCallVideoChannel> channels);
 
-  /// Supplies the SSRC-to-participant lookup used by Telegram's native media
-  /// engine when it asks for incoming audio channel descriptions.
   void setMediaChannelDescriptions(
     List<GroupCallMediaChannelDescription> descriptions,
   );
 }
 
-/// Kept for platforms whose tgcalls binary isn't present. It fails before
-/// TDLib is asked to join, instead of advertising a fake media payload.
 class UnsupportedGroupCallMediaEngine implements GroupCallMediaEngine {
   @override
   Future<bool> get isSupported async => false;

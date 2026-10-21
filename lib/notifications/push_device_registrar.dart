@@ -9,8 +9,6 @@ import '../tdlib/td_client.dart';
 import 'ios_communication_notification.dart';
 import 'notification_preferences.dart';
 
-/// Serializes registration work while remembering that inputs changed during
-/// an in-flight pass. The queued pass observes the newest token/account policy.
 @visibleForTesting
 class PushRegistrationDrain {
   bool _running = false;
@@ -144,8 +142,6 @@ class PushDeviceRegistrar {
         );
       }
       _lastRegistrationSignature = signature;
-      // The service extension stamps the slot onto a delivered push, so it
-      // needs the mapping before the next one arrives rather than at tap time.
       await _publishAccountSlots(usersByClient);
       debugPrint('Registered APNs device token with TDLib');
     } catch (error) {

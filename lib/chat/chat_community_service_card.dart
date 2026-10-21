@@ -6,7 +6,6 @@ import '../l10n/app_localizations.dart';
 import '../tdlib/td_models.dart';
 import '../theme/app_theme.dart';
 
-/// Rich transcript presentation for a group being added to a community.
 class ChatCommunityServiceCard extends StatelessWidget {
   const ChatCommunityServiceCard({
     super.key,

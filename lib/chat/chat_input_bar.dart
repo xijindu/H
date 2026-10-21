@@ -1,12 +1,3 @@
-//
-//  chat_input_bar.dart
-//
-//  Reference-style composer: rounded text field + inline send, a gray icon
-//  strip, and togglable panels (function grid + emoji + sticker + voice). Sends
-//  text, emoji, stickers, photos/camera, files, location, polls and voice notes
-//  through the view model. Port of the Swift `ChatInputBar`.
-//
-
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -113,9 +104,6 @@ MentionQuery? activeMentionQuery(String text, TextSelection selection) {
   if (!selection.isValid || !selection.isCollapsed) return null;
   final cursor = selection.extentOffset;
   if (cursor < 0 || cursor > text.length) return null;
-  // Suggestions belong to the caret, not merely to an @ token somewhere
-  // before it. In particular, do not keep an old query active while the caret
-  // is in the middle of a token or immediately before punctuation.
   if (cursor < text.length && text[cursor].trim().isNotEmpty) return null;
   final beforeCursor = text.substring(0, cursor);
   final match = RegExp(
@@ -164,8 +152,6 @@ bool isTelegramAiDraftEligible(String text) =>
 
 typedef _ClipboardImage = ({Uint8List data, String mimeType});
 
-/// The 10 Hz recorder tick, published to the waveform and the elapsed-time
-/// label alone so the whole composer does not rebuild with it.
 typedef _RecTick = ({double elapsed, List<double> levels});
 
 typedef MediaSendPreviewLauncher =
@@ -249,8 +235,6 @@ class _ComposerEnterToSendFormatter extends TextInputFormatter {
   }
 }
 
-/// The view-model state the composer draws itself. See
-/// [_ChatInputBarState._renderedVmState].
 typedef _ComposerVmState = ({
   int autoDeleteTime,
   Object? selectedSender,
@@ -258,12 +242,6 @@ typedef _ComposerVmState = ({
   bool peerIsBot,
 });
 
-/// Incoming chat updates are frequent while a user is typing. Rebuilding the
-/// editable field for each one can make Flutter tear down and recreate the
-/// platform input connection, which presents as a blinking keyboard (and is
-/// especially visible with third-party IMEs). While focused, only rebuild for
-/// state that actually affects the composer; when unfocused, keep the previous
-/// revision-driven refresh behavior.
 @visibleForTesting
 bool shouldRebuildComposerForVmUpdate({
   required bool revisionChanged,
@@ -348,8 +326,8 @@ class _ChatInputBarState extends State<ChatInputBar>
   int? _syncedEditingMessageId;
   int _syncedComposerRevision = -1;
   _Panel _panel = _Panel.none;
-  String _emojiTab = 'standard'; // 'standard' or a custom-emoji pack id
-  int? _stickerPack; // active sticker pack id
+  String _emojiTab = 'standard';
+  int? _stickerPack;
   Timer? _panelSearchTimer;
   int _panelSearchGeneration = 0;
   bool _panelSearchLoading = false;
@@ -360,7 +338,6 @@ class _ChatInputBarState extends State<ChatInputBar>
   String _gifSearchNextOffset = '';
   bool _gifSearchLoadingMore = false;
 
-  // Mobile uses flutter_sound/Opus.
   FlutterSoundRecorder? _recorder;
   Future<void>? _recorderPreparation;
   Future<void>? _voiceStart;
@@ -388,9 +365,6 @@ class _ChatInputBarState extends State<ChatInputBar>
   String? _recPath;
   late bool _hasText = vm.draft.trim().isNotEmpty;
 
-  /// Assigned in [initState], never lazily: a `late` initializer would first
-  /// run inside the very [_syncFromVm] call it exists to compare against, and
-  /// so record the new value as the old one.
   late _ComposerVmState _syncedVmState;
   late bool _aiDraftEligible = isTelegramAiDraftEligible(vm.draft);
   bool _replyKeyboardVisible = false;
@@ -495,7 +469,6 @@ class _ChatInputBarState extends State<ChatInputBar>
         }
       });
     } on FormatException {
-      // Ignore malformed updates; TDLib will redeliver valid guest queries.
     }
   }
 
@@ -508,9 +481,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     if (_syncingControllerFromVm) return;
     final (text, entities) = _controller.toFormatted();
     vm.setDraft(_controller.text, formattedText: text, entities: entities);
-    // setDraft doesn't notify (it would rebuild the whole chat per keystroke), so
-    // rebuild just the composer here — otherwise `hasText` stays stale and the
-    // send button never appears while typing.
     final hasText = _controller.text.trim().isNotEmpty;
     final aiDraftEligible = isTelegramAiDraftEligible(_controller.text);
     if (hasText != _hasText || aiDraftEligible != _aiDraftEligible) {
@@ -633,8 +603,6 @@ class _ChatInputBarState extends State<ChatInputBar>
       _controller.text,
       _controller.selection,
     );
-    // Commands complete in groups (member bots' commands) and in private bot
-    // chats (the bot's own command list from userFullInfo).
     final supportsCommands = (vm.isGroup && !vm.isChannel) || vm.peerIsBot;
     if (query == null || !supportsCommands) {
       if (_botCommandQuery == null && _botCommandCandidates.isEmpty) return;
@@ -766,14 +734,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     };
   }
 
-  /// The view-model state the composer draws itself.
-  ///
-  /// [shouldRebuildComposerForVmUpdate] stops rebuilding on bare revision
-  /// bumps while the field has focus, so anything rendered from the view model
-  /// has to be compared here or it silently stops updating mid-typing — which
-  /// is how the auto-delete indicator got stuck on screen after the chat's
-  /// timer was turned off. Add to this record when the composer starts drawing
-  /// another view-model value.
   _ComposerVmState get _renderedVmState => (
     autoDeleteTime: vm.messageAutoDeleteTime,
     selectedSender: vm.selectedMessageSender,
@@ -782,8 +742,6 @@ class _ChatInputBarState extends State<ChatInputBar>
   );
 
   void _syncFromVm() {
-    // A notification that changed only the typing subtitle or the peer's
-    // online status leaves the revision alone; nothing here renders either.
     final revision = vm.composerRevision;
     final revisionChanged = revision != _syncedComposerRevision;
     _syncedComposerRevision = revision;
@@ -1168,7 +1126,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     });
   }
 
-  // MARK: - Voice recording
 
   void _toggleVoice() {
     _focus.unfocus();
@@ -1312,8 +1269,6 @@ class _ChatInputBarState extends State<ChatInputBar>
         started = true;
         break;
       } catch (_) {
-        // Some devices claim Opus support but fail when opening the encoder.
-        // Close that attempt before trying the next supported container.
         try {
           await r.stopRecorder();
         } catch (_) {}
@@ -1345,8 +1300,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     });
     _recTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       if (!mounted || _voiceDisposed || !_recording) return;
-      // Only here to move the clock until the recorder's own progress stream
-      // reports; once it has, the timer has nothing left to do.
       if (clock.hasRecorderProgress) {
         timer.cancel();
         _recTimer = null;
@@ -1374,9 +1327,6 @@ class _ChatInputBarState extends State<ChatInputBar>
   }
 
   Future<void> _finishVoiceRecording() async {
-    // A release/cancel may arrive during permission or native startup. Wait
-    // for that exact start, then finalize it once; never start another clip
-    // or send twice while the previous stop is still asynchronous.
     await _voiceStart;
     if (_voiceDisposed || !_recording) return;
     final target = vm;
@@ -1396,7 +1346,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     try {
       recordedPath = await _recorder?.stopRecorder();
     } catch (_) {
-      // A failed stop must still release the microphone before another hold.
       try {
         final recorder = _recorder;
         _recorder = null;
@@ -1460,9 +1409,6 @@ class _ChatInputBarState extends State<ChatInputBar>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // A held gesture can lose its release when the app loses focus. A locked
-    // mobile recording is intentional and must not be discarded by a system
-    // permission sheet, notification, or brief app switch.
     if (_recordingLocked && state != AppLifecycleState.detached) return;
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
@@ -1858,11 +1804,6 @@ class _ChatInputBarState extends State<ChatInputBar>
               ],
             ),
           ),
-          // The base input surface is painted exactly once across the complete
-          // composer. When a media/reply panel is open, extend that panel's
-          // surface through the system inset with the same single overlay used
-          // by the visible panel. This keeps translucent panel colors
-          // identical above and below the home indicator.
           if (panelSurfaceVisible && bottomSafeArea > 0)
             Positioned(
               left: 0,
@@ -1879,8 +1820,6 @@ class _ChatInputBarState extends State<ChatInputBar>
         ],
       ),
     );
-    // Without its own layer the composer shares one with the chat wallpaper, so
-    // a keystroke or a typing update re-records the full-screen gradient too.
     return RepaintBoundary(child: bar);
   }
 
@@ -2191,12 +2130,9 @@ class _ChatInputBarState extends State<ChatInputBar>
     );
   }
 
-  // MARK: - Reply banner
 
   Widget _clipboardAttachmentStrip() {
     final c = context.colors;
-    // A pasted 12 MP photo decodes to ~48 MB of RGBA for a 58 px chip, which
-    // then evicts the rest of the image cache.
     final tileCachePx = (58 * MediaQuery.devicePixelRatioOf(context)).ceil();
     return SizedBox(
       key: const ValueKey('clipboardAttachmentStrip'),
@@ -2431,7 +2367,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     return m.text;
   }
 
-  // MARK: - Input row
 
   void _showSenderPicker() {
     final options = vm.availableMessageSenders;
@@ -2620,7 +2555,6 @@ class _ChatInputBarState extends State<ChatInputBar>
       try {
         capabilities = await _botPlatform.capabilitiesForUserId(botUserId);
       } catch (_) {
-        // The menu still exposes account-bot and received guest-query tools.
       }
     }
 
@@ -2628,7 +2562,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     try {
       currentAccountIsBot = await _botPlatform.currentAccountIsBot();
     } catch (_) {
-      // User accounts don't need the bot update status action.
     }
     if (!mounted) return;
 
@@ -2882,7 +2815,6 @@ class _ChatInputBarState extends State<ChatInputBar>
       final text = content == null ? '' : TDParse.messageText(content).trim();
       if (text.isNotEmpty) return text;
     } catch (_) {
-      // Fall back to the stable guest query identifier below.
     }
     return AppStrings.t(AppStringKeys.chatInputBarGuestQueryValue1, {
       'value1': query.id,
@@ -3043,8 +2975,6 @@ class _ChatInputBarState extends State<ChatInputBar>
 
   _ReplyKeyboard? _activeReplyKeyboard() {
     for (final message in vm.messages.reversed) {
-      // Almost every message has no buttons; skipping them keeps this
-      // per-build whole-transcript walk allocation-free.
       if (message.buttonRows.isEmpty) continue;
       final rows = message.buttonRows
           .map((row) => row.where((button) => button.isReplyKeyboard).toList())
@@ -3916,7 +3846,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     );
   }
 
-  // MARK: - Icon strip
 
   Widget _iconStrip() {
     return Padding(
@@ -4017,13 +3946,9 @@ class _ChatInputBarState extends State<ChatInputBar>
     );
   }
 
-  // MARK: - Media pickers
 
-  /// 图片: pick one or more photos/videos and preserve their album order.
   Future<void> _pickPhotos() async {
     try {
-      // The quality choices live in the picker's own bottom bar, WeChat style,
-      // so tapping 图片 goes straight to the grid.
       final selection = await AppAssetPicker.pickDetailed(
         context,
         type: AppAssetPickerType.imageAndVideo,
@@ -4066,7 +3991,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     }
   }
 
-  /// 相机: tap to take a photo, long-press in the camera view to record video.
   Future<void> _takePhoto() async {
     try {
       final capture = await captureComposerPhoto(
@@ -4286,7 +4210,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     widget.onMessageSent();
   }
 
-  /// 文件: pick an arbitrary document and send it.
   Future<void> _pickFile() async {
     try {
       final result = await FilePicker.platform.pickFiles(allowMultiple: true);
@@ -4309,7 +4232,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     }
   }
 
-  /// 位置: open a map picker centred on the GPS fix; send the chosen point.
   Future<void> _sendLocation() async {
     final start = await resolveLocationPickerStart();
     if (!mounted) return;
@@ -4336,7 +4258,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     }
   }
 
-  /// 投票: collect a question + options and send a poll.
   Future<void> _createPoll() async {
     final maxOptions = await widget.vm.pollAnswerCountMax();
     if (!mounted) return;
@@ -4355,7 +4276,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     }
   }
 
-  /// 音频: pick a local audio file and send it as a music message.
   Future<void> _pickLocalAudio() async {
     try {
       final preferred = await FilePicker.platform.pickFiles(
@@ -4394,7 +4314,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     }
   }
 
-  /// 音频: search Telegram audio first; local files remain available inside.
   Future<void> _pickAudio() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -4409,7 +4328,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     );
   }
 
-  /// 清单: collect a title + tasks and send a checklist (to-do list).
   Future<void> _createChecklist() async {
     final result = await Navigator.of(context).push<ChecklistComposerResult>(
       MaterialPageRoute(builder: (_) => const ChecklistComposerView()),
@@ -4449,7 +4367,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     }
   }
 
-  // MARK: - Function panel
 
   Widget _functionPanel() {
     final items = [
@@ -4550,7 +4467,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     );
   }
 
-  // MARK: - Emoji panel (standard catalog → inserts into the field)
 
   Widget _emojiPanel() {
     final c = context.colors;
@@ -5087,7 +5003,6 @@ class _ChatInputBarState extends State<ChatInputBar>
       );
     }
     final stickers = pack.stickers;
-    // Lazy builder so only on-screen stickers spin up an animation/decoder.
     return _stickerGrid(stickers);
   }
 
@@ -5324,8 +5239,6 @@ class _ChatInputBarState extends State<ChatInputBar>
     );
   }
 
-  // Kept for re-exposing the studio from a more appropriate surface later.
-  // ignore: unused_element
   Future<void> _openStickerStudio() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute(builder: (_) => const StickerSetStudioView()),

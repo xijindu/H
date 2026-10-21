@@ -3,11 +3,6 @@ import 'package:permission_handler/permission_handler.dart';
 
 enum CameraPermissionAccess { granted, denied, blocked }
 
-/// Runtime camera permission used before Android camera-backed views start.
-///
-/// Camera plugins still retain their own permission checks. This explicit gate
-/// prevents an Android scanner from being mounted while the system permission
-/// is unresolved and gives the app a recoverable denied state.
 abstract interface class CameraPermissionGateway {
   Future<CameraPermissionAccess> check();
 

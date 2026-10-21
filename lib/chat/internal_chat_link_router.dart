@@ -4,9 +4,6 @@ import '../app/chat_deep_link_controller.dart';
 
 typedef InternalChatMessageOpener = Future<void> Function(int messageId);
 
-/// The transcript that owns the context used to open an internal Telegram
-/// link. Keeping this context-local matters when more than one chat window is
-/// visible: a same-chat link must scroll the window that was actually clicked.
 class InternalChatLinkTarget {
   const InternalChatLinkTarget({
     required this.chatId,
@@ -44,12 +41,6 @@ enum InternalChatLinkDisposition {
   requestedAdaptiveNavigation,
 }
 
-/// Routes a TDLib-resolved chat link using the platform's conversation model.
-///
-/// Current-chat message links stay inside the owning transcript. Every other
-/// chat is handed to the app-level deep-link controller, whose adaptive parent
-/// replaces the selected detail pane on wide layouts and preserves the source
-/// conversation beneath the destination on phones.
 Future<InternalChatLinkDisposition> routeResolvedInternalChatLink({
   required int chatId,
   required String title,

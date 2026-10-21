@@ -1,11 +1,3 @@
-//
-//  account_store.dart
-//
-//  UI-facing coordinator for multi-account: exposes the configured accounts
-//  (with each one's identity for display), the active slot, and actions to
-//  switch or add an account. Port of the Swift `AccountStore`.
-//
-
 import 'dart:async';
 import 'dart:convert';
 
@@ -34,12 +26,9 @@ class AccountSummary {
   final int userId;
   final String name;
   final String phone;
-  final String? avatarPath; // resolved via this account's OWN TDLib client
+  final String? avatarPath;
   final int emojiStatusId;
 
-  /// Telegram Premium, from getMe. Cached with the rest so Premium-only
-  /// entries (Business, the emoji status button) are right from the first
-  /// frame instead of appearing once the account answers.
   final bool isPremium;
 
   AccountSummary copyWith({String? avatarPath}) => AccountSummary(
@@ -85,25 +74,20 @@ class AccountSummary {
   }
 }
 
-/// What one slot's getMe said about the cached summary for that slot.
 sealed class _SlotIdentity {
   const _SlotIdentity();
 }
 
-/// The slot answered: this is its identity now.
 final class _SlotResolved extends _SlotIdentity {
   const _SlotResolved(this.summary, this.avatarFileId);
   final AccountSummary summary;
   final int? avatarFileId;
 }
 
-/// The slot is signed out or has no usable identity.
 final class _SlotGone extends _SlotIdentity {
   const _SlotGone();
 }
 
-/// The slot could not be asked (no client yet, a transient error); keep
-/// whatever was cached rather than blanking the account.
 final class _SlotUnknown extends _SlotIdentity {
   const _SlotUnknown();
 }
@@ -113,17 +97,9 @@ class AccountStore extends ChangeNotifier {
     : _prefs = prefs,
       _activeSlot = prefs.getInt('drachma.activeSlot') ?? 0,
       _summaries = _readCachedSummaries(prefs) {
-    // The cached identities let the first frame show the right name and
-    // avatar. Without them the window starts as "Handy", then remounts when
-    // getMe lands, because its identity key changes from no user to a user.
     _selfIds.addAll(_summaries.map((summary) => summary.userId));
-    // Restore an add-account that was in progress when the app was killed, so
-    // its half-created slot can still be cleaned up.
     _pendingSlot = prefs.getInt(_pendingKey);
     _returnSlot = prefs.getInt(_returnKey) ?? 0;
-    // Refresh the switcher when one of our own accounts changes (e.g. after a
-    // name edit) — TDLib emits updateUser for us. Filtered to known self-ids so
-    // it doesn't fire for every contact seen in chats.
     TdClient.shared
         .updatesOfAny(const ['updateAuthorizationState', 'updateUser'])
         .listen((u) {
@@ -171,13 +147,8 @@ class AccountStore extends ChangeNotifier {
   final SharedPreferences _prefs;
   int _activeSlot;
   List<AccountSummary> _summaries;
-  final Set<int> _selfIds = {}; // our own user ids across accounts
+  final Set<int> _selfIds = {};
 
-  // An in-progress "add account": the freshly-created slot whose login has not
-  // completed, and the slot we should fall back to if the user aborts. While
-  // this is set, backing out of the login flow discards [_pendingSlot] and
-  // returns to [_returnSlot] rather than leaving a half-created account entry.
-  // Persisted so it survives an app kill mid-login.
   int? _pendingSlot;
   int _returnSlot = 0;
 
@@ -195,7 +166,6 @@ class AccountStore extends ChangeNotifier {
   int get activeSlot => _activeSlot;
   List<AccountSummary> get summaries => _summaries;
 
-  /// Whether the active account has Telegram Premium, as last seen.
   bool get activeIsPremium {
     for (final summary in _summaries) {
       if (summary.slot == _activeSlot) return summary.isPremium;
@@ -215,10 +185,8 @@ class AccountStore extends ChangeNotifier {
     EmojiStore.shared.reset();
   }
 
-  /// True while an add-account login is in progress on the active slot.
   bool get hasPendingAdd => _pendingSlot != null && _pendingSlot == _activeSlot;
 
-  /// Display name of the account we'd return to if the pending add is aborted.
   String? get returnAccountName {
     if (!hasPendingAdd) return null;
     for (final s in _summaries) {
@@ -227,8 +195,6 @@ class AccountStore extends ChangeNotifier {
     return null;
   }
 
-  /// If the app was killed while adding an account, do not strand the next
-  /// launch on that empty login slot when the original account is still ready.
   Future<void> recoverPendingAddOnStartup(AuthManager auth) async {
     final pending = _pendingSlot;
     if (pending == null) return;
@@ -264,11 +230,6 @@ class AccountStore extends ChangeNotifier {
     await refresh();
   }
 
-  /// Re-reads each account's identity (getMe per client) for the switcher.
-  ///
-  /// The active account goes first and every slot is published as soon as
-  /// it resolves, so a slow secondary account (or a profile photo download)
-  /// never holds back the name in the title bar.
   Future<void> refresh() async {
     _activeSlot = TdClient.shared.activeSlot;
     final slots = TdClient.shared.configuredSlots;
@@ -284,8 +245,6 @@ class AccountStore extends ChangeNotifier {
         for (final slot in slots)
           if (resolved.containsKey(slot)) ?resolved[slot] else ?cached[slot],
       ];
-      // Saved as each slot resolves: a secondary account that never answers
-      // must not keep the active one out of the next launch's cache.
       _writeCachedSummaries();
       notifyListeners();
     }
@@ -324,7 +283,6 @@ class AccountStore extends ChangeNotifier {
     final selfId = me.int64('id');
     if (selfId != null) {
       _selfIds.add(selfId);
-      // The pending add has finished logging in — it's a real account now.
       if (slot == _pendingSlot) {
         _pendingSlot = null;
         _persistPending();
@@ -333,7 +291,6 @@ class AccountStore extends ChangeNotifier {
     final name = TDParse.userName(me);
     if (selfId == null || name.isEmpty) return const _SlotGone();
     final phone = TDParse.formatPhone(me.str('phone_number'));
-    // Until the photo is on disk, keep the one cached for this same user.
     String? cachedAvatar;
     for (final summary in _summaries) {
       if (summary.slot == slot && summary.userId == selfId) {
@@ -374,7 +331,6 @@ class AccountStore extends ChangeNotifier {
     }
   }
 
-  /// Switches to an existing account and re-gates auth on it.
   void switchTo(int slot, AuthManager auth) {
     if (slot == _activeSlot) return;
     TdClient.shared.setActive(slot);
@@ -385,8 +341,6 @@ class AccountStore extends ChangeNotifier {
     refresh();
   }
 
-  /// Creates a fresh account and switches to it (lands on the login flow).
-  /// Remembers the current account so an aborted login can return to it.
   void addAccount(AuthManager auth) {
     _returnSlot = _activeSlot;
     final slot = TdClient.shared.addSlot();
@@ -400,8 +354,6 @@ class AccountStore extends ChangeNotifier {
     refresh();
   }
 
-  /// Aborts an in-progress "add account": switches back to the account we came
-  /// from and discards the transient slot. No-op if there's no pending add.
   void cancelAddAccount(AuthManager auth) {
     final pending = _pendingSlot;
     if (pending == null) return;
@@ -415,7 +367,7 @@ class AccountStore extends ChangeNotifier {
       _activeSlot = TdClient.shared.replaceActiveWithFreshLoginSlot();
       _activeAccountChanged();
     } else {
-      TdClient.shared.setActive(target); // must point away before removing
+      TdClient.shared.setActive(target);
       _activeAccountChanged();
       _activeSlot = target;
       TdClient.shared.removeSlot(pending);
@@ -425,8 +377,6 @@ class AccountStore extends ChangeNotifier {
     refresh();
   }
 
-  /// Removes an account slot from the switcher. If this is the last slot,
-  /// replace it with a clean login slot so the app lands on initial login.
   Future<void> removeAccount(int slot, AuthManager auth) async {
     final slots = TdClient.shared.configuredSlots;
     if (!slots.contains(slot)) return;
@@ -467,13 +417,9 @@ class AccountStore extends ChangeNotifier {
     await refresh();
   }
 
-  /// Logs out the active account. When another logged-in account exists, switch
-  /// to it first and remove the logged-out slot so the UI does not land on a
-  /// stale account row.
   Future<void> logOutActive(AuthManager auth) =>
       logOutAccount(_activeSlot, auth);
 
-  /// Revokes the Telegram session for [slot], then removes local data.
   Future<void> logOutAccount(int slot, AuthManager auth) async {
     final userId = await _userIdForSlot(slot);
     final slots = TdClient.shared.configuredSlots;

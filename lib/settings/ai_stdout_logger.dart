@@ -6,12 +6,6 @@ typedef AiStdoutSink = void Function(String line);
 
 enum AiLogContentPolicy { metadataOnly, fullContent }
 
-/// Writes AI lifecycle events as one JSON object per line.
-///
-/// Message content is omitted by default. Full request and response bodies are
-/// available only through an explicit developer opt-in in a non-release build.
-/// Known credential fields are recursively redacted as a final safeguard even
-/// when that opt-in is active.
 class AiStdoutLogger {
   AiStdoutLogger({
     AiStdoutSink? sink,
@@ -116,9 +110,7 @@ class AiStdoutLogger {
     try {
       final eventSecrets = [..._secrets, ..._normalizedSecrets(secrets)];
       _sink(jsonEncode(_jsonSafe(event, secrets: eventSecrets)));
-    } catch (_) {
-      // Observability must never change the outcome of an AI operation.
-    }
+    } catch (_) {}
   }
 
   Object? _jsonSafe(
@@ -197,8 +189,6 @@ class AiStdoutLogger {
     }
   }
 
-  /// iOS truncates oversized stdout records. Preserve the complete JSON event
-  /// as ordered, individually valid JSON chunk records below that limit.
   static List<String> _terminalLines(String line) {
     if (utf8.encode(line).length <= 900) return [line];
     final chunks = _splitByUtf8Bytes(line, 240);
@@ -214,10 +204,7 @@ class AiStdoutLogger {
         provider = decoded['provider']?.toString();
         operation = decoded['operation']?.toString();
       }
-    } on FormatException {
-      // The logger emits JSON, but retain lossless fallback chunking if a
-      // custom caller gives the default sink malformed input.
-    }
+    } on FormatException {}
     return [
       for (var index = 0; index < chunks.length; index++)
         jsonEncode({

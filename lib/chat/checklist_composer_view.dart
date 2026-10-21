@@ -1,13 +1,4 @@
-﻿//
-//  checklist_composer_view.dart
-//
-//  新建清单 — a full-page custom checklist composer (no Material dialog). A title
-//  card + a tasks card of borderless rows (add / remove, 1–30), with a brand 发送
-//  action. Returns (title, tasks) via Navigator.pop. (Creating checklists needs
-//  Telegram Premium.)
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';

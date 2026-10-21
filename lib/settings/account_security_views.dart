@@ -745,10 +745,6 @@ class _AccountInactivityViewState extends State<AccountInactivityView> {
     children: [
       _SecurityCard(
         children: [
-          // A single-choice list, not a set of destinations: no chevron, and
-          // the current value carries a trailing brand check the way every
-          // other picker in 设置 does. Swapping the leading glyph for a
-          // check-circle instead left all six rows reading alike.
           for (final days in _options)
             SettingsRow(
               key: ValueKey('account-inactivity-$days'),

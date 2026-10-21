@@ -1,11 +1,3 @@
-//
-//  link_handler.dart
-//
-//  Opens a tapped link. t.me / tg:// links resolve in-app via TDLib
-//  (getInternalLinkType → public chat / message / invite / phone) and open the
-//  corresponding chat; everything else launches in the external browser.
-//
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -94,9 +86,6 @@ Future<void> openLink(BuildContext context, String url) async {
           query: query,
         );
       case 'internalLinkTypeMessage':
-        // TDLib can canonicalize a message link (notably tg:// variants).
-        // Its contract requires getMessageLinkInfo to receive this returned
-        // URL, rather than the original spelling that was classified.
         final resolvedUrl = type.str('url')?.trim();
         if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
           fallbackLink = resolvedUrl;
@@ -380,12 +369,6 @@ Future<bool> _openSettingsLink(
   return true;
 }
 
-/// Converts the server-local post number carried by Telegram link syntax to
-/// the TDLib message identifier used by chat/history APIs.
-///
-/// IDs returned by getMessageLinkInfo are already TDLib IDs and must never be
-/// passed through this conversion; this helper is only for the manual fallback
-/// grammars parsed below.
 @visibleForTesting
 int? telegramFallbackMessageId(String link) {
   final uri = Uri.tryParse(link);
@@ -429,8 +412,6 @@ Future<bool> _openTelegramFallback(
   final uri = Uri.tryParse(link);
   if (uri == null) return false;
 
-  // mk:// and mithka:// are the app's own registered schemes; they carry the
-  // same path/query grammar as tg:// links.
   const appSchemes = {'tg', 'mk', 'handy'};
   if (appSchemes.contains(uri.scheme.toLowerCase())) {
     final host = uri.host.toLowerCase();
@@ -1036,9 +1017,6 @@ Future<void> _openInstantView(
 ) async {
   final url = type.str('url')?.trim() ?? '';
   if (url.isEmpty) return;
-  // Resolve the page through TDLib first so Telegram can warm/cache the
-  // canonical Instant View. Mithka doesn't yet include an owned rich-page
-  // renderer, so the canonical page then follows the user's browser choice.
   await TdClient.shared.query({
     '@type': 'getWebPageInstantView',
     'url': url,

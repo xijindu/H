@@ -5,11 +5,6 @@ import 'package:flutter/foundation.dart';
 import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 
-/// Runtime availability for Telegram Business features.
-///
-/// TDLib exposes the supported feature set separately from the current
-/// account's Premium state. Keeping both values prevents a client upgrade from
-/// showing controls for a feature that isn't present in the bundled TDLib.
 class BusinessCapabilities {
   const BusinessCapabilities({required this.isPremium, required this.features});
 
@@ -20,13 +15,6 @@ class BusinessCapabilities {
   bool canUse(String tdType) => isPremium && supports(tdType);
 }
 
-/// Business feature constructors implemented by the TDLib runtime bundled with
-/// Mithka and surfaced by the settings UI.
-///
-/// `getBusinessFeatures` is server-backed and can temporarily fail or return an
-/// empty list while account data is being refreshed. That must not turn a
-/// transient response into an empty settings screen. Premium is still checked
-/// separately before any mutation is sent.
 const bundledBusinessFeatures = <String>{
   'businessFeatureLocation',
   'businessFeatureOpeningHours',
@@ -330,10 +318,7 @@ class BusinessService {
         '@type': 'getBusinessFeatures',
         'source': null,
       });
-    } catch (_) {
-      // The bundled schema is known at build time. Retain the usable settings
-      // surface during a transient server/capability-probe failure.
-    }
+    } catch (_) {}
     return BusinessCapabilities(
       isPremium: me.boolean('is_premium') ?? false,
       features: resolvedBusinessFeatures(businessFeatures),
@@ -458,9 +443,6 @@ class BusinessService {
       .then((_) {});
 }
 
-/// Update-backed quick-reply repository. TDLib's load methods return `ok` and
-/// deliver the actual objects through updates, so querying them like ordinary
-/// getters loses data and races the UI.
 class BusinessQuickReplyService extends ChangeNotifier {
   BusinessQuickReplyService._();
 
@@ -476,10 +458,7 @@ class BusinessQuickReplyService extends ChangeNotifier {
   int _activeSlot = TdClient.shared.activeSlot;
   bool _automaticPreloadingEnabled = true;
   List<int> _order = const [];
-  // Process-lifetime subscriptions owned by the process-lifetime singleton.
-  // ignore: cancel_subscriptions
   StreamSubscription<Map<String, dynamic>>? _updates;
-  // ignore: cancel_subscriptions
   StreamSubscription<int>? _slotChanges;
   Completer<void>? _shortcutLoad;
   Future<void>? _shortcutPreload;
@@ -503,9 +482,6 @@ class BusinessQuickReplyService extends ChangeNotifier {
     );
   }
 
-  /// Starts one account-level preload as soon as TDLib reports that the active
-  /// account is authorized. Chat composers can then consume the shared cache
-  /// without briefly presenting a loading surface.
   void startPreloading({bool enabled = true}) {
     _automaticPreloadingEnabled = enabled;
     _ensureListening();
@@ -650,9 +626,7 @@ class BusinessQuickReplyService extends ChangeNotifier {
     if (inFlight != null) {
       try {
         await inFlight.future.timeout(const Duration(seconds: 2));
-      } on TimeoutException {
-        // The active caller will still return any update-backed cache it has.
-      }
+      } on TimeoutException {}
       return _shortcutsForSlot(slot);
     }
     final waiter = Completer<void>();
@@ -661,8 +635,6 @@ class BusinessQuickReplyService extends ChangeNotifier {
       await _client.query({'@type': 'loadQuickReplyShortcuts'});
       await waiter.future.timeout(const Duration(seconds: 2));
     } on TimeoutException {
-      // Returning the cache is useful when TDLib doesn't emit an unchanged
-      // aggregate update after it was already loaded.
     } finally {
       if (identical(_shortcutLoad, waiter)) _shortcutLoad = null;
       if (_activeSlot == slot) {
@@ -680,9 +652,7 @@ class BusinessQuickReplyService extends ChangeNotifier {
     if (inFlight != null) {
       try {
         await inFlight.future.timeout(const Duration(seconds: 2));
-      } on TimeoutException {
-        // The active caller will still return any update-backed cache it has.
-      }
+      } on TimeoutException {}
       return messages(shortcutId);
     }
     final waiter = Completer<void>();
@@ -694,7 +664,6 @@ class BusinessQuickReplyService extends ChangeNotifier {
       });
       await waiter.future.timeout(const Duration(seconds: 2));
     } on TimeoutException {
-      // See [loadShortcuts].
     } finally {
       if (identical(_messageLoads[shortcutId], waiter)) {
         _messageLoads.remove(shortcutId);

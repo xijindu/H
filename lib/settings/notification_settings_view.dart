@@ -1,11 +1,4 @@
-﻿//
-//  notification_settings_view.dart
-//
-//  Telegram notification rules and on-device presentation preferences in one
-//  task-oriented screen.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';

@@ -1,11 +1,3 @@
-//
-//  music_player_controller.dart
-//
-//  App-wide music playback, Telegram-backed playlists, a fixed now-playing
-//  row, and its swipe-minimized compact player. State survives navigation out
-//  of the source chat or shared-media screen.
-//
-
 import 'dart:async';
 import 'dart:math';
 
@@ -48,8 +40,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
 
   static final MusicPlayerController shared = MusicPlayerController._();
 
-  /// A controller bound to an instrumented [VoicePlayer], for tests that
-  /// need real playback-state transitions without the native audio stack.
   @visibleForTesting
   factory MusicPlayerController.forTest({VoicePlayer? player}) =>
       MusicPlayerController._(player: player);
@@ -74,13 +64,9 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
   bool playlistsLoading = false;
   MusicPlaybackMode mode = MusicPlaybackMode.sequence;
 
-  /// File ids in shuffle play order. Built lazily with the current track
-  /// first, so previous walks back through what was actually played.
   List<int> _shuffleOrder = const [];
   final Random _random = Random();
 
-  /// Previous restarts the current track once it has played this long, like
-  /// Telegram and the system players do.
   static const previousRestartThreshold = Duration(seconds: 3);
   static const _modePrefsKey = 'mithka.musicPlaybackMode.v1';
   bool hidden = true;
@@ -106,9 +92,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
         : AppStrings.t(AppStringKeys.profileDetailMusic);
   }
 
-  /// The queue in the order playback walks it. Reverse sequence plays the
-  /// source list from the end, so the visible list is reversed to match while
-  /// [queue] keeps the source order that traversal indexes into.
   List<ChatMessage> get displayQueue =>
       mode == MusicPlaybackMode.reverseSequence
       ? queue.reversed.toList(growable: false)
@@ -118,8 +101,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
   bool get playbackSourceIsPlaylist => _playbackSourceIsPlaylist;
   bool get hasEmbeddedPlayerHost => _embeddedPlayerHosts.isNotEmpty;
 
-  // Playlist chats are loaded lazily after authorization, when the library is
-  // opened. main() calls this before TDLib reaches authorizationStateReady.
   void initialize(SharedPreferences prefs) {
     _prefs = prefs;
     mode =
@@ -130,8 +111,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
     _loadPlayedMusicChats(force: true);
   }
 
-  /// Clears account-owned playback state before another account becomes the
-  /// source of playlist, chat, and file identifiers.
   void setActiveAccountSlot(int accountSlot) {
     if (_accountSlot == accountSlot) return;
     _accountSlot = accountSlot;
@@ -276,9 +255,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
       title: title ?? message.senderName,
       isPlaylist: false,
     );
-    // Replace the previous source immediately. The full chat track list is
-    // loaded asynchronously, but an old playlist must never remain visible or
-    // become eligible for next-track playback in the meantime.
     play(message, visibleQueue: [message], toggleIfActive: toggleIfActive);
     try {
       final tracks = await _playlistServiceForSlot(
@@ -322,9 +298,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
     return _playlistServiceForSlot(slot).loadTracks(chatId);
   }
 
-  /// Plays [message] with [visibleQueue] as the queue. With [toggleIfActive]
-  /// (a play/pause button on the track itself) the loaded track pauses or
-  /// resumes; otherwise (picking it from a list) it keeps playing.
   void play(
     ChatMessage message, {
     List<ChatMessage> visibleQueue = const [],
@@ -353,7 +326,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
     );
     current = _playlistCopyOf(message);
     queue = nextQueue.isEmpty ? [current!] : nextQueue;
-    // A track picked by hand starts a new shuffle pass from that track.
     if (!keepShuffleOrder) _shuffleOrder = const [];
     if (reveal) {
       hidden = false;
@@ -362,8 +334,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
     notifyListeners();
     if (_player.isActive(file)) {
       if (_player.isLoading) return;
-      // A retained file id can also belong to a stopped or finished player.
-      // Only a live native player can seek/resume; otherwise start it again.
       if (restart && (_player.isPlaying || _player.isPaused)) {
         seekFraction(0);
         if (_player.isPaused) unawaited(_player.resume());
@@ -378,9 +348,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
         return;
       }
     }
-    // The player resolves the file at foreground priority, which also keeps
-    // the track in TDLib's persistent local cache. Once it is playing, warm
-    // the next track so skipping or auto-advance starts from disk.
     unawaited(_startAndPrefetch(file));
   }
 
@@ -393,8 +360,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
     unawaited(TdFileCenter.shared.pathFor(next));
   }
 
-  /// The track automatic advance would play next, or null for repeat one and
-  /// when playback would stop at the end of the queue (or shuffle pass).
   @visibleForTesting
   ChatMessage? upcomingTrack() {
     final active = current;
@@ -432,14 +397,10 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
     unawaited(_player.toggleAudio(file));
   }
 
-  /// Resumes the current track; used by lock-screen / control-center play.
   @override
   void resume() {
     final file = current?.music?.file;
     if (file == null || isPlaying || isLoading) return;
-    // A track that finished (or whose native start failed) stays retained
-    // but stopped, not paused: the native resume is a no-op there, so start
-    // the current file again instead of ignoring the Play command.
     if (_player.isActive(file) && _player.isPaused) {
       unawaited(_player.resume());
     } else {
@@ -447,7 +408,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
     }
   }
 
-  /// Pauses the current track; used by lock-screen / control-center pause.
   @override
   void pause() => unawaited(_player.pause());
 
@@ -472,7 +432,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
     unawaited(_player.seekFraction(fraction, fallback));
   }
 
-  /// Seeks to an absolute [target]; used by the system media scrubber.
   @override
   void seekTo(Duration target) {
     final fallback = current?.music?.duration ?? 0;
@@ -495,7 +454,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
     notifyListeners();
   }
 
-  /// A shuffle pass over [ids] that starts with [first].
   @visibleForTesting
   static List<int> shuffledOrder(List<int> ids, int first, Random random) {
     final rest = ids.where((id) => id != first).toList()..shuffle(random);
@@ -588,15 +546,10 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
       visibleQueue: queue,
       reveal: manual,
       keepShuffleOrder: true,
-      // A one-track queue wraps onto itself: start it over, don't pause it.
       restart: step.track.music?.file?.id == activeId,
     );
   }
 
-  /// The track next ([delta] 1) or previous ([delta] -1) leads to. A manual
-  /// skip wraps around the queue; automatic advance stops at its end. Shuffle
-  /// walks a fixed random order, so every track plays once per pass and
-  /// previous returns to the track that actually played before.
   @visibleForTesting
   ChatMessage? adjacentTrack(int delta, {required bool manual}) =>
       _adjacent(delta, manual: manual)?.track;
@@ -612,8 +565,6 @@ class MusicPlayerController extends ChangeNotifier implements NowPlayingTarget {
       final order = _ensureShuffleOrder(playable, activeId);
       final index = order.indexOf(activeId) + delta;
       if (index >= order.length) {
-        // The pass is over: continue with a fresh one that doesn't open with
-        // the track that just played.
         final fresh = shuffledOrder(order, activeId, _random);
         final track = _trackWithId(playable, fresh[1]);
         return track == null ? null : (track: track, shuffleOrder: fresh);
@@ -812,9 +763,6 @@ class _GlobalMusicPlayerOverlayState extends State<GlobalMusicPlayerOverlay> {
   }
 }
 
-/// Marks a subtree whose shell already renders the expanded
-/// [GlobalMusicPlayerBar]. Panes inside it (a split-view conversation) must
-/// not add a second bar of their own.
 class MusicPlayerShellScope extends InheritedWidget {
   const MusicPlayerShellScope({super.key, required super.child});
 
@@ -843,8 +791,6 @@ class _GlobalMusicPlayerBarState extends State<GlobalMusicPlayerBar> {
 
   MusicPlayerController get controller => MusicPlayerController.shared;
 
-  // Hosts build this as a const widget, so a parent rebuild never reaches it.
-  // Listen directly or the bar freezes on stale progress and play state.
   @override
   void initState() {
     super.initState();
@@ -1213,16 +1159,8 @@ class _MusicCover extends StatelessWidget {
 @visibleForTesting
 const musicPlayerProgressKey = ValueKey<String>('music-player-progress');
 
-/// Height of the expanded player bar, excluding host bottom padding.
 const double musicPlayerBarHeight = 82;
 
-/// Seekable scrubber of the expanded player bar, modeled on Telegram iOS:
-/// a rounded line with elapsed time on the left and remaining time on the
-/// right. The whole row is the touch target. A tap jumps to that point; a drag
-/// moves relative to where it started, so grabbing the line never makes the
-/// position jump. While touched the line thickens and a knob appears. The
-/// drag previews locally and seeks once on release, so progress events from
-/// the player don't fight the finger.
 class _MusicScrubber extends StatefulWidget {
   const _MusicScrubber({
     super.key,
@@ -1371,7 +1309,6 @@ class _MusicScrubberPainter extends CustomPainter {
 
   final double fraction;
 
-  /// 0 at rest, 1 while touched. Overshoots slightly with the spring curve.
   final double emphasis;
   final Color trackColor;
   final Color fillColor;
@@ -1566,9 +1503,6 @@ void _showMusicQueue(BuildContext context, MusicPlayerController controller) {
   );
 }
 
-/// The now-playing queue. It follows the controller live, so auto-advance
-/// and mode changes show up while it is open, and it opens scrolled to the
-/// current track.
 class _MusicQueueSheet extends StatefulWidget {
   const _MusicQueueSheet({
     required this.controller,

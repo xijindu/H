@@ -1,14 +1,4 @@
-﻿//
-//  auto_delete_view.dart
-//
-//  自动删除消息 — the default message auto-delete timer. A pushed screen with one
-//  white card of radio rows (关闭 / 1 天 / 1 周 / 1 个月); the row matching the
-//  current default carries a brand checkmark. Reads via
-//  getDefaultMessageAutoDeleteTime and writes via setDefaultMessageAutoDeleteTime.
-//  Port of the Swift `AutoDeleteView`.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../components/app_icons.dart';
@@ -17,8 +7,6 @@ import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 import '../theme/app_theme.dart';
 
-/// One radio choice: a display title and its auto-delete duration in seconds
-/// (0 = off).
 class _Option {
   const _Option(this.title, this.seconds);
   final String title;
@@ -50,9 +38,6 @@ class _AutoDeleteViewState extends State<AutoDeleteView> {
     _load();
   }
 
-  /// getDefaultMessageAutoDeleteTime → messageAutoDeleteTime{ time }. `time` may
-  /// sit at the top level or nested under message_auto_delete_time; snap unknown
-  /// values to 关闭.
   Future<void> _load() async {
     try {
       final res = await _client.query({

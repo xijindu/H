@@ -1,6 +1,4 @@
-﻿/// Tracks recording time until the native recorder supplies a usable duration.
-/// Some encoders initially emit zero or no progress events at all.
-class VoiceRecordingClock {
+﻿class VoiceRecordingClock {
   Duration elapsed = Duration.zero;
   bool hasRecorderProgress = false;
 

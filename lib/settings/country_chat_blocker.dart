@@ -15,11 +15,6 @@ typedef CountryBlockerQuery =
 
 typedef CountryFolderSnapshot = Map<String, dynamic>? Function(int clientId);
 
-/// Applies the country policy to the first inbound message of a private chat.
-///
-/// A positive decision is remembered immediately, before any TDLib mutation,
-/// so notification surfaces can synchronously suppress every message while the
-/// chat is being muted, marked read, and added to the `_Blocked` folder.
 class CountryChatBlocker {
   CountryChatBlocker({
     CountryMessageFilter? filter,
@@ -101,10 +96,6 @@ class CountryChatBlocker {
         _decisions[key] = false;
         return false;
       }
-      // account_info exists only while Telegram is presenting the unsolicited
-      // first-contact action bar. History length is deliberately not used as a
-      // fallback: a cleared/reopened old conversation must never be mistaken
-      // for a new inbound chat.
       if (accountInfo == null) {
         _decisions[key] = false;
         return false;
@@ -240,10 +231,6 @@ class CountryChatBlocker {
     ]);
   }
 
-  /// Mutates only the mute fields from the freshest chat snapshot. This keeps
-  /// sounds, previews, story settings, and mention preferences chosen on
-  /// another device instead of replacing the entire settings object with
-  /// defaults. Repeating the operation is a no-op once the chat is muted.
   Future<void> _muteForever(int chatId, int clientId) async {
     final chat = await _query({
       '@type': 'getChat',
@@ -286,9 +273,6 @@ class CountryChatBlocker {
     var folders = _folderSnapshot(clientId);
     var matches = _matchingFolderInfos(folders);
 
-    // Creating a folder is the only non-idempotent mutation here. Give an
-    // update created by another online device a short opportunity to arrive,
-    // then re-check before creating our own folder.
     if (matches.isEmpty && _queryOverride == null) {
       folders = await _waitForFolderSnapshotChange(
         clientId,
@@ -426,9 +410,6 @@ class CountryChatBlocker {
       }
     }
 
-    // Re-read and verify more than once. editChatFolder replaces a folder, so
-    // this merge loop converges if another online device adds a different chat
-    // at the same time instead of letting the last writer drop its membership.
     for (var attempt = 0; attempt < 3; attempt++) {
       final current = await _query({
         '@type': 'getChatFolder',
@@ -451,10 +432,6 @@ class CountryChatBlocker {
       }
     }
 
-    // A simultaneous first block on two devices can create two same-named
-    // folders. Merge all membership into the stable lowest id, then remove the
-    // redundant folders. Deleting a folder with an empty leave list never
-    // leaves or deletes its chats.
     for (final duplicateId in ids.skip(1)) {
       try {
         await _query({
@@ -463,7 +440,6 @@ class CountryChatBlocker {
           'leave_chat_ids': const <int>[],
         }, clientId);
       } catch (error) {
-        // Another online device may already have removed this duplicate.
         if (kDebugMode) {
           debugPrint(
             'Country blocker duplicate folder already reconciled: $error',

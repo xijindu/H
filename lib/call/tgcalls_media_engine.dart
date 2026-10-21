@@ -1,15 +1,4 @@
-﻿//
-//  tgcalls_media_engine.dart
-//
-//  Native Telegram media engine backed by ntgcalls on Android and
-//  TgVoipWebrtc on iOS. It marshals the TDLib `callStateReady` payload over a
-//  MethodChannel and runs the signaling loop over an EventChannel:
-//    • outbound: ntgcalls emits signaling bytes → 'signaling' event → onSignalingData
-//      → CallManager relays via TDLib sendCallSignalingData;
-//    • inbound: TDLib updateNewCallSignalingData → receiveSignaling() → ntgcalls.
-//
-
-import 'dart:convert';
+﻿import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -106,8 +95,6 @@ class TgcallsMediaEngine implements CallMediaEngine {
     }
   }
 
-  /// TDLib `callServer` → the flat shape the native bridges turn into relays.
-  /// TDLib JSON encodes int64 (`id`) as a string and bytes (`peer_tag`) as base64.
   static Map<String, dynamic>? _normalizeServer(Map<String, dynamic> s) {
     final rawId = s['id'];
     final id = rawId is String ? int.tryParse(rawId) : (rawId as num?)?.toInt();
@@ -130,7 +117,6 @@ class TgcallsMediaEngine implements CallMediaEngine {
         'peerTag': null,
       };
     }
-    // callServerTypeTelegramReflector
     Uint8List? peerTag;
     final pt = type?['peer_tag'];
     if (pt is String && pt.isNotEmpty) {

@@ -1,11 +1,4 @@
-﻿//
-//  telegram_mini_app_recents.dart
-//
-//  Stores the user's recently opened Telegram Mini Apps. Only the original bot
-//  launch URL is persisted; TDLib-authenticated Web App URLs are never stored.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -16,10 +9,6 @@ import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 import '../tdlib/td_models.dart';
 
-/// Stable Telegram account identity captured before a Mini App launch begins.
-///
-/// Slots can be reused and the active account can change while TDLib resolves a
-/// signed Web App URL, so launch metadata must remain tied to all three values.
 @immutable
 class TelegramMiniAppAccountScope {
   const TelegramMiniAppAccountScope({
@@ -80,9 +69,6 @@ class TelegramMiniAppRecent {
 
   static String _localizedMiniAppFallback(String value) {
     final clean = value.trim();
-    // Migrate the presentation of legacy recents that persisted the previous
-    // English fallback. New records keep an empty semantic value so changing
-    // the app language can update the fallback immediately.
     return clean.isEmpty || clean == 'Mini App'
         ? AppStrings.t(AppStringKeys.miniAppName)
         : clean;
@@ -257,8 +243,6 @@ abstract final class TelegramMiniAppRecents {
         }
         await prefs.remove(migrationKey);
       }
-      // A temporary slot record belongs to this exact TD client lifetime and
-      // can be merged once its user identity is known.
       if (migrated) {
         await prefs.setString(
           scope.key,
@@ -267,9 +251,6 @@ abstract final class TelegramMiniAppRecents {
       }
     }
 
-    // v1 was global across every Telegram account and therefore has no
-    // trustworthy owner. Never assign it to whichever user happens to load
-    // first; discard it once an authenticated user scope is available.
     if (scope.userId != null && prefs.containsKey(_legacyKey)) {
       await prefs.remove(_legacyKey);
     }
@@ -288,9 +269,7 @@ abstract final class TelegramMiniAppRecents {
     try {
       try {
         await previous;
-      } on Object {
-        // A failed earlier operation must not permanently block this scope.
-      }
+      } on Object {}
       return await action();
     } finally {
       gate.complete();
@@ -504,8 +483,6 @@ abstract final class TelegramMiniAppRecents {
     ].take(_limit).toList();
 
     final prefs = await SharedPreferences.getInstance();
-    // Keep this check inside the serialized section and immediately before
-    // SharedPreferences updates its in-memory cache.
     if (stillOwned != null && !await stillOwned()) return;
     await prefs.setString(
       scope.key,

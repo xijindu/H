@@ -1,11 +1,3 @@
-//
-//  topic_chat_view.dart
-//
-//  Forum/topic chat surface. This is not the normal Telegram chat screen:
-//  it presents a topic tab strip and post feed for forum supergroups and
-//  private bot chats whose userTypeBot advertises has_topics.
-//
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -37,8 +29,6 @@ import '../theme/theme_controller.dart';
 import 'topic_navigation.dart';
 import 'topic_post_content.dart';
 
-/// Keeps a forum browser suspended while its topic route is replaced by other
-/// views in the same conversation. Only the newest route can reveal it.
 class TopicChatRouteSession {
   final _browserRevealed = Completer<void>();
   var _routeGeneration = 0;
@@ -58,7 +48,6 @@ class TopicChatRouteSession {
     try {
       await route;
     } catch (_) {
-      // A failed route still uncovers the browser; refresh its cached topics.
     }
     if (generation == _routeGeneration && !_browserRevealed.isCompleted) {
       _browserRevealed.complete();
@@ -350,7 +339,6 @@ class _TopicChatViewState extends State<TopicChatView> {
       if (!mounted || revision != _topicLayoutRevision) return;
       setState(() => _hasForumTabs = group.boolean('has_forum_tabs') ?? false);
     } catch (_) {
-      // Keep the entry snapshot while offline or while metadata is unavailable.
     }
   }
 
@@ -363,8 +351,6 @@ class _TopicChatViewState extends State<TopicChatView> {
   }
 
   Future<void> _loadTopics() async {
-    // Callers clear _topicMessages immediately before this; refresh the posts
-    // here so the reload frame never renders against the stale list.
     setState(() {
       _loading = true;
       _rebuildPosts();
@@ -428,7 +414,6 @@ class _TopicChatViewState extends State<TopicChatView> {
       _rebuildPosts();
       await _loadVisibleThreads();
     } catch (_) {
-      // A failed topic refresh must not surface as an uncaught navigation error.
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -570,9 +555,6 @@ class _TopicChatViewState extends State<TopicChatView> {
     return Color(0xFF000000 | (raw & 0xFFFFFF));
   }
 
-  // Materialized rather than recomputed: as a getter this allocated a
-  // _TopicPost per loaded message and re-sorted the whole list on every scroll
-  // frame (_updateVisibleMessages) as well as on every build.
   List<_TopicPost> _posts = const <_TopicPost>[];
 
   void _rebuildPosts() {
@@ -683,8 +665,6 @@ class _TopicChatViewState extends State<TopicChatView> {
     if (viewportRenderObject is! RenderBox || !viewportRenderObject.attached) {
       return;
     }
-    // Viewport-local coordinates: stopping the transform walk at the list keeps
-    // it off the whole ancestor chain, once per row per scroll frame.
     final viewport = Offset.zero & viewportRenderObject.size;
     final bounds = <int, Rect>{};
     for (final post in _posts) {
@@ -978,8 +958,6 @@ class _TopicChatViewState extends State<TopicChatView> {
       });
       emojis = _availableReactionEmojis(available);
     } catch (_) {
-      // Older or constrained TDLib builds can fail this query; the send path
-      // still has a heart-variant retry below.
       emojis = const {};
     }
     for (final candidate in candidates) {

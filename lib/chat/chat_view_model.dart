@@ -1,12 +1,3 @@
-//
-//  chat_view_model.dart
-//
-//  Conversation view model. Opens a chat, loads history, and keeps the message
-//  list live by folding TDLib updates. For groups/channels it resolves each
-//  incoming message's sender name + photo + role through a small cache so
-//  bubbles can show "who said what". Port of the Swift `ChatViewModel`.
-//
-
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -109,7 +100,6 @@ int unreadReactionCountAfterReading(int currentCount, int readCount) =>
 int? messageSendUpdateChatId(Map<String, dynamic> update) =>
     update.int64('chat_id') ?? update.obj('message')?.int64('chat_id');
 
-/// Message contents whose attachment a live update can replace outright.
 const _mediaContentTypes = {
   'messagePhoto',
   'messageVideo',
@@ -121,13 +111,6 @@ const _mediaContentTypes = {
   'messageSticker',
 };
 
-/// Whether a live content update has to re-read the message from TDLib.
-///
-/// Editing a message can swap its media for a different kind entirely, and the
-/// in-place merge only ever hydrated an outgoing video — an edited message kept
-/// whatever attachment it had before, including a thumbnail path whose file
-/// TDLib had already deleted. A message that is still uploading keeps that
-/// merge instead, because only the local copy knows where its source file is.
 @visibleForTesting
 bool mediaContentUpdateNeedsRefresh({
   required String? contentType,
@@ -391,8 +374,6 @@ class ChatViewModel extends ChangeNotifier {
 
   final int chatId;
 
-  /// When set, this transcript shows a single forum topic as an ordinary
-  /// chat: history, search, drafts, sends and live updates are scoped to it.
   final int? forumTopicId;
   bool get isForumTopicTranscript => (forumTopicId ?? 0) != 0;
 
@@ -400,18 +381,15 @@ class ChatViewModel extends ChangeNotifier {
       ? {'@type': 'messageTopicForum', 'forum_topic_id': forumTopicId}
       : null;
 
-  /// Whether [raw] (a TDLib `message`) belongs to this transcript.
   bool _belongsToTranscript(Map<String, dynamic> raw) =>
       !isForumTopicTranscript ||
       rawMessageBelongsToForumTopic(raw, forumTopicId!);
 
-  /// Rewrites a chat-wide history request into its topic-scoped equivalent.
   Map<String, dynamic> _scopedHistoryRequest(Map<String, dynamic> request) =>
       isForumTopicTranscript
       ? forumTopicHistoryRequest(request, forumTopicId!)
       : request;
 
-  /// The topic's display name once loaded; empty for ordinary transcripts.
   String forumTopicName = '';
 
   Future<Map<String, dynamic>> _queryHistory(
@@ -449,10 +427,6 @@ class ChatViewModel extends ChangeNotifier {
 
   List<ChatMessage> messages = [];
   List<ChatMessage> _allMessages = [];
-  // Lookup indexes over the two transcript lists, filled by the single pass in
-  // _applyKeywordFilter. Folding one update used to linear-scan the whole
-  // transcript several times (id lookups, sender patches); at a few thousand
-  // loaded messages that scanning dominated the incoming-update path.
   final Map<int, ChatMessage> _messagesById = {};
   final Map<int, ChatMessage> _allMessagesById = {};
   final Map<int, List<ChatMessage>> _messagesBySenderId = {};
@@ -460,8 +434,6 @@ class ChatViewModel extends ChangeNotifier {
   final ValueNotifier<int> _headerRevisionNotifier = ValueNotifier<int>(0);
   int _transcriptScanVisitsForTesting = 0;
   bool _messageIndexesDirty = true;
-  // A pending send makes compareChatMessagesChronologically non-total, so the
-  // order-preserving shortcuts below only run while there are none.
   int _pendingMessageCount = 0;
   String peerTitle;
   TdFileRef? peerPhoto;
@@ -469,7 +441,7 @@ class ChatViewModel extends ChangeNotifier {
   ChatKind? chatKind;
   bool isGroup = false;
   int memberCount = 0;
-  int? peerUserId; // private chat → call target
+  int? peerUserId;
   int? peerBasicGroupId;
   int? peerSupergroupId;
   String meName = AppStrings.t(AppStringKeys.chatMeLabel);
@@ -490,8 +462,6 @@ class ChatViewModel extends ChangeNotifier {
 
   MessageTextQuote? get replyQuote => _replyQuote;
 
-  /// The forum-topic destination for inline-bot and gif sends when this
-  /// transcript is scoped to one topic.
   Map<String, dynamic>? get forumTopicSendRef => _forumTopicRef;
 
   Map<String, dynamic>? get replyToInput => replyTo == null
@@ -513,46 +483,42 @@ class ChatViewModel extends ChangeNotifier {
   MessageSenderOption? selectedMessageSender;
   Map<String, dynamic>? _messageSenderFromChat;
 
-  // Live header state.
   bool peerOnline = false;
   String peerStatusText = '';
-  int lastReadOutboxId = 0; // outgoing messages with id <= this are read
-  int lastReadInboxId = 0; // incoming messages with id <= this are read
-  int unreadCount = 0; // unread incoming messages on entry (for the divider)
+  int lastReadOutboxId = 0;
+  int lastReadInboxId = 0;
+  int unreadCount = 0;
   bool _didCaptureUnreadSummaryRange = false;
   int unreadMentionCount = 0;
   int unreadReactionCount = 0;
-  bool isMarkedUnread = false; // manual unread marker on the chat row
-  bool initialLoaded = false; // first history page (+ unread boundary) is in
-  bool anchoredHistory = false; // transcript is centered on an arbitrary target
+  bool isMarkedUnread = false;
+  bool initialLoaded = false;
+  bool anchoredHistory = false;
 
-  // 群公告 / pinned message shown in a bar below the header.
   ChatMessage? pinnedMessage;
   List<ChatMessage> pinnedMessages = const [];
   int pinnedMessageIndex = 0;
   bool pinnedDismissed = false;
 
-  // Membership / send permission. Defaults assume a normal, joined, sendable
-  // chat; refined in _loadChatHeader once the chat type + member status load.
-  bool canSendMessages = true; // composer enabled
+  bool canSendMessages = true;
   bool canSendVoiceNotes = true;
-  bool isMember = true; // gates 退出; false → join affordance
-  bool canJoin = false; // not a member but joinable (public super/channel/left)
-  bool joinByRequest = false; // joining needs approval → "申请加入"
-  bool joinRequested = false; // a join request was sent (awaiting approval)
-  bool isChannel = false; // broadcast channel (members can't post)
+  bool isMember = true;
+  bool canJoin = false;
+  bool joinByRequest = false;
+  bool joinRequested = false;
+  bool isChannel = false;
   bool hasLinkedDiscussion = false;
   bool isDirectMessagesGroup = false;
   bool isAdministeredDirectMessagesGroup = false;
   bool isMuted =
-      false; // notifications muted (channel subscribers get a toggle)
+      false;
   bool canDeleteMessagesBySender = false;
-  String sendDisabledReason = ''; // shown in the disabled composer bar
+  String sendDisabledReason = '';
   bool isPeerRestricted = false;
   bool isPeerPornographicRestricted = false;
   String peerRestrictionText = '';
   bool hasProtectedContent = false;
-  bool _chatCanSend = true; // chat-wide default can_send_basic_messages
+  bool _chatCanSend = true;
   bool peerIsBot = false;
   bool isSecretChat = false;
   int businessBotUserId = 0;
@@ -574,7 +540,6 @@ class ChatViewModel extends ChangeNotifier {
   bool peerRequiresPremiumOrContact = false;
   bool peerIsUnavailable = false;
 
-  /// Loaded for channels and bot chats, but not yet rendered in the transcript.
   SponsoredMessagesSnapshot? sponsoredMessages;
 
   final TdClient _client = TdClient.shared;
@@ -632,19 +597,15 @@ class ChatViewModel extends ChangeNotifier {
   int? _privateMessageInfoUserId;
   bool _privateMessageInfoLoaded = false;
 
-  // Transient chat actions: sender ids currently acting, auto-cleared shortly.
   final Map<int, _ChatActionInfo> _chatActions = {};
   Timer? _typingTimer;
   Timer? _draftSaveTimer;
   Timer? _coalescedNotifyTimer;
   String? _lastSavedDraftText;
 
-  /// Header title: profile shows the member count in parentheses after a group name.
   String get headerTitle =>
       (isGroup && memberCount > 0) ? '$peerTitle($memberCount)' : peerTitle;
 
-  /// Subtitle under the title: online/last-seen plus transient chat actions.
-  /// Group member count lives in the title, not here.
   String get subtitle {
     final base = isGroup
         ? ''
@@ -657,8 +618,6 @@ class ChatViewModel extends ChangeNotifier {
     return '$base · $action';
   }
 
-  /// The header title for this transcript: the topic's name when a forum topic
-  /// is shown as an ordinary chat, otherwise the peer title.
   String get displayTitle =>
       forumTopicName.trim().isNotEmpty ? forumTopicName.trim() : peerTitle;
 
@@ -719,14 +678,8 @@ class ChatViewModel extends ChangeNotifier {
   int _composerRevision = 0;
   int _fullViewRevision = 0;
 
-  /// Bumped by every notification except the handful proven not to touch
-  /// anything the composer renders, so the input bar can skip those rebuilds.
-  /// Bumping is the default: a path that forgets to opt out stays correct.
   int get composerRevision => _composerRevision;
 
-  /// Changes only when a notification can affect ChatView's shell, transcript
-  /// boundaries, scrolling, or overlays. Header-only and in-place bubble
-  /// updates keep this stable so ChatView can skip its O(n) synchronization.
   int get fullViewRevision => _fullViewRevision;
 
   ValueListenable<int> get headerRevisionListenable => _headerRevisionNotifier;
@@ -767,18 +720,12 @@ class ChatViewModel extends ChangeNotifier {
     super.notifyListeners();
   }
 
-  /// Notifies without bumping [composerRevision]. Only for state no composer
-  /// widget reads — the typing subtitle and the peer's online status, both of
-  /// which belong to the header.
   void _notifyComposerNeutral() {
     if (_isDisposed) return;
     _headerRevisionNotifier.value++;
     super.notifyListeners();
   }
 
-  /// Rebuilds only materialized bubbles for [messageIds]. The regular model
-  /// notification is deliberately retained: ChatInputBar uses it to invalidate
-  /// AI context and preserves its focused revision-rebuild policy.
   void _notifyLocalizedMessages(Iterable<int> messageIds) {
     if (_isDisposed) return;
     if (!_bumpMaterializedMessageRevisions(messageIds)) return;
@@ -786,8 +733,6 @@ class ChatViewModel extends ChangeNotifier {
     super.notifyListeners();
   }
 
-  /// Refreshes materialized bubbles while retaining ChatView's full sync for
-  /// cross-message and shell dependencies such as translation and overlays.
   void _notifyMessagesWithFullViewSync(Iterable<int> messageIds) {
     if (_isDisposed) return;
     if (!_bumpMaterializedMessageRevisions(messageIds)) return;
@@ -912,7 +857,6 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  // MARK: - Lifecycle
 
   void onAppear() {
     _client.send({'@type': 'openChat', 'chat_id': chatId});
@@ -979,8 +923,6 @@ class ChatViewModel extends ChangeNotifier {
       aiCapabilities = await telegramAi.capabilities();
       notifyListeners();
     } catch (_) {
-      // Capability discovery is optional. Unsupported servers keep all AI
-      // entry points hidden instead of exposing actions that will fail.
     }
   }
 
@@ -1179,7 +1121,6 @@ class ChatViewModel extends ChangeNotifier {
     super.dispose();
   }
 
-  /// Tell TDLib the user is typing (drives the peer's typing indicator).
   void sendTyping() {
     _client.send({
       '@type': 'sendChatAction',
@@ -1189,7 +1130,6 @@ class ChatViewModel extends ChangeNotifier {
     });
   }
 
-  // MARK: - Sending
 
   void setDraft(
     String value, {
@@ -1358,7 +1298,6 @@ class ChatViewModel extends ChangeNotifier {
     );
   }
 
-  /// Flushes the current composer draft through the account-scoped TDLib proxy.
   Future<void> persistComposerDraft() async {
     _draftSaveTimer?.cancel();
     _draftSaveTimer = null;
@@ -1401,8 +1340,6 @@ class ChatViewModel extends ChangeNotifier {
     if (notify) notifyListeners();
   }
 
-  /// Appends an "@name " mention to the composer (long-press an avatar), backed
-  /// by a user-id entity so Telegram doesn't resolve the text as a public user.
   void insertMention(ChatMessage message) {
     final name = message.senderName?.trim() ?? '';
     final userId = message.senderId;
@@ -1608,9 +1545,6 @@ class ChatViewModel extends ChangeNotifier {
     });
   }
 
-  /// Sends text that may contain inline custom emoji — [entities] is the list of
-  /// TDLib textEntity objects (e.g. textEntityTypeCustomEmoji) over [text]
-  /// (offsets in UTF-16 of [text], which already has the fallback chars).
   Future<bool> sendFormatted(
     String text,
     List<Map<String, dynamic>> entities,
@@ -1671,10 +1605,6 @@ class ChatViewModel extends ChangeNotifier {
         .timeout(
           timeout,
           onTimeout: () {
-            // A timeout means TDLib has not reported the final state yet. It
-            // does not mean the accepted message failed. In particular, do
-            // not mark it discarded: a late updateMessageSendSucceeded would
-            // otherwise delete the newly assigned server message id.
             debugPrint(
               'Message $pendingMessageId is still pending; keeping it until '
               'TDLib reports success or failure',
@@ -1760,10 +1690,6 @@ class ChatViewModel extends ChangeNotifier {
     return true;
   }
 
-  /// Sets or clears the reply target without changing the current draft.
-  ///
-  /// The reply metadata already addresses the sender. Mentions remain an
-  /// explicit action so replying cannot accidentally invoke inline-bot search.
   void setReply(ChatMessage? message, {MessageTextQuote? quote}) {
     if (editingMessage != null) {
       _restoreComposerAfterMessageEdit(notify: false);
@@ -2009,8 +1935,6 @@ class ChatViewModel extends ChangeNotifier {
       'chat_id': chatId,
       'input_message_content': {
         '@type': 'inputMessageSticker',
-        // The bundled TDLib schema carries sticker file metadata in an
-        // inputSticker object rather than directly on inputMessageSticker.
         'sticker': {
           '@type': 'inputSticker',
           'sticker': inputFile,
@@ -2172,7 +2096,6 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  /// 音频: send a picked audio file as a music message (TDLib computes metadata).
   void sendAudio(String path) {
     _submitMessageRequestWithoutWaiting({
       '@type': 'sendMessage',
@@ -2190,7 +2113,6 @@ class ChatViewModel extends ChangeNotifier {
     });
   }
 
-  /// 音频搜索: send a clean copy of an existing Telegram audio message.
   Future<void> sendAudioFromMessage(
     int sourceChatId,
     ChatMessage message,
@@ -2237,7 +2159,6 @@ class ChatViewModel extends ChangeNotifier {
     );
   }
 
-  /// 清单: send a checklist (to-do list). Creating checklists needs Premium.
   void sendChecklist(ChecklistComposerResult draft) {
     if (draft.title.trim().isEmpty || draft.tasks.isEmpty) return;
     _submitMessageRequestWithoutWaiting({
@@ -2499,12 +2420,8 @@ class ChatViewModel extends ChangeNotifier {
     await _refreshMessage(message.id);
   }
 
-  /// Re-sends the same content (the "+1" quick repeat) — only plain text and
-  /// photos; the badge that calls this is gated to those kinds too.
   void repeatMessage(ChatMessage message) {
     if (hasProtectedContent) return;
-    // Photo: send a clean copy (forwardMessages send_copy drops the "转发"
-    // header and works regardless of the original file's upload state).
     if (message.isPhoto && message.image != null) {
       _submitMessageRequestWithoutWaiting({
         '@type': 'forwardMessages',
@@ -2590,7 +2507,6 @@ class ChatViewModel extends ChangeNotifier {
       _resolveForwardsIfNeeded([refreshed]);
       _resolveServiceUsersIfNeeded([refreshed]);
     } catch (_) {
-      // Live TDLib updates remain the source of truth if a direct refresh fails.
     }
   }
 
@@ -2696,7 +2612,6 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  // MARK: - Message actions (long-press menu)
 
   Future<void> forward(
     int messageId,
@@ -2943,7 +2858,6 @@ class ChatViewModel extends ChangeNotifier {
     });
   }
 
-  // MARK: - Paging
 
   Future<bool> loadOlder() async {
     if (!canLoadOlder) return false;
@@ -3055,9 +2969,6 @@ class ChatViewModel extends ChangeNotifier {
     return true;
   }
 
-  /// Extends the current window toward the latest message without discarding
-  /// unread history or changing its viewport anchor. A short TDLib page is not
-  /// proof that we have reached the end of the chat.
   Future<bool> loadNewer() async {
     if (!canLoadNewer) return false;
     final fromMessageId = latestServerMessageId(_allMessages);
@@ -3111,8 +3022,6 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  /// Called only after the reader reaches the actual latest edge. Unlike an
-  /// explicit jump-to-latest, this keeps every paged message and its geometry.
   void resumeLatestHistoryIfLoaded() {
     if (!anchoredHistory || !_historyReachesLatest) return;
     anchoredHistory = false;
@@ -3120,18 +3029,12 @@ class ChatViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Prevents an in-flight latest-history response from replacing the current
-  /// anchored window after the user takes control of the transcript.
-  ///
-  /// TDLib does not expose cancellation for an already-sent query, so the
-  /// generation check in [loadLatestHistory] discards its eventual response.
   void invalidateLatestHistoryLoad() {
     if (!_latestHistoryLoadInFlight) return;
     _latestHistoryLoadInvalidated = true;
     ++_historyWindowGeneration;
   }
 
-  // MARK: - Header
 
   Future<void> _loadChatHeader() async {
     final readStateRevisionAtRequestStart = _chatReadStateRevision;
@@ -3193,11 +3096,7 @@ class ChatViewModel extends ChangeNotifier {
     );
     _chatReadStateLoaded = true;
     ++_chatReadStateRevision;
-    // Reopen positioning and safe read marking need only the coherent getChat
-    // read/latest snapshot. Publish it before optional peer metadata awaits.
     notifyListeners();
-    // Chat-wide default send permission + permissive membership defaults
-    // (refined per type below).
     _chatCanSend =
         chat.obj('permissions')?.boolean('can_send_basic_messages') ?? true;
     canSendMessages = _chatCanSend;
@@ -3397,7 +3296,6 @@ class ChatViewModel extends ChangeNotifier {
       if (_isDisposed) return;
       sponsoredMessages = snapshot;
     } catch (_) {
-      // Sponsorship retrieval must never prevent a channel from opening.
     }
   }
 
@@ -3415,8 +3313,6 @@ class ChatViewModel extends ChangeNotifier {
         ? math.max(_knownLatestMessageId, lastMessageId)
         : lastMessageId;
     if (_restoredFromSession) {
-      // A restored transcript may predate this item. Appending it here would
-      // create a visible hole until history hydration completes.
       _historyReachesLatest = false;
       return;
     }
@@ -3726,8 +3622,6 @@ class ChatViewModel extends ChangeNotifier {
     return null;
   }
 
-  /// Maps the current user's member status (+ channel-ness / chat defaults) onto
-  /// the send / membership / join flags the chat UI reads.
   void _applyGroupStatus(Map<String, dynamic>? status) {
     switch (status?.type) {
       case 'chatMemberStatusCreator':
@@ -3774,8 +3668,6 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  /// Mute / unmute notifications — the bottom-bar action for a channel you're
-  /// subscribed to but can't post in (mirrors the official client).
   Future<void> toggleMute() async {
     final target = isMuted;
     isMuted = !isMuted;
@@ -3789,7 +3681,7 @@ class ChatViewModel extends ChangeNotifier {
         ),
       });
     } catch (_) {
-      isMuted = target; // revert on failure
+      isMuted = target;
       notifyListeners();
     }
   }
@@ -3806,8 +3698,6 @@ class ChatViewModel extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Joins (or, for approval-required chats, requests to join) the current chat.
-  /// Optimistically updates membership; TDLib updates refine it.
   Future<void> joinChat() async {
     try {
       await _client.query({'@type': 'joinChat', 'chat_id': chatId});
@@ -3929,7 +3819,6 @@ class ChatViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  // MARK: - History
 
   Future<void> _loadInitialHistory({required bool openAtLatest}) async {
     if (shouldLoadInitialHistoryAroundLastRead(
@@ -3939,9 +3828,6 @@ class ChatViewModel extends ChangeNotifier {
     )) {
       final loaded = await _loadInitialAroundLastRead();
       if (_chatOpenWorkIsStale) return;
-      // A chat-list preview hit can satisfy around-last-read with one local
-      // bubble. Fall through to latest hydration so the open path does not
-      // settle until the user scrolls.
       if (loaded && !isThinInitialHistoryWindow(messages.length)) return;
     }
     await _loadInitialLatestHistory();
@@ -3985,10 +3871,6 @@ class ChatViewModel extends ChangeNotifier {
     if (shouldHydrateInitialHistoryInBackground(
       loadedMessageCount: _allMessages.length,
     )) {
-      // The chat-list seed or a local TDLib page is enough to make the view
-      // interactive. Refreshing through loadLatestHistory publishes its own
-      // completion notification and blocks short-window paging from racing the
-      // same remote request.
       unawaited(loadLatestHistory());
       return;
     }
@@ -4028,8 +3910,6 @@ class ChatViewModel extends ChangeNotifier {
       if (target != null) batch.add(target);
     } catch (_) {
       if (cancelled()) return false;
-      // A missing or restricted target message doesn't imply the containing
-      // chat is restricted. Load its surrounding history when available.
     }
 
     if (_chatOpenWorkIsStale ||
@@ -4160,9 +4040,6 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  /// Reports the exact messages that entered the viewport. TDLib tracks
-  /// unread mentions and reactions independently from the ordinary inbox
-  /// boundary. Sending the concrete IDs clears all three states correctly.
   void markVisibleMessagesViewed(Iterable<ChatMessage> visibleMessages) {
     final viewed = visibleMessages
         .where(
@@ -4190,9 +4067,6 @@ class ChatViewModel extends ChangeNotifier {
     );
   }
 
-  /// Marks the mention selected by the blue @ control after the view has
-  /// scrolled it into place. Awaiting TDLib prevents a quick second tap from
-  /// resolving the same mention again.
   Future<void> markUnreadMentionRead(int messageId) async {
     try {
       await _client.query({
@@ -4349,8 +4223,6 @@ class ChatViewModel extends ChangeNotifier {
         .whereType<ChatMessage>()
         .toList();
     if (parsed.isEmpty) {
-      // A local-cache miss says nothing about whether the server still has
-      // older history. Only an empty remote page confirms exhaustion.
       if (confirmsOlderHistoryExhausted(onlyLocal: onlyLocal)) {
         _hasOlderHistory = false;
       }
@@ -4401,9 +4273,6 @@ class ChatViewModel extends ChangeNotifier {
     await _client.query({'@type': 'leaveChat', 'chat_id': chatId});
   }
 
-  /// Confirms a session-reopen override from concrete messages rather than an
-  /// unread-count delta. The latter can shrink after another-device reads,
-  /// deletions, or the exit-time read that follows snapshot capture.
   Future<int?> confirmedNewIncomingUnreadSinceSession({
     required int savedKnownLatestMessageId,
     required int expectedReadStateRevision,
@@ -4433,9 +4302,6 @@ class ChatViewModel extends ChangeNotifier {
       }
     }
 
-    // A loaded concrete message is sufficient even if its paired unread-count
-    // update has not arrived yet. The count only controls whether a read-only
-    // history probe is warranted to find an earlier unread target.
     if (!shouldProbeChatSessionUnreadHistory(
       savedKnownLatestMessageId: savedKnownLatestMessageId,
       currentKnownLatestMessageId: _knownLatestMessageId,
@@ -4566,8 +4432,6 @@ class ChatViewModel extends ChangeNotifier {
               : null,
           'force_read': true,
         });
-        // A topic's read position is not the chat's; TDLib reports the
-        // resulting chat-wide counts through its own updates.
         if (!isForumTopicTranscript) {
           _client.emitLocalUpdate({
             '@type': 'updateChatReadInbox',
@@ -4597,10 +4461,7 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  // MARK: - Live updates
 
-  /// Every `@type` [_handle] has an arm for. Keep in sync with its switch: an
-  /// omission silently stops that arm from ever running.
   static const _handledUpdateTypes = <String>[
     'updateNewMessage',
     'updateMessageContent',
@@ -4642,9 +4503,6 @@ class ChatViewModel extends ChangeNotifier {
   ];
 
   void _subscribeToUpdates() {
-    // An open chat used to be woken for every update in the app — including the
-    // `updateFile` storm of a chunked download — only to walk 33 cases and
-    // return. It now hears exactly the types it handles.
     _sub ??= _client.updatesOfAny(_handledUpdateTypes).listen(_handle);
   }
 
@@ -4691,7 +4549,6 @@ class ChatViewModel extends ChangeNotifier {
         final messageId = update.int64('message_id');
         final content = update.obj('new_content');
         if (messageId == null || content == null) return;
-        // Apply concealment immediately, before an asynchronous media refresh.
         for (final message in _messageRefs(messageId)) {
           message.hasSpoiler = content.boolean('has_spoiler') ?? false;
         }
@@ -4715,11 +4572,6 @@ class ChatViewModel extends ChangeNotifier {
         }
         _replaceText(
           messageId,
-          // Chat-list previews deliberately synthesize labels such as
-          // "Photo", "Video", and a document name. A transcript update must
-          // keep using only user-authored text, otherwise TDLib's live content
-          // update for a just-sent attachment turns that preview label into a
-          // visible caption until the confirmed message replaces it.
           TDParse.messageContentText(content),
           entities: TDParse.messageTextEntities(content),
           customEmoji: TDParse.customEmojiEntitiesForContent(content),
@@ -4982,8 +4834,6 @@ class ChatViewModel extends ChangeNotifier {
 
       case 'updateDeleteMessages':
         if (update.int64('chat_id') != chatId) return;
-        // from_cache unloads (is_permanent == false) must not remove messages
-        // from the UI — the messages still exist on the server.
         if (update.boolean('is_permanent') != true) return;
         final deletedIds = update.int64Array('message_ids') ?? const <int>[];
         ++_chatReadStateRevision;
@@ -5062,21 +4912,18 @@ class ChatViewModel extends ChangeNotifier {
         if (sid == null) return;
         final actionType = update.obj('action')?.type;
         if (actionType == 'chatActionCancel') {
-          // Nothing rendered changes when the sender had no active action.
           if (_chatActions.remove(sid) == null) return;
         } else {
           final name = _senderCache[sid]?.name ?? '';
           final action = actionType ?? 'chatActionTyping';
           final active = _chatActions[sid];
-          // TDLib re-sends the same action every few seconds while it lasts;
-          // notifying again rebuilds the whole screen for the same subtitle.
           final unchanged =
               active != null &&
               active.actionType == action &&
               active.name == name;
           if (!unchanged) _chatActions[sid] = _ChatActionInfo(name, action);
           if (name.isEmpty && isGroup && sid > 0) {
-            _resolveSender(sid); // fills the name for the next render
+            _resolveSender(sid);
           }
           _restartTypingTimer();
           if (unchanged) return;
@@ -5168,8 +5015,6 @@ class ChatViewModel extends ChangeNotifier {
         final rows = TDParse.messageButtonRows(update.obj('reply_markup'));
         final targets = _messageRefs(mid);
         if (targets.isEmpty) return;
-        // One lookup and one notify for the whole edit: the button rows used
-        // to be applied through a second scan that notified on its own.
         var edited = false;
         for (final message in targets) {
           if (!identical(message.buttonRows, rows)) {
@@ -5222,8 +5067,6 @@ class ChatViewModel extends ChangeNotifier {
         unawaited(_resolveMessageEffects(ids));
 
       case 'updateBlockMessageSender':
-        // Invalidate blocked-user cache so the hide-on-block toggle
-        // takes effect immediately without app restart.
         if (BlockedUserService.shared.enabled) {
           unawaited(
             BlockedUserService.shared.loadBlockedUsers().then((_) {
@@ -5270,7 +5113,6 @@ class ChatViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  // MARK: - Reactions
 
   Future<MessageReactionAvailability> messageReactionAvailability(
     int messageId, {
@@ -5301,7 +5143,6 @@ class ChatViewModel extends ChangeNotifier {
   Future<void> addReaction(int messageId, String emoji) =>
       _addReactionChoice(messageId, QuickReactionChoice.emoji(emoji));
 
-  /// Custom (premium) emoji reaction.
   Future<void> addCustomReaction(int messageId, int customEmojiId) =>
       _addReactionChoice(messageId, QuickReactionChoice.custom(customEmojiId));
 
@@ -5336,8 +5177,6 @@ class ChatViewModel extends ChangeNotifier {
 
   Future<void> toggleReaction(ChatMessage m, MessageReaction r) async {
     if (r.chosen) {
-      // TDLib guarantees that a chosen reaction remains removable even when
-      // the user can no longer add reactions to the message.
       await _client.queryTo({
         '@type': 'removeMessageReaction',
         'chat_id': chatId,
@@ -5510,10 +5349,7 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  // MARK: - 引用 reply-quote resolution
 
-  /// For each message that replies to another, resolve the quoted sender +
-  /// preview — from the already-loaded list when possible, else via getMessages.
   void _resolveRepliesIfNeeded(List<ChatMessage> batch) {
     final repliesToResolve = batch
         .where(
@@ -5523,9 +5359,6 @@ class ChatViewModel extends ChangeNotifier {
         )
         .toList(growable: false);
     if (repliesToResolve.isEmpty) return;
-    // This index is already maintained by transcript mutations. Rebuilding a
-    // map for each history page (or scanning the transcript for a live reply)
-    // made quoting increasingly expensive as more history was loaded.
     _ensureMessageIndexes();
     final unresolved = <int, List<ChatMessage>>{};
     for (final m in repliesToResolve) {
@@ -5538,9 +5371,6 @@ class ChatViewModel extends ChangeNotifier {
       unresolved.putIfAbsent(rid, () => <ChatMessage>[]).add(m);
     }
     if (unresolved.isEmpty) return;
-    // One getMessage per distinct target meant 10-25 concurrent round trips for
-    // a single reply-heavy history page, repeated for every page scrolled up.
-    // getMessages answers them all at once, so the previews fill in together.
     final targets = unresolved.keys.toList();
     for (var start = 0; start < targets.length; start += 100) {
       final end = start + 100 > targets.length ? targets.length : start + 100;
@@ -5548,7 +5378,6 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  /// Fetches one batch of reply targets and patches every message waiting on it.
   void _resolveReplyTargets(
     List<int> messageIds,
     Map<int, List<ChatMessage>> unresolved,
@@ -5561,9 +5390,6 @@ class ChatViewModel extends ChangeNotifier {
         })
         .then((response) {
           var changed = false;
-          // Unavailable ids come back as nulls that carry no identity, so the
-          // bucket is looked up by the id on each returned message, not by
-          // position.
           final raws =
               response.objects('messages') ?? const <Map<String, dynamic>>[];
           for (final raw in raws) {
@@ -5596,7 +5422,6 @@ class ChatViewModel extends ChangeNotifier {
       m.replyToSender = meName;
       return;
     }
-    // Name the actual author of the quoted message — never the chat/group name.
     final name = quoted.senderName;
     if (name != null && name.isNotEmpty) {
       m.replyToSender = name;
@@ -5607,15 +5432,13 @@ class ChatViewModel extends ChangeNotifier {
     if (cached != null) {
       m.replyToSender = cached.name;
     } else if (sid != null) {
-      m.replyToSender = ''; // resolve in the background, fill on next render
+      m.replyToSender = '';
       _resolveQuotedSender(m, sid);
     } else {
       m.replyToSender = isGroup ? '' : peerTitle;
     }
   }
 
-  /// Resolves a quoted message's author name (user or chat sender) and patches
-  /// the reply in place. Reuses the sender cache populated for the transcript.
   Future<void> _resolveQuotedSender(ChatMessage m, int senderId) async {
     final existing = _senderCache[senderId];
     if (existing != null) {
@@ -5678,7 +5501,6 @@ class ChatViewModel extends ChangeNotifier {
     return q.text;
   }
 
-  // MARK: - Merge / mutate
 
   bool _isBlockedMessage(ChatMessage message) {
     if (message.isOutgoing || message.isService) return false;
@@ -5689,16 +5511,7 @@ class ChatViewModel extends ChangeNotifier {
     return KeywordBlocker.shared.matches(message.text);
   }
 
-  /// Rebuilds `messages` from `_allMessages` and refreshes the lookup indexes.
-  ///
-  /// One pass does the filtering, the blocked-user marking and the index fill
-  /// that used to cost four separate walks plus a sort. `_allMessages` is kept
-  /// sorted by every writer, so re-sorting the filtered subsequence here was
-  /// pure cost on every incoming message.
   void _applyKeywordFilter() {
-    // The chat_view transcript memo relies on list identity to notice
-    // blocked-state changes, so the flags must be set before `messages` is
-    // published — never flip them outside this pass.
     final blockedUserService = BlockedUserService.shared;
     final marksBlockedUsers = blockedUserService.enabled;
     _marksBlockedUsers = marksBlockedUsers;
@@ -5730,8 +5543,6 @@ class ChatViewModel extends ChangeNotifier {
       }
     }
     _messageIndexesDirty = false;
-    // Guards the dropped sort. With a pending send in the list the comparator
-    // is not a total order, so only the pure-id case can be checked.
     assert(_pendingMessageCount > 0 || _isSortedById(_allMessages));
     messages = visible;
     _blockedMessageIds = blockedIds;
@@ -5739,30 +5550,15 @@ class ChatViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  // State the incremental append path needs to stay equivalent to the full
-  // pass: what `blockedByUser` was last computed against, and every blocked id
-  // in `_allMessages` (the read-boundary marker is handed the whole set each
-  // time, because an arrival can move the boundary past an older blocked one).
   bool _marksBlockedUsers = false;
   List<int> _blockedMessageIds = <int>[];
 
-  /// Folds one strictly-newest message into the published transcript without
-  /// the whole-transcript rebuild [_applyKeywordFilter] does.
-  ///
-  /// That rebuild walked every loaded message and refilled three indexes per
-  /// arrival, so a chat got measurably slower the further back the user had
-  /// scrolled — thousands of blocked checks and map inserts for one message.
   void _appendToVisibleTranscript(ChatMessage message) {
     final blockedUserService = BlockedUserService.shared;
-    // The full pass re-evaluates blockedByUser for the whole transcript. The
-    // other inputs to it announce themselves (KeywordBlocker notifies,
-    // updateBlockMessageSender reloads), but this toggle does not, so a change
-    // has to fall back.
     if (blockedUserService.enabled != _marksBlockedUsers) {
       _applyKeywordFilter();
       return;
     }
-    // Guaranteed by _appendIfStrictlyNewest, so the pending count cannot move.
     assert(!isPendingChatMessage(message));
     _allMessagesById[message.id] = message;
     if (_isBlockedMessage(message)) {
@@ -5775,8 +5571,6 @@ class ChatViewModel extends ChangeNotifier {
           !message.isService &&
           senderId != null &&
           blockedUserService.isBlocked(senderId);
-      // Reassigned, never mutated: chat_view's transcript memo keys on the
-      // list's identity.
       messages = [...messages, message];
       _messagesById[message.id] = message;
       if (senderId != null) {
@@ -5795,8 +5589,6 @@ class ChatViewModel extends ChangeNotifier {
     return true;
   }
 
-  /// Refreshes the lookup indexes after a caller mutated either list without
-  /// going through `_applyKeywordFilter`.
   void _ensureMessageIndexes() {
     if (!_messageIndexesDirty) return;
     _messagesById.clear();
@@ -5868,11 +5660,6 @@ class ChatViewModel extends ChangeNotifier {
     _applyKeywordFilter();
   }
 
-  /// A live message almost always arrives newer than everything loaded, where
-  /// the general merge still rebuilds a map of the whole transcript and
-  /// re-sorts it. Appending skips both — but only while the list holds no
-  /// pending send, because then the comparator is a plain ascending id order
-  /// and the tail is provably the largest element.
   bool _appendIfStrictlyNewest(List<ChatMessage> incoming) {
     if (incoming.length != 1 || _allMessages.isEmpty) return false;
     final message = incoming.first;
@@ -5889,8 +5676,6 @@ class ChatViewModel extends ChangeNotifier {
 
   Set<int>? _ignoredMergeMessageIdsCache;
 
-  /// Union of the two pending-id sets. Building it inline allocated a fresh
-  /// set of up to 512 ids on every merge.
   Set<int> get _ignoredMergeMessageIds => _ignoredMergeMessageIdsCache ??= {
     ..._discardedPendingMessageIds,
     ..._settledPendingMessageIds,
@@ -5966,7 +5751,6 @@ class ChatViewModel extends ChangeNotifier {
       } on TdError catch (error) {
         if (error.code == 400 || error.code == 404) staleIds.add(pendingId);
       } catch (_) {
-        // Keep a pending bubble if TDLib cannot confirm its current state.
       }
     }
     if (_isDisposed || staleIds.isEmpty) return;
@@ -5997,12 +5781,6 @@ class ChatViewModel extends ChangeNotifier {
       if (updateLinkPreview) target.linkPreview = linkPreview;
       if (edited) target.isEdited = true;
     }
-    // Text can only change transcript membership while text rules exist.
-    // Sender blocking is independent of the body, so the overwhelmingly
-    // common no-keyword path can avoid republishing and rescanning every
-    // loaded message. A full ChatView sync is still required because message
-    // text feeds chat-language detection, automatic translation, the repeat
-    // affordance on the next bubble, and any open message action overlay.
     if (!KeywordBlocker.shared.hasTextRules) {
       _notifyMessagesWithFullViewSync([messageId]);
     } else {
@@ -6053,8 +5831,6 @@ class ChatViewModel extends ChangeNotifier {
     final pendingMessage =
         _allMessagesById[pendingMessageId] ?? _messagesById[pendingMessageId];
     _allMessages.removeWhere((message) => message.id == pendingMessageId);
-    // Reassigned (not mutated) so the transcript memo's identity check stays
-    // valid even if a notify lands before the merge below.
     messages = messages
         .where((message) => message.id != pendingMessageId)
         .toList();
@@ -6118,7 +5894,6 @@ class ChatViewModel extends ChangeNotifier {
         'message': richMessage,
       });
     } catch (error) {
-      // Keep the partial placeholder; a later content/history update retries it.
       debugPrint('Failed to load full rich message $messageId: $error');
     } finally {
       _loadingFullRichMessageIds.remove(messageId);
@@ -6199,17 +5974,9 @@ class ChatViewModel extends ChangeNotifier {
     if (ids.isEmpty) return;
     final removed = ids.toSet();
     _allMessages.removeWhere((m) => removed.contains(m.id));
-    // Reassign (never mutate in place): the transcript memo in chat_view
-    // caches on the list's identity, so an in-place removeWhere would keep
-    // rendering the deleted message.
     messages = messages.where((m) => !removed.contains(m.id)).toList();
-    // This path bypasses _applyKeywordFilter, so the lookup indexes would
-    // otherwise keep handing out deleted messages.
     _messageIndexesDirty = true;
     _blockedReadIds.removeWhere(removed.contains);
-    // Same reason: the incremental append path hands this list straight to the
-    // read-boundary marker, so a deleted id left here is force-read again (and
-    // never dropped until the next full pass).
     _blockedMessageIds.removeWhere(removed.contains);
     if (replyTo != null && removed.contains(replyTo!.id)) replyTo = null;
     if (pinnedMessages.any((m) => removed.contains(m.id))) {
@@ -6234,9 +6001,6 @@ class ChatViewModel extends ChangeNotifier {
 
   void _patchSenders(Map<int, _SenderInfo> senders) {
     if (senders.isEmpty) return;
-    // Walk only the bubbles of the senders being patched. _resolveSender fires
-    // this twice per sender, so a whole-transcript walk per call was the bulk
-    // of the cost of opening or paging a busy group.
     _ensureMessageIndexes();
     var changed = false;
     for (final entry in senders.entries) {
@@ -6276,10 +6040,6 @@ class ChatViewModel extends ChangeNotifier {
         current.hasAnimation == next.hasAnimation;
   }
 
-  /// Folds a burst of background patches into one notify per frame. Every
-  /// notify drives a full chat-screen rebuild, and the per-message resolvers
-  /// (senders, replies, forwards, service text, translations) each complete on
-  /// their own round trip.
   void _scheduleCoalescedNotify() {
     if (_isDisposed) return;
     if (_coalescedNotifyTimer != null) return;
@@ -6289,7 +6049,6 @@ class ChatViewModel extends ChangeNotifier {
     });
   }
 
-  // MARK: - Sender resolution (groups/channels only)
 
   void _resolveSendersIfNeeded(List<ChatMessage> batch) {
     if (!isGroup) return;
@@ -6365,8 +6124,6 @@ class ChatViewModel extends ChangeNotifier {
     if (!isGroup) return;
     final userId = user.int64('id');
     if (userId == null) return;
-    // TDLib emits updateUser for every user the account learns about, so test
-    // the cheap cache before touching the transcript at all.
     if (!_senderCache.containsKey(userId) && !_hasVisibleSender(userId)) return;
     final existing = _senderCache[userId];
     final info = _senderInfoFromUser(
@@ -6406,8 +6163,6 @@ class ChatViewModel extends ChangeNotifier {
     );
   }
 
-  /// Fills `forwardOrigin` for forwarded messages whose origin is a user or
-  /// chat we can name (hidden-user names already arrive inline).
   void _resolveForwardsIfNeeded(List<ChatMessage> batch) {
     for (final m in batch) {
       if (m.forwardOrigin != null && m.forwardOrigin!.isNotEmpty) continue;
@@ -6443,11 +6198,6 @@ class ChatViewModel extends ChangeNotifier {
     }
   }
 
-  // Forwards arrive in runs from the same origin, and the resolver used to keep
-  // no result and no in-flight set: a page with 20 forwards from one channel
-  // fired 20 identical getChat round trips, and every later page repeated them.
-  // Chat and user ids need separate maps — TDLib chat ids for groups/channels
-  // are already negative, and a private chat id equals its user id.
   final Map<int, String> _forwardUserNames = {};
   final Map<int, String> _forwardChatTitles = {};
   final Map<int, List<ChatMessage>> _pendingForwardUsers = {};
@@ -6478,8 +6228,6 @@ class ChatViewModel extends ChangeNotifier {
     } else {
       waiting = null;
     }
-    // A failed lookup is not remembered, so a later page retries it exactly as
-    // it used to.
     if (name == null || name.isEmpty || waiting == null) return;
     if (userId != null) {
       _forwardUserNames[userId] = name;
@@ -6579,8 +6327,6 @@ class ChatViewModel extends ChangeNotifier {
     if (names.isEmpty) return;
     final suffix = message.serviceUserIds.length > names.length
         ? AppStrings.t(AppStringKeys.chatAndOthersCount, {
-            // The string reads "and N others" — N is the remainder beyond
-            // the listed names, not the total joiner count.
             'value1': message.serviceUserIds.length - names.length,
           })
         : '';
@@ -6650,9 +6396,6 @@ class ChatViewModel extends ChangeNotifier {
               'user_id': senderId,
             });
           } catch (_) {
-            // A discovery update can still be in flight. Do not permanently
-            // cache a placeholder; updateUser will patch the sender when it
-            // arrives, and a later batch remains free to retry resolution.
             return;
           }
         }

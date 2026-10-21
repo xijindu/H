@@ -1,12 +1,3 @@
-//  message_bubble.dart
-//
-//  One conversation message, reference-styled. Plain rounded bubbles (no tail).
-//  Renders text (with highlighted links), inline images (tap → full-screen
-//  viewer), stickers (.tgs Lottie), voice notes, location cards, and document
-//  cards. Shows a "+1" quick-repeat badge for a duplicate tail. Swipe a bubble
-//  left to reply. Port of the Swift `MessageBubble`.
-//
-
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -124,9 +115,6 @@ class MessageBubble extends StatefulWidget {
   final TranslationDisplayStyle translationDisplayStyle;
   final Set<int> showOriginalTranslationMessageIds;
 
-  /// Selected messages take their own bubble fill. Telegram keys this
-  /// separately (chat_inBubbleSelected / chat_outBubbleSelected) rather than
-  /// tinting the base fill, so a theme can define the state outright.
   final bool selected;
 
   final List<ChatMessage> groupedMedia;
@@ -170,7 +158,7 @@ class MessageBubble extends StatefulWidget {
   final void Function(ChatMessage message, MessageReaction reaction)?
   onShowReactionUsers;
   final ValueChanged<bool>?
-  onRedial; // tap a call log to redial (bool = isVideo)
+  onRedial;
   final ValueChanged<ChatMessage>? onOpenContact;
   final void Function(ChatMessage message, int optionIndex)? onVotePoll;
   final ValueChanged<ChatMessage>? onStopPoll;
@@ -210,8 +198,6 @@ class _MessageBubbleState extends State<MessageBubble>
   bool _videoStickerReady = false;
   bool _musicPressed = false;
   bool _showTappedTimestamp = false;
-  // Hover feeds nothing but the 10px detail timestamp, so it rides a notifier:
-  // a setState here would rebuild the entire bubble on every pointer crossing.
   final ValueNotifier<bool> _hoveringTimestamp = ValueNotifier(false);
   double? _layoutWidth;
   final Set<String> _expandedQuotes = {};
@@ -333,9 +319,6 @@ class _MessageBubbleState extends State<MessageBubble>
 
   ChatMessage get message => widget.message;
 
-  // Theme state resolved once per build by [_resolveTheme]. The colour helpers
-  // below are read dozens of times while one bubble builds, and each read used
-  // to run its own context.watch + Theme.of chain for the same answer.
   late ThemeController _theme;
   late AppColors _colors;
   late Brightness _brightness;
@@ -495,9 +478,6 @@ class _MessageBubbleState extends State<MessageBubble>
     BoxConstraints constraints = const BoxConstraints(),
     bool containsAttachedComments = false,
   }) {
-    // When a comment action is present, the outer wrapper owns the only
-    // rounded/background surface. Inner message content keeps its normal
-    // padding but does not paint a second rounded rectangle.
     if (_showsAttachedComments && !containsAttachedComments) {
       return Container(
         key: key,
@@ -579,10 +559,6 @@ class _MessageBubbleState extends State<MessageBubble>
         _layoutWidth = constraints.maxWidth.isFinite
             ? constraints.maxWidth
             : MediaQuery.sizeOf(context).width;
-        // The swipe offset only moves this Stack, so it drives an
-        // AnimatedBuilder instead of setState: every drag update and every
-        // frame of the settle animation used to rebuild the whole bubble —
-        // spans, recognizers, colour chains and all — to shift it sideways.
         return AnimatedBuilder(
           animation: _swipeController,
           child: _row(outgoing),
@@ -592,10 +568,6 @@ class _MessageBubbleState extends State<MessageBubble>
               alignment: Alignment.centerRight,
               clipBehavior: Clip.none,
               children: [
-                // Every mounted bubble paid for this icon — an Icon is a glyph
-                // layout, and at rest it is invisible behind opacity 0. Swap in
-                // a const placeholder until a swipe actually starts. The child
-                // count stays the same so the sibling below keeps its element.
                 if (swipeX == 0)
                   const SizedBox.shrink()
                 else
@@ -732,17 +704,11 @@ class _MessageBubbleState extends State<MessageBubble>
                             ],
                           ),
                         )
-                      // Without a badge the Row and Flexible are pure overhead:
-                      // the Align already fills the Expanded and puts the
-                      // bubble on the right.
                       : Align(alignment: Alignment.centerRight, child: content),
                 ),
                 const SizedBox(width: 8),
                 _avatarTapTarget(
                   PhotoAvatar(
-                    // Resolved here rather than up front: an incoming message
-                    // never needs it, and the fallback runs a localisation
-                    // lookup.
                     title: message.senderIsChat
                         ? (message.senderName ?? widget.meName)
                         : widget.meName.l10n(context),
@@ -774,8 +740,6 @@ class _MessageBubbleState extends State<MessageBubble>
                     children: [
                       if (widget.isGroup && message.senderName != null)
                         _senderHeader(showDetailTime: showDetailTime),
-                      // The badge Row is a no-op wrapper without a badge, and
-                      // the Column already left-aligns the bubble.
                       if (widget.showRepeat)
                         Row(
                           children: [
@@ -792,11 +756,6 @@ class _MessageBubbleState extends State<MessageBubble>
               ],
       ),
     );
-    // The Stack and the Positioned stay put whatever the timestamp does: a tap
-    // toggles _showTappedTimestamp and a late sender name flips
-    // timeInSenderHeader, and dropping either wrapper would re-parent the whole
-    // bubble and re-inflate every child element (spoilers, inline video, map
-    // thumbnails). Hover therefore only ever swaps the Positioned's child.
     return MouseRegion(
       onEnter: (_) => _setTimestampHover(true),
       onExit: (_) => _setTimestampHover(false),
@@ -828,8 +787,6 @@ class _MessageBubbleState extends State<MessageBubble>
     child: child,
   );
 
-  /// Only an incoming group message reads any of this — a 1:1 chat used to pay
-  /// for the name-colour resolution and the role switch on every message.
   Widget _senderHeader({required bool showDetailTime}) {
     final theme = _theme;
     final showMemberTags = theme.showMemberTags;
@@ -872,9 +829,6 @@ class _MessageBubbleState extends State<MessageBubble>
               trailing: showStatus
                   ? StatusEmojiView(
                       id: message.senderEmojiStatusId,
-                      // The name beside it scales with the font size setting;
-                      // the status emoji should grow with it instead of
-                      // staying at a fixed pixel size.
                       size: 14 * MediaQuery.textScalerOf(context).scale(1.0),
                       color: senderNameColor,
                       animate: theme.chatStatusEmojiMode.animate,
@@ -906,8 +860,6 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  /// The avatar only needs a recognizer when a caller actually wants the taps;
-  /// previews and tests pass neither.
   Widget _avatarTapTarget(Widget avatar, {required bool withLongPress}) {
     final onTap = widget.onAvatarTap;
     final onLongPress = withLongPress ? widget.onAvatarLongPress : null;
@@ -1002,12 +954,8 @@ class _MessageBubbleState extends State<MessageBubble>
     ),
   );
 
-  // MARK: - Content router
 
   Widget _contentBody(bool outgoing) {
-    // Every build allocates a fresh recognizer per link span. Drain them here,
-    // once per build, instead of inside _textBubble: the grouped-caption and
-    // file-album paths never reach it and used to grow the list until dispose.
     for (final r in _linkRecognizers) {
       r.dispose();
     }
@@ -1021,8 +969,6 @@ class _MessageBubbleState extends State<MessageBubble>
       body = _callBubble(outgoing);
       return _withCommentsOnly(_withFloatingMeta(body, outgoing), outgoing);
     }
-    // Only the card-shaped contents below read these; text, media, sticker and
-    // voice messages would otherwise resolve three colour chains and drop them.
     late final specialBackground = outgoing
         ? _outgoingBubbleColor
         : _incomingBubbleColor;
@@ -1134,7 +1080,6 @@ class _MessageBubbleState extends State<MessageBubble>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Static thumbnail until the webm decodes its first frame.
             if (message.image != null && !_videoStickerReady)
               TDImage(
                 photo: message.image,
@@ -1415,7 +1360,6 @@ class _MessageBubbleState extends State<MessageBubble>
       padding: outgoing
           ? EdgeInsets.zero
           : const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-      // One glyph wide either way, so it needs no flex row to hold it.
       child: message.isEdited
           ? AppIcon(
               HeroAppIcons.penToSquare,
@@ -1440,9 +1384,6 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  /// The in-flight spinner is the only delivery state that needs a ticker, so
-  /// the settled tick gets a plain painter instead of an AnimationController
-  /// per outgoing bubble.
   Widget _deliveryTick({Color? sentColor}) {
     if (message.isSending && !message.isSendAcknowledged) {
       return _MessageDeliveryIndicator(
@@ -1452,8 +1393,6 @@ class _MessageBubbleState extends State<MessageBubble>
     }
     return _MessageDeliverySettled(
       isRead: widget.isRead,
-      // The tick is ink on the bubble like the text is, so it follows the same
-      // colour. Hardcoding white lost it entirely on a light outgoing fill.
       color: widget.isRead
           ? const Color(0xFF34C759)
           : (sentColor ?? _outgoingTextColor),
@@ -1642,7 +1581,6 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  // MARK: - Text bubble
 
   Widget _diceBubble(bool outgoing) {
     final c = _colors;
@@ -1721,9 +1659,6 @@ class _MessageBubbleState extends State<MessageBubble>
         ? const EdgeInsets.symmetric(horizontal: 10, vertical: 7)
         : const EdgeInsets.symmetric(horizontal: 12, vertical: 9);
     final effectivePadding = bubblePadding;
-    // Preview geometry must use the bubble's content box, not its outer
-    // maximum. Otherwise the parent padding clamps only the width while the
-    // preview keeps a height calculated for the wider outer box.
     final previewMaxWidth = math.max(
       1.0,
       _bubbleMaxWidth() - effectivePadding.horizontal,
@@ -1858,8 +1793,6 @@ class _MessageBubbleState extends State<MessageBubble>
       constraints: BoxConstraints(maxWidth: _bubbleMaxWidth()),
       padding: bubblePadding,
       borderRadius: _messageBorderRadius(6),
-      // A plain text message is one span block; the column around it would
-      // only re-derive the size the child already has.
       child: parts.length == 1
           ? parts.first
           : Column(
@@ -1873,9 +1806,6 @@ class _MessageBubbleState extends State<MessageBubble>
   String? _emojiOnlyKey;
   bool _emojiOnlyValue = false;
 
-  /// The answer is nearly always "no" and never changes for a given message, so
-  /// it is memoised; the scan itself walks the source lazily and quits on the
-  /// first ordinary character instead of building a stripped copy first.
   bool _isEmojiOnlyText(String text) {
     if (_emojiOnlyKey == text) return _emojiOnlyValue;
     _emojiOnlyKey = text;
@@ -1900,7 +1830,6 @@ class _MessageBubbleState extends State<MessageBubble>
     return true;
   }
 
-  /// The set `RegExp(r'\s')` matches, which is what this check used to strip.
   bool _isWhitespaceRune(int rune) =>
       rune == 0x20 ||
       (rune >= 0x09 && rune <= 0x0D) ||
@@ -2390,8 +2319,6 @@ class _MessageBubbleState extends State<MessageBubble>
           ),
           child: Row(
             children: [
-              // Only the glyph depends on the player, and the player is a
-              // global that notifies ~17 times a second while anything plays.
               AnimatedBuilder(
                 animation: player,
                 builder: (context, _) => AppIcon(
@@ -3244,9 +3171,6 @@ class _MessageBubbleState extends State<MessageBubble>
               ? _outgoingTextColor.withValues(alpha: 0.10)
               : c.searchFill.withValues(alpha: 0.85)
         : _messageAccentFill(previewLine);
-    // Decorative bubbles may contain ornaments across their stretchable
-    // center. Precomposing the preview fill keeps those pixels from showing
-    // through the card while retaining the same tint.
     final cardBackground = translucentBackground;
 
     return GestureDetector(
@@ -3339,7 +3263,6 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  // MARK: - Music
 
   Widget _musicCard(MessageMusic music, bool outgoing) {
     final c = _colors;
@@ -3349,9 +3272,6 @@ class _MessageBubbleState extends State<MessageBubble>
     final player = MusicPlayerController.shared;
     final canPlay = music.file != null && widget.onPlayMusic != null;
     final toggle = canPlay ? () => widget.onPlayMusic!(message) : null;
-    // The player notifies ~17 times a second while any track plays, and it is a
-    // global singleton — so the card chrome, title and performer stay outside
-    // the builders. Only the cover art and the progress row read the position.
     final card = Container(
       width: maxWidth,
       decoration: BoxDecoration(
@@ -3623,12 +3543,7 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  // MARK: - Call log bubble (custom: icon + status, tap to redial)
 
-  /// A messageCall rendered like the reference app's call-log bubble: a phone/video glyph plus
-  /// the call's outcome (通话时长 MM:SS when it connected, otherwise 已取消 /
-  /// 未接听 / 已拒绝). Tapping the bubble places the same kind of call again
-  /// (点击重拨). The glyph sits toward the bubble's outer edge like profile.
   Widget _callBubble(bool outgoing) {
     final isVideo = message.callIsVideo;
     final connected = message.callDuration > 0;
@@ -3656,7 +3571,7 @@ class _MessageBubbleState extends State<MessageBubble>
                 : AppStringKeys.messageBubbleCallMissed,
           );
           missed = !outgoing;
-        default: // HungUp / Empty / Disconnected with no duration
+        default:
           label = AppStrings.t(AppStringKeys.messageBubbleCallCanceled);
       }
     }
@@ -3669,7 +3584,6 @@ class _MessageBubbleState extends State<MessageBubble>
         outgoing: outgoing,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         borderRadius: _messageBorderRadius(6),
-        // Call glyph always on the left of the status, both directions.
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -3695,7 +3609,6 @@ class _MessageBubbleState extends State<MessageBubble>
     return h > 0 ? '${two(h)}:${two(m)}:${two(sec)}' : '${two(m)}:${two(sec)}';
   }
 
-  /// 转发 attribution shown above forwarded content: `转发自 …`.
   Widget _forwardHeader(bool outgoing) {
     final textColor = _messageForwardedNameColor(outgoing);
     final accent = _messageColors == null && !outgoing
@@ -3740,7 +3653,6 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  /// 引用 quote block shown above a reply's text.
   Widget _replyQuote(bool outgoing) {
     final labelColor = _messageReplyNameColor(outgoing);
     final faded = _messageReplyTextColor(outgoing);
@@ -3852,19 +3764,14 @@ class _MessageBubbleState extends State<MessageBubble>
     return Color.lerp(base, dark ? Colors.white : Colors.black, 0.10)!;
   }
 
-  // URLs (group 1), @username mentions (group 2), and #hashtags (group 3).
-  // The lookbehind stops email local-parts (user@host), @@ and ## from being
-  // matched as mentions/tags.
   static final _linkRegExp = RegExp(
     r'((?:https?:\/\/|www\.|t\.me\/|tg:\/\/)[^\s]+)|(?<![\w@])(@[A-Za-z0-9_]{4,32})|(?<![\w#])(#[A-Za-z0-9_\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+)',
     caseSensitive: false,
     unicode: true,
   );
 
-  /// Trailing inline meta: delivery progress, replaced by edit status.
   InlineSpan _metaSpan(bool outgoing) {
     final faint = _messageTimeColor(outgoing);
-    // At most one glyph, so it needs no flex row to hold it.
     final Widget glyph;
     if (widget.message.isEdited) {
       glyph = AppIcon(
@@ -4620,7 +4527,6 @@ class _MessageBubbleState extends State<MessageBubble>
     return trimmed.startsWith('#') ? trimmed : '#$trimmed';
   }
 
-  // MARK: - Image
 
   int _cachePx(double logical) =>
       (logical * MediaQuery.devicePixelRatioOf(context)).ceil();
@@ -4686,9 +4592,6 @@ class _MessageBubbleState extends State<MessageBubble>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Its own layer, so the letterbox gaussian is rastered once and
-          // composited afterwards instead of re-running whenever a sibling
-          // (the photo's download progress) dirties the bubble.
           RepaintBoundary(
             child: ImageFiltered(
               imageFilter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
@@ -4807,9 +4710,6 @@ class _MessageBubbleState extends State<MessageBubble>
         ? message.translationEntities
         : _activeTextEntities;
     return Container(
-      // The media owns the attached bubble's width. Letting the caption (or
-      // its translation/attribution) size this column leaves an empty strip
-      // beside portrait previews, which have a smaller fixed width.
       width: mediaWidth,
       decoration: BoxDecoration(
               color: outgoing ? _outgoingBubbleColor : _incomingBubbleColor,
@@ -4899,8 +4799,6 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  /// Whether this message's video plays inside the bubble, the way official
-  /// clients autoplay GIFs, video messages and short videos.
   bool get _autoplaysVideoInline => shouldAutoplayVideoInline(
     contentType: message.contentType,
     fileSizeBytes: message.videoFileSize,
@@ -4908,9 +4806,6 @@ class _MessageBubbleState extends State<MessageBubble>
     height: message.imageHeight,
   );
 
-  /// A video message: a muted looping preview when it is small enough to play
-  /// in place, otherwise its thumbnail with a play button. Both carry the
-  /// duration badge, and tapping either opens the full player with sound.
   Widget _videoContent(bool outgoing) {
     final size = _imageDisplaySize();
     final caption = _caption();
@@ -4950,7 +4845,6 @@ class _MessageBubbleState extends State<MessageBubble>
                     )
                   : Container(color: Colors.black26),
             ),
-            // Play button.
             if (!inline)
               Center(
                 child: Container(
@@ -4968,7 +4862,6 @@ class _MessageBubbleState extends State<MessageBubble>
                   ),
                 ),
               ),
-            // Duration badge, with the muted marker an inline preview needs.
             if (dur > 0)
               Positioned(
                 left: 6,
@@ -5022,8 +4915,6 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  /// Telegram GIFs arrive as silent MP4 animations. Start them inline and
-  /// repeat indefinitely; tapping still opens the full media viewer.
   Widget _animationContent(bool outgoing) {
     final size = _imageDisplaySize();
     final caption = _caption();
@@ -5081,8 +4972,6 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  /// The height budget a rich block's media shares with ordinary chat media:
-  /// the 320 pixel box, and never taller than a narrow pane is wide.
   double _richMediaMaxHeight(double maxWidth) =>
       math.min(maxWidth, telegramChatMediaPreviewMaxHeight);
 
@@ -5119,7 +5008,6 @@ class _MessageBubbleState extends State<MessageBubble>
         : Size(maxSide * aspect, maxSide);
   }
 
-  // MARK: - Voice
 
   Widget _voiceBubble(MessageVoice voice, bool outgoing) {
     final c = _colors;
@@ -5298,7 +5186,6 @@ class _MessageBubbleState extends State<MessageBubble>
   static String _durationString(int seconds) =>
       '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
 
-  // MARK: - Location
 
   Widget _locationBubble(MessageLocation location) {
     final c = _colors;
@@ -5359,7 +5246,6 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  // MARK: - File card
 
   Widget _fileCard(MessageDocument _, bool outgoing) =>
       _fileAlbumCard(<ChatMessage>[message], outgoing);
@@ -5720,8 +5606,6 @@ class _RichDetailsBlockState extends State<_RichDetailsBlock> {
   }
 }
 
-/// Static map preview for a location message. Telegram renders the map tile via
-/// getMapThumbnailFile (no marker); we overlay a centre pin.
 class _MapThumbnail extends StatefulWidget {
   const _MapThumbnail({
     required this.latitude,
@@ -5819,8 +5703,6 @@ class _LatexView extends StatelessWidget {
   }
 }
 
-/// The settled tick: no controller, no ticker. Only the in-flight spinner needs
-/// an animation, and every outgoing bubble used to mount one to draw a circle.
 class _MessageDeliverySettled extends StatelessWidget {
   const _MessageDeliverySettled({
     required this.isRead,
@@ -5880,9 +5762,6 @@ class _MessageDeliveryIndicatorState extends State<_MessageDeliveryIndicator>
   Widget build(BuildContext context) => SizedBox.square(
     key: const ValueKey('messageDeliverySending'),
     dimension: widget.size,
-    // Its own layer: the painter repaints on every tick, and without a
-    // boundary that re-records the whole outgoing bubble at 60fps for the
-    // entire send.
     child: RepaintBoundary(
       child: CustomPaint(
         painter: _MessageDeliveryPainter(

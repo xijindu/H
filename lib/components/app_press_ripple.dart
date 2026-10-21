@@ -5,9 +5,6 @@ import 'package:flutter/material.dart';
 import '../theme/app_motion.dart';
 import '../theme/app_theme.dart';
 
-/// Paints immediate, touch-positioned feedback without taking part in the
-/// gesture arena, so the wrapped control keeps its tap, long-press, and swipe
-/// behavior.
 class AppPressRipple extends StatefulWidget {
   const AppPressRipple({
     super.key,
@@ -126,10 +123,6 @@ class _AppPressRippleState extends State<AppPressRipple>
   @override
   Widget build(BuildContext context) {
     final origin = _origin;
-    // A square-cornered wrapper with no ripple has nothing to clip, but the
-    // rasteriser still pushes a rounded-rect clip layer per instance — and the
-    // chat list wraps every row in one. Clip.none skips the layer while keeping
-    // the wrapper in the tree, so the child's element identity survives a press.
     final hasNothingToClip =
         origin == null && widget.borderRadius == BorderRadius.zero;
     return Listener(

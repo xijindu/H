@@ -61,7 +61,6 @@ class MainActivity : FlutterFragmentActivity() {
     private val languageIdentifier by languageIdentifierDelegate
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Let Flutter paint under the status bar and gesture/nav bar.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         super.onCreate(savedInstanceState)
         pendingSharePayload = parseIncomingShareIntent(intent)
@@ -152,13 +151,9 @@ class MainActivity : FlutterFragmentActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
         )
         callMedia = plugin
-        // Embed call video surfaces (TextureViewRenderer) into the widget tree.
         flutterEngine.platformViewsController.registry
             .registerViewFactory("handy/video_view", VideoViewFactory(plugin))
 
-        // App info for the GitHub-release update checker: the device's supported
-        // ABIs (preference-ordered, so we can match the right per-ABI APK asset)
-        // and the installed version name (the semver compared to the latest tag).
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "handy/app_info")
             .setMethodCallHandler { call, result ->
                 if (call.method == "info") {
@@ -290,8 +285,6 @@ class MainActivity : FlutterFragmentActivity() {
                     "restore" -> {
                         runOnUiThread {
                             val attributes = window.attributes
-                            // -1 relinquishes the per-window override and lets
-                            // Android apply the user's system brightness.
                             attributes.screenBrightness =
                                 WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
                             window.attributes = attributes
@@ -430,12 +423,6 @@ class MainActivity : FlutterFragmentActivity() {
         window.decorView.setOnDragListener { _, event -> handleMediaDragEvent(event) }
     }
 
-    /**
-     * Exposes Android's inbound share contract to Dart without handing Dart a
-     * provider URI that may stop being readable after the activity is resumed.
-     * Files are copied into the app cache on a worker thread and are deleted by
-     * Dart once the send flow finishes or is cancelled.
-     */
     private fun configureShareIntentChannel(flutterEngine: FlutterEngine) {
         shareIntentChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -475,8 +462,6 @@ class MainActivity : FlutterFragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val payload = parseIncomingShareIntent(intent) ?: return
-        // Keep a copy for the initial() handshake as well. The payload id lets
-        // Dart de-duplicate it if both paths race during a warm start.
         pendingSharePayload = payload
         runOnUiThread {
             shareIntentChannel?.invokeMethod("share", payload)
@@ -756,8 +741,6 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private fun registerPlugins(flutterEngine: FlutterEngine) {
-        // Keep per-plugin isolation while matching the generated production registry.
-        // test/android_plugin_registration_test.dart guards dependency drift.
         val pluginClasses = buildList {
             add("com.llfbandit.app_links.AppLinksPlugin")
             add("com.ryanheise.audio_session.AudioSessionPlugin")
@@ -878,7 +861,6 @@ class MainActivity : FlutterFragmentActivity() {
             try {
                 muxer?.release()
             } catch (_: Exception) {
-                // The muxer may not have reached its started state.
             }
         }
     }

@@ -3,9 +3,6 @@ import 'package:flutter/services.dart';
 
 import '../chat/outgoing_attachment.dart';
 
-/// The data Android provides for an ACTION_SEND or ACTION_SEND_MULTIPLE
-/// launch. Provider URIs stay native; Dart receives private cache paths only
-/// after [copyFiles] has completed.
 @immutable
 class AndroidShareIntentPayload {
   const AndroidShareIntentPayload({
@@ -78,9 +75,6 @@ class AndroidSharedFile {
   }
 }
 
-/// Android's share target bridge. It deliberately owns only intent parsing and
-/// temporary-file lifecycle; the UI remains the same chat picker and media
-/// preview used for content shared from inside Mithka.
 class AndroidShareIntentController extends ChangeNotifier {
   AndroidShareIntentController._();
 
@@ -103,10 +97,7 @@ class AndroidShareIntentController extends ChangeNotifier {
     try {
       final initial = await _channel.invokeMethod<dynamic>('initial');
       if (initial is Map) _enqueue(AndroidShareIntentPayload.fromMap(initial));
-    } on PlatformException {
-      // A share target can be started while Flutter is still attaching its
-      // engine. The native side keeps the payload for the next initial call.
-    }
+    } on PlatformException {}
   }
 
   Future<void> _handleNativeCall(MethodCall call) async {
@@ -161,9 +152,6 @@ class AndroidShareIntentController extends ChangeNotifier {
     if (!supported) return;
     try {
       await _channel.invokeMethod<void>('deleteFiles', paths.toList());
-    } on PlatformException {
-      // Cache cleanup is best effort; native code rejects paths outside its
-      // own cache directory even if a caller supplies one accidentally.
-    }
+    } on PlatformException {}
   }
 }

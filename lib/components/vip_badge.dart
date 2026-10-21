@@ -3,7 +3,6 @@
 import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 
-/// Compact VIP indicator shown next to a Telegram Premium user's name.
 class VipBadge extends StatelessWidget {
   const VipBadge({super.key});
 

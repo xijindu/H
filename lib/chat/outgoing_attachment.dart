@@ -190,9 +190,6 @@ class OutgoingAttachmentBatch {
       attachments.first.albumKind != AttachmentAlbumKind.standalone;
 }
 
-/// Partitions attachments without reordering them. TDLib albums contain 2-10
-/// compatible items: photos and videos may mix, while documents and audio can
-/// only be grouped with their own kind. Animations are always standalone.
 List<OutgoingAttachmentBatch> groupOutgoingAttachments(
   List<OutgoingAttachment> attachments,
 ) {

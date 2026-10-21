@@ -1,26 +1,13 @@
-﻿//
-//  release_feed.dart
-//
-//  The project's GitHub Releases feed, shared by the Android APK prompt. The
-//  repo is public, so the API needs no auth. Every caller treats a failed
-//  request as "nothing to offer" rather than an error, because the checks run
-//  unasked on launch.
-//
-
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 
-/// GitHub rejects requests without a User-Agent.
 const releaseFeedUserAgent = 'handy-update-checker';
 
 const _owner = 'iebb';
 const _repo = 'Handy';
 
-/// Where a user is sent when an in-place update is not something this install
-/// can do for them.
 const releasesPageUrl = 'https://github.com/$_owner/$_repo/releases';
 
-/// One downloadable file attached to a release.
 class ReleaseAsset {
   const ReleaseAsset({
     required this.name,
@@ -32,24 +19,17 @@ class ReleaseAsset {
   final String name;
   final String url;
 
-  /// Bytes GitHub reports for the asset, or 0 when it is unknown.
   final int size;
 
-  /// Lowercase hex SHA-256 GitHub publishes for the asset, or null on releases
-  /// that predate the digest field. A caller that requires verification fails
-  /// closed, so this is what makes a release installable.
   final String? sha256;
 }
 
 class ReleaseInfo {
   const ReleaseInfo({required this.version, required this.assets});
 
-  /// Semver without the leading `v`, taken from the release tag.
   final String version;
   final List<ReleaseAsset> assets;
 
-  /// The single asset whose name ends with [suffix], or null when this release
-  /// does not carry a package for the caller's platform.
   ReleaseAsset? assetEndingWith(String suffix) {
     for (final asset in assets) {
       if (asset.name.endsWith(suffix)) return asset;
@@ -58,10 +38,6 @@ class ReleaseInfo {
   }
 }
 
-/// The latest stable release, or null when the request fails or is malformed.
-///
-/// Nightly builds are published as pre-releases, so `releases/latest` answers
-/// with the newest stable tag on every channel.
 Future<ReleaseInfo?> fetchLatestRelease({
   String owner = _owner,
   String repo = _repo,
@@ -85,7 +61,6 @@ Future<ReleaseInfo?> fetchLatestRelease({
   }
 }
 
-/// Reads one `releases/latest` document, or null when the tag is missing.
 ReleaseInfo? parseReleaseInfo(String body) {
   final json = jsonDecode(body);
   if (json is! Map<String, dynamic>) return null;
@@ -109,8 +84,6 @@ ReleaseInfo? parseReleaseInfo(String body) {
   );
 }
 
-/// GitHub reports digests as `sha256:<hex>`; anything else is treated as absent
-/// so a caller that requires verification fails closed.
 String? _hexDigest(String? digest) {
   const prefix = 'sha256:';
   if (digest == null || !digest.startsWith(prefix)) return null;
@@ -119,7 +92,6 @@ String? _hexDigest(String? digest) {
   return hex;
 }
 
-/// >0 if a>b, <0 if a<b, 0 if equal — compares the X.Y.Z triple.
 int compareReleaseVersions(String a, String b) {
   final pa = _triple(a);
   final pb = _triple(b);
@@ -130,7 +102,6 @@ int compareReleaseVersions(String a, String b) {
 }
 
 List<int> _triple(String version) {
-  // Strip any "+build" / pre-release suffix, then parse up to 3 numbers.
   final core = version.split(RegExp(r'[+\-]')).first;
   final numbers = core
       .split('.')

@@ -1,11 +1,4 @@
-﻿//
-//  confirm_dialog.dart
-//
-//  iOS-native confirm sheet (CupertinoAlertDialog) replacing Material's
-//  AlertDialog app-wide. Returns true when the confirm action is chosen.
-//
-
-import 'package:flutter/cupertino.dart';
+﻿import 'package:flutter/cupertino.dart';
 
 import '../l10n/app_localizations.dart';
 

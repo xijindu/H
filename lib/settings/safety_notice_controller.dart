@@ -9,7 +9,6 @@ bool shouldShowSafetyNotice({
   required bool acknowledged,
 }) => restricted && !disabled && !acknowledged;
 
-/// Local preference for the Telegram Terms-of-Service safety notice overlay.
 class SafetyNoticeController extends ChangeNotifier {
   SafetyNoticeController(this._prefs)
     : _disabled = _prefs.getBool(_disabledKey) ?? false;
@@ -19,7 +18,6 @@ class SafetyNoticeController extends ChangeNotifier {
   final SharedPreferences _prefs;
   bool _disabled;
 
-  /// The opt-out defaults to false, preserving the notice for existing users.
   bool get disabled => _disabled;
 
   set disabled(bool value) {

@@ -1,11 +1,3 @@
-//
-//  chat_view.dart
-//
-//  The conversation screen. A gray canvas hosting a scrolling transcript of
-//  bubbles, time separators and system banners, with a flat header and a pinned
-//  input bar. Backed by ChatViewModel. Port of the Swift `ChatView`.
-//
-
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -127,9 +119,6 @@ bool chatViewRequiresFullSync({
   required int nextRevision,
 }) => previousRevision != nextRevision;
 
-/// Rebuilds a narrow chat fragment only while its route is active. Hidden
-/// split-view/tab routes deliberately detach from high-frequency TDLib bubble
-/// and header updates; their next TickerMode build reads the latest model.
 class _ActiveChatListenableBuilder extends StatefulWidget {
   const _ActiveChatListenableBuilder({
     required this.listenable,
@@ -396,10 +385,6 @@ class _RenderMessageSelectionHitTestPassthrough extends RenderProxyBox {
           selectionAreaKey: key,
           globalPosition: localToGlobal(position),
         )) {
-      // Keep the visible overlay controls first, then add only the selected
-      // text region underneath. Letting the Stack hit-test the whole transcript
-      // would also admit its scroll and swipe-to-reply recognizers while the
-      // action menu is open.
       final overlayHit = super.hitTest(result, position: position);
       final selectionRoot = key.currentContext?.findRenderObject();
       if (selectionRoot is RenderBox &&
@@ -820,13 +805,9 @@ class _ChatEditChoiceDialog<T> extends StatelessWidget {
   }
 }
 
-/// Lets an adaptive parent save a chat's measured viewport before replacing
-/// its detail pane. Waiting for [State.dispose] is too late because the render
-/// tree has already detached, so message geometry is unavailable.
 class ChatViewExitController {
   VoidCallback? _prepareExit;
 
-  /// Registers the currently visible chat and returns a matching detacher.
   VoidCallback register(VoidCallback prepareExit) {
     _prepareExit = prepareExit;
     return () {
@@ -837,9 +818,6 @@ class ChatViewExitController {
   void prepareExit() => _prepareExit?.call();
 }
 
-/// Keeps the chat header full-width while reserving a trailing context pane
-/// only below it. This avoids the empty header gutter produced by placing the
-/// context pane beside the entire chat view.
 @visibleForTesting
 class ChatHeaderTrailingPaneLayout extends StatelessWidget {
   const ChatHeaderTrailingPaneLayout({
@@ -923,8 +901,6 @@ class ChatView extends StatefulWidget {
   final int chatId;
   final String title;
 
-  /// When set, the transcript renders this single forum topic as an ordinary
-  /// chat (see ThemeController.forumTopicsAsGroupChat).
   final int? forumTopicId;
   final int? initialMessageId;
   final ChatMessage? seedMessage;
@@ -939,9 +915,6 @@ class ChatView extends StatefulWidget {
   final bool requestComposerFocusOnReady;
   final ValueChanged<int?>? onOpenTopicMode;
 
-  /// Lets an owning shell switch this chat to a topic transcript (or the
-  /// whole chat for null) when topics show as a regular group, so the new
-  /// transcript is built with the shell's current wiring.
   final ValueChanged<int?>? onOpenTopicTranscript;
   final ValueChanged<ChatKind>? onChatKindResolved;
   final VoidCallback? onInfoPressed;
@@ -954,8 +927,6 @@ class ChatView extends StatefulWidget {
   State<ChatView> createState() => _ChatViewState();
 }
 
-/// Drops reusable transcript and scroll snapshots after an OS memory warning.
-/// The active chat owns its own view model and is not affected.
 void clearChatMemoryCaches() {
   _ChatViewState._sessionCache.clear();
   _ChatViewState._sessionScrollSnapshots.clear();
@@ -1067,8 +1038,6 @@ class _TranscriptEntry {
   bool get isImageGroup => mediaAlbumKind == ChatMediaAlbumKind.visual;
   bool get isDocumentGroup => mediaAlbumKind == ChatMediaAlbumKind.document;
 
-  /// Stable identity for element reuse across index shifts (history pages
-  /// prepend and shift every index).
   late final Key key = ValueKey(
     isBlockedRun
         ? 'blocked-${last.id}'
@@ -1096,13 +1065,6 @@ class _ChatScrollSnapshot {
   final double? anchorViewportOffset;
 }
 
-/// Reads the keyboard inset in an element of its own.
-///
-/// The chat screen only uses the inset for scroll bookkeeping, but reading it
-/// from `build()` put `_ChatViewState` on the viewInsets aspect — which the
-/// keyboard animates every frame, rebuilding the header, composer and every
-/// materialized bubble. Rebuilding this wrapper hands back the very same child
-/// widget, so `Element.updateChild` short-circuits the whole subtree.
 class _KeyboardInsetProbe extends StatelessWidget {
   const _KeyboardInsetProbe({required this.onInset, required this.child});
 
@@ -1126,9 +1088,9 @@ class _ChatViewState extends State<ChatView> {
   ChatKind? _reportedChatKind;
   late final TranslationController _translation;
   late final ScrollController _scroll;
-  final _pinnedKey = GlobalKey(); // the pinned message's row, for scroll-to
-  final _targetKey = GlobalKey(); // arbitrary linked/anchored message row
-  final _unreadKey = GlobalKey(); // the "以下为新消息" divider, for entry scroll
+  final _pinnedKey = GlobalKey();
+  final _targetKey = GlobalKey();
+  final _unreadKey = GlobalKey();
   final _transcriptViewportKey = GlobalKey();
   final _newerTranscriptSliverKey = GlobalKey();
   final _firstContactLayoutKey = GlobalKey();
@@ -1150,22 +1112,22 @@ class _ChatViewState extends State<ChatView> {
   bool _reactivationSyncScheduled = false;
   ChatMessage? _actionTarget;
   MessageTextQuote? _actionQuote;
-  Rect? _actionRect; // bounds in the action-overlay Stack's coordinate space
+  Rect? _actionRect;
   final GlobalKey _actionOverlayKey = GlobalKey();
   GlobalKey<SelectionAreaState>? _mobileTextSelectionAreaKey;
   int? _mobileTextSelectionMessageId;
   bool _mobileTextSelectionActive = false;
   Offset? _lastActionPointerGlobalPosition;
   MessageActionSource _actionSource = MessageActionSource.normal;
-  bool _reactionExpanded = false; // full reaction picker vs. quick bar
-  String _reactionTab = 'standard'; // 'standard' or a custom-emoji pack id
+  bool _reactionExpanded = false;
+  String _reactionTab = 'standard';
   MessageReactionAvailability? _actionReactionAvailability;
   int _actionReactionAvailabilityGeneration = 0;
   int _lastCount = 0;
-  bool _didInitialScroll = false; // one-time entry positioning has run
-  bool _showJumpDown = false; // scrolled up → show jump-to-bottom button
-  bool _bannerDismissed = false; // "N条新消息" banner dismissed / caught up
-  Timer? _bannerTimer; // auto-hides the banner a few seconds after it appears
+  bool _didInitialScroll = false;
+  bool _showJumpDown = false;
+  bool _bannerDismissed = false;
+  Timer? _bannerTimer;
   Timer? _readSyncTimer;
   int? _scrollTargetId;
   int _scrollTargetGeneration = 0;
@@ -1183,21 +1145,12 @@ class _ChatViewState extends State<ChatView> {
   bool _showEntryUnreadBanner = false;
   late final ChatMessageSearchController _search;
 
-  /// Mirrors `_search.isActive`, so the controller's per-keystroke
-  /// notifications only setState when the value this build reads changed.
   bool _searchActive = false;
 
-  /// Whether the last layout had room for the results pane. Read by callbacks
-  /// that run outside build, where the constraints are no longer at hand.
   bool _searchResultsPaneVisible = false;
 
-  /// The hit the search cursor is sitting on. Unlike [_scrollTargetId] this
-  /// survives the jump that put it there, so the bubble stays marked while the
-  /// user steps through the rest of the results.
   int? _searchHighlightId;
   double _keyboardInset = 0;
-  // Bumped once per ChatView build; the shell LayoutBuilder reuses its subtree
-  // whenever the generation and the available width are both unchanged.
   int _shellLayoutGeneration = 0;
   int _cachedShellLayoutGeneration = -1;
   double _cachedShellLayoutWidth = double.nan;
@@ -1264,7 +1217,6 @@ class _ChatViewState extends State<ChatView> {
   final ChatSessionCacheWriteGate _sessionCacheWriteGate =
       ChatSessionCacheWriteGate();
 
-  /// Gap (seconds) between messages that triggers a fresh time separator.
   static const _separatorGap = 300;
   static const _initialTargetAlignment = 0.30;
   static const _initialUnreadAlignment = 0.12;
@@ -1357,8 +1309,6 @@ class _ChatViewState extends State<ChatView> {
       _transcriptPivot = TranscriptPivot(savedPivotMessageId!);
       _transcriptPivotFrozen = savedPivotMessageId != _pendingTranscriptOrderId;
     } else if (savedPivotMessageId != null && !hasSessionTranscript) {
-      // Drop the orphan pivot from the in-memory snapshot so a later reopen
-      // with a fresh transcript cache does not reintroduce the thin after-arm.
       final snapshot = _sessionScrollSnapshots[_sessionKey];
       if (snapshot != null && snapshot.pivotMessageId != null) {
         _sessionScrollSnapshots[_sessionKey] = _ChatScrollSnapshot(
@@ -1460,11 +1410,8 @@ class _ChatViewState extends State<ChatView> {
         _markReadAtBottomIfNeeded();
       }
     });
-    // Sync blocked-user-hiding toggle from theme.
     final theme = context.read<ThemeController>();
     BlockedUserService.shared.enabled = theme.hideBlockedUserMessages;
-    // Load premium status early so the message menu can correctly hide the
-    // emoji add/表情包 actions for non-premium users (the menu reads it).
     EmojiStore.shared.loadIfNeeded();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -1556,10 +1503,6 @@ class _ChatViewState extends State<ChatView> {
       towardOlderMessages: pos.userScrollDirection == ScrollDirection.forward,
       isAtBottom: _isAtLoadedBottom(1),
     );
-    // Persist cheap scalar state while the finger is moving. Capturing an
-    // anchor walks every mounted transcript entry and performs layout-space
-    // conversions, so defer that work until scrolling settles or the view
-    // exits.
     _saveSessionScrollSnapshot(captureAnchor: false);
     _scheduleUnreadProgressUpdate();
     if (_selectionAnchorId != null && scrollingUp != _selectionScrollingUp) {
@@ -1591,7 +1534,6 @@ class _ChatViewState extends State<ChatView> {
       });
     }
     if (nearBottom) _markReadAtBottomIfNeeded();
-    // Show the jump-to-bottom button once scrolled up from the newest message.
     final show =
         !_isAtLoadedBottom() &&
         (_vm.anchoredHistory || distanceToLatest(pos) > 120);
@@ -1610,10 +1552,6 @@ class _ChatViewState extends State<ChatView> {
         unawaited(_continueHistoryIfNearLatest());
       }
     } else if (_initialTranscriptReady) {
-      // Once an older-page request is in flight, a turn toward the latest
-      // messages means the user has abandoned the pull. A later model frame
-      // must not reveal that page by jumping the viewport back to the oldest
-      // edge.
       if (notification.direction == ScrollDirection.reverse) {
         _revealLoadedOlderPage = false;
         _loadedOlderRevealPending = false;
@@ -1711,13 +1649,8 @@ class _ChatViewState extends State<ChatView> {
     ++_transcriptGestureGeneration;
     if (!_initialTranscriptReady) {
       _initialTranscriptPositionCancelled = true;
-      // Let the first real drag claim the viewport immediately, even if the
-      // opening unread correction has not completed its first frame yet.
       _initialTranscriptReady = true;
     }
-    // A delayed message jump must never win back the viewport after the user
-    // has touched the transcript. Clear the target before any subsequent
-    // history/layout await can reuse its key.
     if (_scrollTargetId != null) {
       setState(_invalidateScrollNavigation);
     } else {
@@ -1726,8 +1659,6 @@ class _ChatViewState extends State<ChatView> {
     _cancelSessionReopenNavigation();
     _cancelSessionScrollAnchorMaintenance();
     _maintainRestoredBottom = false;
-    // A hold cancels an in-flight driven scroll immediately. It does not claim
-    // the viewport permanently unless it becomes an actual drag.
     _cancelBottomFollow();
     _stopActiveTranscriptScroll();
     ++_shortTranscriptFillGeneration;
@@ -1762,8 +1693,6 @@ class _ChatViewState extends State<ChatView> {
     _showingFullyVisibleFirstContactHistory = false;
     _maintainSessionScrollAnchor = false;
     _maintainRestoredBottom = false;
-    // Do not freeze a thin after-center arm: that parks older history above the
-    // center while the open animation / first touch is still settling.
     if (shouldFreezeTranscriptPivot(
       latestArmIsShort: _isTranscriptShort(),
       canLoadOlder: _vm.canLoadOlder,
@@ -1890,8 +1819,6 @@ class _ChatViewState extends State<ChatView> {
 
   Widget _withExitState(Widget child) {
     return PopScope(
-      // Back closes search before it closes the chat, so a hit list never
-      // takes the whole conversation with it.
       canPop: !_search.isActive,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) {
@@ -1919,9 +1846,6 @@ class _ChatViewState extends State<ChatView> {
     if (viewportRenderObject is! RenderBox || !viewportRenderObject.attached) {
       return null;
     }
-    // Viewport-local coordinates: the offset is already relative to the
-    // viewport top, and stopping the transform walk at the viewport avoids the
-    // full ancestor chain per row.
     final viewportBottom = viewportRenderObject.size.height;
     int? visibleAnchorMessageId;
     double? visibleAnchorTop;
@@ -1972,9 +1896,6 @@ class _ChatViewState extends State<ChatView> {
     if (viewportRenderObject is! RenderBox || !viewportRenderObject.attached) {
       return;
     }
-    // Measured in the viewport's own space: a root-relative localToGlobal walks
-    // and multiplies the whole ancestor transform chain for every mounted row,
-    // once per scroll frame.
     final viewportRect = Offset.zero & viewportRenderObject.size;
     var changed = false;
     final newlyVisible = <ChatMessage>[];
@@ -2048,9 +1969,6 @@ class _ChatViewState extends State<ChatView> {
       final bottom = latest
           .localToGlobal(Offset(0, latest.size.height), ancestor: viewport)
           .dy;
-      // A center sliver clamps maxScrollExtent to zero even when its short
-      // final arm ends above the viewport bottom. Its real latest edge can
-      // be negative, with older messages filling the space above it.
       return clampScrollOffset(
         position,
         position.pixels + bottom + 8 - viewport.size.height,
@@ -2077,9 +1995,6 @@ class _ChatViewState extends State<ChatView> {
       }
       final target = _loadedBottomOffset;
       if (_scroll.position.pixels <= target + 1) return;
-      // Clamp only the empty trailing area after a resize or finished drag.
-      // Keep the pivot and the current history window; fetching latest here
-      // would discard an unread/search destination.
       _cancelBottomFollow();
       _scroll.jumpTo(target);
       _saveSessionScrollSnapshot();
@@ -2145,9 +2060,6 @@ class _ChatViewState extends State<ChatView> {
         _scrollTargetId == null) {
       _scheduleScrollToBottom(animated: false);
     }
-    // The keyboard changes the viewport height without rebuilding the shell
-    // any more, so the viewport-measuring sweeps _transcript() used to schedule
-    // on every keyboard frame have to be asked for here instead.
     _scheduleTranscriptPivotFreeze();
     _scheduleUnreadProgressUpdate();
     _scheduleShortFirstContactReveal();
@@ -2177,9 +2089,6 @@ class _ChatViewState extends State<ChatView> {
         _autoScrollPolicy.allowViewportPreservation();
         return;
       }
-      // Re-measure after this frame's layout before choosing min (fully
-      // visible first-contact history) versus max (the normal latest edge).
-      // This prevents a stale min correction followed by a max correction.
       _positionShortFirstContactHistoryIfItFits(requireAtLatest: false);
       unawaited(
         _moveToLoadedBottom(animated: shouldAnimate).whenComplete(() {
@@ -2426,9 +2335,6 @@ class _ChatViewState extends State<ChatView> {
     lastReadInboxId: _entryLastReadInboxId,
   );
 
-  /// Jump to the unread boundary captured when the chat opened. The live TDLib
-  /// boundary may already point at the newest message after the chat is marked
-  /// read, so it cannot be used to resolve this button later.
   Future<void> _jumpToFirstUnread() async {
     _claimTranscriptViewport();
     await _jumpToFirstUnreadImpl();
@@ -2477,9 +2383,6 @@ class _ChatViewState extends State<ChatView> {
       }
     }
 
-    // With a zero boundary (for example, a never-opened channel), TDLib has no
-    // concrete message to page around. Moving to the oldest loaded unread
-    // message still gives the control a useful, deterministic upward action.
     targetMessageId ??= _firstLoadedEntryUnreadMessageId();
     if (targetMessageId == null) {
       if (_scrollTargetId != null) setState(() => _setScrollTarget(null));
@@ -2605,9 +2508,6 @@ class _ChatViewState extends State<ChatView> {
     required int generation,
     required int readStateRevision,
   }) async {
-    // TDLib can deliver updateNewMessage and the paired unread-count update as
-    // separate events. Let the current event batch settle, then retry whenever
-    // either boundary changes during the read-only confirmation probe.
     await Future<void>.delayed(Duration.zero);
     if (!mounted || !_sessionReopenNavigationGuard.isCurrent(generation)) {
       return;
@@ -2705,8 +2605,6 @@ class _ChatViewState extends State<ChatView> {
         oldest != null &&
         previousOldestId != null &&
         oldest.id < previousOldestId;
-    // _isTranscriptShort walks every cached entry; nothing below moves the
-    // scroll position or the pivot, so one measurement serves all three tests.
     final latestArmIsShort = _isTranscriptShort();
     final hasPendingMessageTarget =
         _scrollTargetId != null ||
@@ -2782,8 +2680,6 @@ class _ChatViewState extends State<ChatView> {
         _olderHistoryExhaustedHint = false;
       }
     }
-    // The server-message scan only matters for a pending cutoff; as an argument
-    // it ran on every notification.
     if (_transcriptPivot?.cutoffMessageId == _pendingTranscriptOrderId &&
         shouldRebasePendingTranscriptPivot(
           pivot: _transcriptPivot,
@@ -2803,10 +2699,6 @@ class _ChatViewState extends State<ChatView> {
             _vm.initialLoaded &&
             !identical(_transcriptCacheMessages, _vm.messages));
     if (shouldResetParkedPivot) {
-      // Cold local pages may be followed by a larger remote hydration. Until
-      // the latest arm fills a viewport (or the user scrolls), let that fuller
-      // initial window establish the fixed cutoff. Also unpark a frozen newest
-      // pivot that already has older messages sitting in before-center.
       _resetTranscriptPivot();
     }
     final rebasedParkedShortArm = parkedShortArm || expandedInitialWindow;
@@ -2896,9 +2788,6 @@ class _ChatViewState extends State<ChatView> {
         });
       }
     }
-    // Telegram-style entry: once the initial history (incl. the unread
-    // boundary) is loaded, jump to the first unread message — or stay at the
-    // bottom when caught up. Runs exactly once per chat open.
     if (!_didInitialScroll && _vm.initialLoaded) {
       _captureEntryUnreadState();
       final firstEntryUnreadMessageId = _firstLoadedEntryUnreadMessageId();
@@ -2933,9 +2822,6 @@ class _ChatViewState extends State<ChatView> {
     } else if (_vm.initialLoaded && _vm.messages.isNotEmpty) {
       _scheduleShortTranscriptFill();
     }
-    // Keep the entry unread banner visible; only live-new-message banners
-    // auto-hide after a short delay. (Each new live message cancels the
-    // timer, so the countdown restarts from the latest arrival.)
     if (_liveNewMessageCount > 0 && _bannerTimer == null && !_bannerDismissed) {
       _bannerTimer = Timer(const Duration(seconds: 6), () {
         if (mounted) setState(() => _bannerDismissed = true);
@@ -2993,10 +2879,6 @@ class _ChatViewState extends State<ChatView> {
     _scrollTargetId = messageId;
   }
 
-  /// Makes an arbitrary loaded target the first child after the scroll view's
-  /// center sliver, so Flutter lays it out without depending on guessed row
-  /// heights. The transcript keeps the same chronological order on both sides
-  /// of the new pivot; only its zero scroll coordinate moves to the target.
   bool _stageMessageAtTranscriptCenter(int messageId) {
     if (!_scroll.hasClients) return false;
     ChatMessage? target;
@@ -3013,8 +2895,6 @@ class _ChatViewState extends State<ChatView> {
         !_transcriptPivotFrozen) {
       setState(() {
         _transcriptPivot = TranscriptPivot(cutoff);
-        // Async sender, preview, and media hydration must not reset the pivot
-        // before the target's final alignment passes have completed.
         _transcriptPivotFrozen = true;
       });
     }
@@ -3076,10 +2956,6 @@ class _ChatViewState extends State<ChatView> {
     (m) => !m.isOutgoing && !m.isService && _isEntryUnreadMessage(m.id),
   );
 
-  /// One-time positioning when a chat opens. This must never block painting:
-  /// a hidden transcript reads as a black screen in dark mode. We jump to the
-  /// deterministic estimate immediately and then do one zero-duration correction
-  /// after layout, without waiting to reveal the UI.
   Future<void> _completeInitialScroll() async {
     if (_shouldRestoreSessionScroll) {
       await _restoreSessionScrollPosition();
@@ -3105,9 +2981,6 @@ class _ChatViewState extends State<ChatView> {
       }
       if (_canFollowLoadedBottom() || shortUnreadTail) _scrollToBottom();
       if (shortUnreadTail) {
-        // Finish the short unread tail's bottom alignment before revealing it.
-        // Rebasing a one-row center otherwise exposes empty space, then the
-        // first gesture repairs it with a sudden jump to the newest message.
         for (var pass = 0; pass < 3; pass++) {
           await WidgetsBinding.instance.endOfFrame;
           if (!mounted || _initialTranscriptPositioningAborted) return;
@@ -3150,9 +3023,6 @@ class _ChatViewState extends State<ChatView> {
           return;
         }
       }
-      // A transcript can be evicted before its independently stored scroll
-      // anchor. Raw pixels belong to that old centered window, so never apply
-      // them to a new window (or one that no longer contains the anchor).
       final hasMatchingCachedWindow = _sessionRenderState != null;
       final anchorStillLoaded = _vm.messages.any(
         (message) => message.id == anchorMessageId,
@@ -3259,8 +3129,6 @@ class _ChatViewState extends State<ChatView> {
 
   Future<void> _positionInitialTranscript() async {
     if (!_scroll.hasClients || _initialTranscriptPositioningAborted) return;
-    // Build the resolved unread row before aligning it. Height estimates can
-    // skip it entirely in channels with long posts and mixed media.
     final decision = _initialViewportTarget();
     final initialTarget = decision.messageId;
     if (initialTarget != null &&
@@ -3283,8 +3151,6 @@ class _ChatViewState extends State<ChatView> {
       corrected = await _correctInitialPosition() || corrected;
       if (_initialTranscriptPositioningAborted) return;
     }
-    // Keep one target key through every alignment pass. Clearing it inside
-    // the loop leaves later passes pointing at a key that was never built.
     if (corrected && mounted && _scrollTargetId == initialTarget) {
       setState(() => _setScrollTarget(null));
     }
@@ -3390,10 +3256,6 @@ class _ChatViewState extends State<ChatView> {
       }
     }
     if (targetEntry == null) return null;
-    // The visibility retry loop calls this up to six times in a row, so it
-    // reuses the partition and key indexes _transcript() already cached rather
-    // than repartitioning the whole entry list and rescanning it per attempt.
-    // `older` holds beforePivot reversed, which is why it is walked forwards.
     final List<_TranscriptEntry> older;
     final List<_TranscriptEntry> newer;
     final int olderIndex;
@@ -3405,8 +3267,6 @@ class _ChatViewState extends State<ChatView> {
       older = _sliverCacheOlderEntries!;
       newer = _sliverCacheNewerEntries!;
       olderIndex = _sliverCacheOlderIndexByKey![targetEntry.key] ?? -1;
-      // The newer map is offset by the leading first-contact card, which is not
-      // an entry.
       final mapped = olderIndex >= 0
           ? null
           : _sliverCacheNewerIndexByKey![targetEntry.key];
@@ -3578,8 +3438,6 @@ class _ChatViewState extends State<ChatView> {
     });
   }
 
-  /// Unparks a frozen newest (or newest-like) pivot when older messages are
-  /// already in the model but only the after-center arm is visible.
   bool _repairParkedShortTranscriptPivot() {
     if (!mounted ||
         (_vm.anchoredHistory && !_isTranscriptShort()) ||
@@ -3619,8 +3477,6 @@ class _ChatViewState extends State<ChatView> {
         _initialTranscriptPositionCancelled) {
       return;
     }
-    // Repair does not need another network page: history may already sit in
-    // before-center under a frozen pivot.
     if (_repairParkedShortTranscriptPivot()) {
       setState(() {});
       await WidgetsBinding.instance.endOfFrame;
@@ -3638,8 +3494,6 @@ class _ChatViewState extends State<ChatView> {
       return;
     }
     if (!_isTranscriptShort()) return;
-    // A restored or touch-claimed freeze on a thin arm must not block fill;
-    // otherwise older pages stay in the before-center sliver forever.
     if (_transcriptPivotFrozen) {
       if (!shouldFreezeTranscriptPivot(
         latestArmIsShort: true,
@@ -3683,8 +3537,6 @@ class _ChatViewState extends State<ChatView> {
     }
     if (_canContinueShortTranscriptFill(generation)) {
       if (loadedAny) await _positionAfterShortFill(generation);
-      // An empty older page flips canLoadOlder without a model notification.
-      // Re-evaluate the first-contact card now that history is known complete.
       _scheduleShortFirstContactReveal();
     }
     if (_revealLoadedOlderPage && _vm.canLoadOlder) {
@@ -3708,18 +3560,10 @@ class _ChatViewState extends State<ChatView> {
 
   bool _isTranscriptShort() {
     if (!_scroll.hasClients) return true;
-    // An unread/search destination can contain just one or two very tall
-    // messages. A thin around-unread page may also fall back to latest history,
-    // clearing anchoredHistory without changing the unread entry destination.
-    // In either case, a low row count must not rebase a full-height message
-    // and jump past its unread divider to the bottom.
     if (_vm.anchoredHistory ||
         (_entryUnreadCount > 0 && !_shouldOpenAtBottom)) {
       return _scroll.position.maxScrollExtent <= 24;
     }
-    // With a center sliver, only the after-center arm defines the latest edge.
-    // A large negative min extent says nothing about whether that arm fills
-    // the viewport.
     return isLatestTranscriptArmShort(
       maxScrollExtent: _scroll.position.maxScrollExtent,
       afterCenterEntryCount: _latestArmEntryCount(),
@@ -3839,8 +3683,6 @@ class _ChatViewState extends State<ChatView> {
     final viewportContext = _transcriptViewportKey.currentContext;
     final viewportRenderObject = viewportContext?.findRenderObject();
     if (viewportRenderObject is RenderBox && viewportRenderObject.attached) {
-      // Viewport-local coordinates keep the transform walk off the ancestor
-      // chain above the scrollable.
       final viewportBottom = viewportRenderObject.size.height;
       var bestDistance = double.infinity;
       int? bestIndex;
@@ -4470,9 +4312,6 @@ class _ChatViewState extends State<ChatView> {
     if (index != messages.length - 1 || index == 0) return false;
     final a = messages[index], b = messages[index - 1];
     if (a.isService || b.isService) return false;
-    // 复读 (+1) only echoes identical plain-text OR identical photos. Audio,
-    // voice, location, stickers, polls, files, videos, contacts and call logs
-    // are never repeatable — even when their placeholder text happens to match.
     if (a.isPlainText && b.isPlainText) {
       final ta = a.text.trim(), tb = b.text.trim();
       return ta.isNotEmpty && ta == tb;
@@ -4554,8 +4393,6 @@ class _ChatViewState extends State<ChatView> {
       case VideoDisplayMode.fullscreen:
         break;
       case VideoDisplayMode.pictureInPicture:
-        // iOS has already handed the player to AVPictureInPictureController.
-        // There is no app-level PiP overlay fallback.
         Navigator.of(routeContext).maybePop();
       case VideoDisplayMode.split:
         VideoSplitController.instance.play(session);
@@ -4663,8 +4500,6 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// Header-bar launcher for a bot's menu mini app (mirrors the composer's
-  /// former pill action).
   Future<void> _openBotMenuApp(BotMenuInfo menu) async {
     final botUserId = _vm.peerUserId;
     if (botUserId == null) {
@@ -4981,9 +4816,6 @@ class _ChatViewState extends State<ChatView> {
     }
   }
 
-  /// Hides [message]'s sender on this device, in this group or everywhere.
-  /// Nothing reaches Telegram: unlike Block, the member is not blocked,
-  /// reported or told.
   Future<void> _hideSender(ChatMessage message) async {
     final senderId = message.senderId;
     if (senderId == null) return;
@@ -5067,8 +4899,6 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// Someone else's message in a group; never the group itself posting as
-  /// an anonymous admin, and not in broadcast channels.
   bool _canHideSender(ChatMessage message) {
     final senderId = message.senderId;
     return _vm.isGroup &&
@@ -5274,8 +5104,6 @@ class _ChatViewState extends State<ChatView> {
     }
     _chatLanguageDetectionRunning = true;
     unawaited(() async {
-      // ML Kit 语言检测已移除（自建 AI 功能已删除）。
-      // 直接标记检测完成，使用翻译控制器的目标语言作为默认值。
       _chatLanguageDetectionRunning = false;
       _chatLanguageDetectionComplete = true;
       _chatLanguageDetectionNewestMessageId = newestId;
@@ -5440,7 +5268,6 @@ class _ChatViewState extends State<ChatView> {
     }
     final locale = Localizations.localeOf(context);
     if (locale.languageCode == 'zh') {
-      // 所有中文统一使用简体中文作为翻译目标
       return 'zh';
     }
     return locale.languageCode;
@@ -5749,8 +5576,6 @@ class _ChatViewState extends State<ChatView> {
         : _wallpaperController.resolvedWallpaper(globalChatWallpaper);
   }
 
-  // Both run once per bubble; build() already resolved themingEnabled into the
-  // field, so re-subscribing to ThemeController per row is pure overhead.
   Color? _effectiveOutgoingColor() {
     if (!_themingEnabled) {
       return AppTheme.bubbleOutgoing;
@@ -5803,7 +5628,6 @@ class _ChatViewState extends State<ChatView> {
         ? null
         : chatThemeStyle ??
               _wallpaperController.globalThemeStyleFor(dark: dark);
-    // Keep blocked-user hiding toggle in sync with theme.
     BlockedUserService.shared.enabled = themeController.hideBlockedUserMessages;
     if (_vm.isAdministeredDirectMessagesGroup) {
       return withInternalLinkRouting(
@@ -5814,8 +5638,6 @@ class _ChatViewState extends State<ChatView> {
         _vm.isPeerRestricted && _vm.messages.isEmpty;
     Widget withKeyboardInsetProbe(Widget child) =>
         _KeyboardInsetProbe(onInset: _syncKeyboardInset, child: child);
-    // Not a member, joinable, and nothing to preview → a custom join screen
-    // (header + centered card) instead of the transcript + composer.
     if (!_vm.isMember && _vm.canJoin && _vm.messages.isEmpty) {
       return withKeyboardInsetProbe(
         withInternalLinkRouting(
@@ -5855,11 +5677,6 @@ class _ChatViewState extends State<ChatView> {
                         Positioned.fill(
                           child: LayoutBuilder(
                             builder: (context, constraints) {
-                              // Scaffold shrinks its body as the keyboard slides,
-                              // so this builder re-runs every animation frame
-                              // even though only the width matters. Handing back
-                              // the same widget lets Element.updateChild skip the
-                              // header, transcript and composer entirely.
                               final width = constraints.maxWidth;
                               final cached = _cachedShellLayout;
                               if (cached != null &&
@@ -5890,9 +5707,6 @@ class _ChatViewState extends State<ChatView> {
                                               ),
                                             ),
                                             _chatMusicPlayer(),
-                                            // A narrow chat trades the composer
-                                            // for the hit navigator; a wide one
-                                            // keeps composing beside the results.
                                             if (searching && !searchPane)
                                               _searchNavigator()
                                             else if (_isSelecting)
@@ -6083,8 +5897,6 @@ class _ChatViewState extends State<ChatView> {
     final showPinnedTodo =
         transcriptReady &&
         !_isSelecting &&
-        // The pinned bar and the suggestion card want the same corner, and a
-        // pinned message is not what is being looked for mid-search.
         !_search.isActive &&
         _vm.pinnedMessage != null &&
         !_vm.pinnedDismissed;
@@ -6147,10 +5959,6 @@ class _ChatViewState extends State<ChatView> {
         if (transcriptReady &&
             bottomIndicator == ChatBottomIndicator.jumpToBottom)
           Positioned(right: 16, bottom: 12, child: _jumpToBottomButton()),
-        // Without a pane to hold them, suggestions float over the transcript
-        // rather than replacing it — the conversation stays in view while a
-        // sender is picked. The AnimatedBuilder keeps a suggestion arriving
-        // from rebuilding every visible bubble underneath it.
         if (!searchPane && _search.isActive)
           Positioned(
             top: AppSpacing.md,
@@ -6165,7 +5973,6 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// The floating suggestion or hint card, or null when neither applies.
   Widget? get _searchOverlay {
     if (!_search.isActive) return null;
     final showsSuggestions = _search.activeToken != null;
@@ -6293,8 +6100,6 @@ class _ChatViewState extends State<ChatView> {
     return _openAtLatest || !_vm.historyReachesLatest || !_isNearBottom(80);
   }
 
-  /// Small button (bottom-right of the transcript) to return to the newest
-  /// message; shown only when the user has scrolled up.
   Widget _jumpToBottomButton() {
     final c = context.colors;
     return GestureDetector(
@@ -6324,8 +6129,6 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// Unread/new-message pill. In latest-on-open mode it points up to the
-  /// unread boundary; in unread-boundary mode it points down to the newest.
   Widget _newMessagesBanner({
     required bool pointsDown,
     required bool showsUnreadCount,
@@ -6510,10 +6313,8 @@ class _ChatViewState extends State<ChatView> {
     if (mounted) setState(() => _openingUnreadReaction = false);
   }
 
-  // MARK: - Composer area (input bar / join bar / disabled bar)
 
   Widget _chatMusicPlayer() {
-    // In split layouts the shell shows the player under every pane.
     if (MusicPlayerShellScope.providesPlayer(context)) {
       return const SizedBox.shrink();
     }
@@ -6550,15 +6351,10 @@ class _ChatViewState extends State<ChatView> {
       );
     }
     if (!_vm.isMember && _vm.canJoin) return _joinBar();
-    // Subscribed to a channel you can't post in → mute/unmute (like official).
     if (_vm.isChannel && _vm.isMember) return _channelMuteBar();
     return _disabledComposer(_vm.sendDisabledReason);
   }
 
-  // ChatInputBar subscribes to the view model itself, so the parent's
-  // notification-driven rebuilds only re-run its build for nothing. Every other
-  // constructor argument is either the (final) view model or a method tear-off,
-  // so these four flags are the whole input set.
   Widget? _composerBarCache;
   bool _composerBarRequestInitialFocus = false;
   bool _composerBarEnterToSend = false;
@@ -6737,7 +6533,6 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// Bottom bar with a 加入 / 申请加入 button for a joinable chat you can preview.
   Widget _joinBar() {
     final c = context.colors;
     final requested = _vm.joinRequested;
@@ -6780,7 +6575,6 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// Static bar shown when sending is blocked (muted / channel / removed).
   Widget _disabledComposer(String reason) {
     final c = context.colors;
     return Container(
@@ -6805,7 +6599,6 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// custom join screen for a joinable chat with no previewable content.
   Widget _joinScreenBody() {
     final c = context.colors;
     final requested = _vm.joinRequested;
@@ -6931,8 +6724,6 @@ class _ChatViewState extends State<ChatView> {
                   else
                     const SizedBox(width: 4),
                   Expanded(child: _headerTitleBlock(subtitle, actionActive)),
-                  // Bot mini-app launcher lives in the header (menu bar), not
-                  // on the message row.
                   if (_vm.peerIsBot && _vm.botMenu?.isWebApp == true)
                     _ChatHeaderAction(
                       key: const ValueKey('chatHeaderBotApp'),
@@ -6991,19 +6782,12 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// Whether topics have a dedicated surface (topic feed mode).
   bool get _topicsFoldedIntoChat =>
       _vm.supportsTopics &&
       context.read<ThemeController>().forumTopicsAsGroupChat;
 
-  /// Topics keep their dedicated surface — header chevron, topic picker, and
-  /// the # header action — whenever the chat is a topic chat. In flattened
-  /// mode the picker switches between topic transcripts instead of modes.
   bool get _showsTopicSurfaces => _vm.supportsTopics;
 
-  /// The join screen and a restricted peer both render the chat header over a
-  /// page with no transcript behind it. Offering search there would open a
-  /// field that can only ever report nothing.
   bool get _canSearchMessages =>
       !_vm.isPeerRestricted && (_vm.isMember || _vm.messages.isNotEmpty);
 
@@ -7108,10 +6892,6 @@ class _ChatViewState extends State<ChatView> {
     supportsBotTopics: _vm.supportsBotTopics,
   );
 
-  /// Opens a topic, or the whole chat for null, as the ordinary chat
-  /// transcript (topics-as-group setting). Replaces this transcript in place
-  /// so the navigation stack stays flat. An owning shell rebuilds the
-  /// transcript itself; a bare split detail pane swaps its own content.
   void _openTopicTranscript(int? topicId) {
     if (topicId == widget.forumTopicId) return;
     _prepareExitState();
@@ -7123,7 +6903,6 @@ class _ChatViewState extends State<ChatView> {
     if (ChatPane.replace(
       context,
       (onBack) => ChatView(
-        // A distinct key per transcript: ChatView reads its topic only once.
         key: ValueKey(('pane-topic-transcript', widget.chatId, topicId)),
         chatId: widget.chatId,
         title: widget.title,
@@ -7159,8 +6938,6 @@ class _ChatViewState extends State<ChatView> {
   }
 
   Future<void> _openTopicMode([int? threadId]) async {
-    // With topics shown as a regular group there is no topic feed: open the
-    // requested topic as an ordinary transcript instead.
     if (_topicsFoldedIntoChat) {
       if (threadId != null) _openTopicTranscript(threadId);
       return;
@@ -7565,8 +7342,6 @@ class _ChatViewState extends State<ChatView> {
     }
   }
 
-  /// Scrolls the transcript to a message. If it is not loaded, ask TDLib for a
-  /// page centered around that id instead of fetching the whole middle history.
   Future<void> _scrollToMessage(
     int messageId, {
     bool pinnedJump = false,
@@ -7605,9 +7380,6 @@ class _ChatViewState extends State<ChatView> {
     bool targetCancelled() =>
         !_isCurrentScrollTarget(messageId, navigationGeneration) ||
         (isCancelled?.call() ?? false);
-    // The target key moves to the requested row during layout. Waiting for
-    // that frame prevents an already-loaded jump from reusing the previous
-    // pinned row's context.
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || targetCancelled()) return false;
     if (_vm.messages.any((m) => m.id == messageId)) {
@@ -7640,20 +7412,13 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// A hashtag is already a query over the open chat, so it opens in-chat
-  /// search rather than pushing a screen over the transcript it refers to.
   void _openHashtagSearch(String hashtag) {
     final tag = hashtag.trim();
     if (tag.isEmpty) return;
     _openSearch(initialQuery: tag.startsWith('#') ? tag : '#$tag');
   }
 
-  // MARK: - In-chat search
 
-  /// The controller notifies per keystroke, per page and per resolved sender,
-  /// and every search surface already AnimatedBuilds on it. `isActive` is the
-  /// only value this build reads, so anything else would rebuild the whole
-  /// transcript for a repaint that happens elsewhere.
   void _onSearchChanged() {
     final active = _search.isActive;
     if (active == _searchActive) return;
@@ -7672,26 +7437,16 @@ class _ChatViewState extends State<ChatView> {
     _search.close();
   }
 
-  /// Moves the transcript to a hit and leaves it marked.
-  ///
-  /// The alignment sits the message just above centre so the messages around
-  /// it — the reason the user searched — are on screen too.
   Future<void> _openSearchResult(
     ChatMessage result, {
     required bool automatic,
   }) async {
     setState(() => _searchHighlightId = result.id);
-    // A phone gives up most of its height to the keyboard, so a deliberate
-    // jump puts it away — the message asked for should be the thing on screen.
-    // A query's own landing must not, or typing would close the keyboard on
-    // every pause.
     if (!automatic && !_searchResultsPaneVisible) _search.focusNode.unfocus();
     await _scrollToMessage(
       result.id,
       alignment: 0.38,
       forceAlignment: true,
-      // A query's own landing can outlive the query: the history fetch it may
-      // need takes longer than the next keystroke. Aborting it beats racing it.
       isCancelled: automatic
           ? () => _search.activeMessageId != result.id
           : null,
@@ -7705,9 +7460,6 @@ class _ChatViewState extends State<ChatView> {
         conversationWidth: conversationWidth,
       );
 
-  /// [showSteppers] follows the results pane: a wide chat keeps the composer,
-  /// so the up/down controls ride in the header beside the field, while a
-  /// narrow one gets them in the navigator that replaces the composer.
   Widget _searchHeader({required bool showSteppers}) => ChatSearchHeaderBar(
     controller: _search,
     height: widget.headerHeight,
@@ -7772,9 +7524,6 @@ class _ChatViewState extends State<ChatView> {
     var stagedAtTranscriptCenter = false;
     for (var tries = 0; tries < 6; tries++) {
       if (targetCancelled()) return false;
-      // Unread navigation targets the divider, not a fraction of the message
-      // body. For an oversized post, aligning its body at 12% would put the
-      // beginning and the divider hundreds of pixels above the viewport.
       final activeKey = alignUnreadDivider ? _unreadKey : _targetKey;
       final ctx = activeKey.currentContext;
       if (ctx != null && ctx.mounted) {
@@ -7796,9 +7545,6 @@ class _ChatViewState extends State<ChatView> {
             return false;
           }
         }
-        // Do not realign a message that is already on screen. Reply, search,
-        // and other linked-message jumps used to always force the row to 30%
-        // of the viewport, which made an already-visible target bounce.
         if (!forceAlignment && _isKeyMostlyVisible(activeKey)) {
           if (mounted && !targetCancelled()) {
             setState(() => _setScrollTarget(null));
@@ -7815,18 +7561,10 @@ class _ChatViewState extends State<ChatView> {
           isCancelled: targetCancelled,
         );
         if (!mounted || targetCancelled()) return false;
-        // A correction pass can lose the row's context without the navigation
-        // being cancelled, and the jump is over either way. Holding the target
-        // past that point stalls new-message auto-scroll, short-transcript
-        // fill, and parked-pivot repair for as long as the chat stays open.
         setState(() => _setScrollTarget(null));
         return aligned;
       }
       if (!_scroll.hasClients) return false;
-      // A loaded target can be arbitrarily far from the currently laid-out
-      // sliver children. Move the bidirectional transcript's center to that
-      // row once; unlike an absolute height estimate, this guarantees Flutter
-      // will build the target even when every preceding row was underestimated.
       if (!stagedAtTranscriptCenter &&
           _stageMessageAtTranscriptCenter(messageId)) {
         stagedAtTranscriptCenter = true;
@@ -7847,9 +7585,6 @@ class _ChatViewState extends State<ChatView> {
     return false;
   }
 
-  /// Repeats ordinary target alignment while rich content finishes laying out.
-  /// The first pass carries the visible motion; the two short correction passes
-  /// absorb thumbnail, preview, reaction, and text reflow during that motion.
   Future<bool> _alignMessageTarget(
     GlobalKey targetKey, {
     required double alignment,
@@ -7861,9 +7596,6 @@ class _ChatViewState extends State<ChatView> {
       if (isCancelled()) return false;
       final ctx = targetKey.currentContext;
       if (ctx == null || !ctx.mounted) return false;
-      // Nothing reflowed during the previous pass, so the remaining correction
-      // animations would only spend their duration re-issuing the offset the
-      // row already sits at.
       if (pass > 0 && _isTargetAtAlignment(targetKey, alignment)) return true;
       await Scrollable.ensureVisible(
         ctx,
@@ -7883,9 +7615,6 @@ class _ChatViewState extends State<ChatView> {
     return !isCancelled();
   }
 
-  /// Whether the row already rests where `Scrollable.ensureVisible` would put
-  /// it, using the viewport's own reveal math so pinned slivers and oversized
-  /// rows are accounted for exactly as the real call accounts for them.
   bool _isTargetAtAlignment(GlobalKey targetKey, double alignment) {
     if (!_scroll.hasClients) return false;
     final object = targetKey.currentContext?.findRenderObject();
@@ -7899,10 +7628,6 @@ class _ChatViewState extends State<ChatView> {
     return (target - _scroll.position.pixels).abs() <= 0.5;
   }
 
-  /// Aligns a pinned target more than once because media rows can finish a
-  /// thumbnail decode while the first scroll animation is still laying out.
-  /// The old one-shot calculation consequently landed the containing album a
-  /// few pixels above or below the pinned banner, especially on Android.
   Future<bool> _alignPinnedMessage(
     int messageId, {
     required int navigationGeneration,
@@ -7964,9 +7689,6 @@ class _ChatViewState extends State<ChatView> {
         !_search.isActive && _vm.pinnedMessage != null && !_vm.pinnedDismissed
         ? pinnedMessageTargetTopInset
         : 0.0;
-    // The viewport already excludes the header, bottom composer, keyboard,
-    // and safe areas. Comparing against those widgets' assumed heights was the
-    // source of false "already visible" results after an Android resize.
     return targetTop >= viewportTop + pinnedOverlayInset - 24 &&
         targetBottom <= viewportBottom + 24;
   }
@@ -7974,9 +7696,6 @@ class _ChatViewState extends State<ChatView> {
   Widget _transcript() {
     final groupImages = context.watch<ThemeController>().groupImageMessages;
     final entries = _transcriptEntries(groupImages);
-    // Partitioning copies every entry three times over and the index maps hash
-    // every row; both are pure functions of the memoized entry list plus the
-    // pivot inputs, so they are cached beside it rather than redone per build.
     List<_TranscriptEntry> olderEntries;
     List<_TranscriptEntry> newerEntries;
     if (identical(entries, _sliverCacheEntries) &&
@@ -7986,8 +7705,6 @@ class _ChatViewState extends State<ChatView> {
       newerEntries = _sliverCacheNewerEntries!;
     } else {
       final partition = _partitionTranscript(entries);
-      // Slivers before `center` grow away from it. Delegate index zero is the
-      // child nearest the center, so the chronological older half is reversed.
       olderEntries = partition.beforePivot.reversed.toList(growable: false);
       newerEntries = partition.pivotAndAfter;
       _sliverCacheEntries = entries;
@@ -7995,8 +7712,6 @@ class _ChatViewState extends State<ChatView> {
       _sliverCacheInitialLoaded = _vm.initialLoaded;
       _sliverCacheOlderEntries = olderEntries;
       _sliverCacheNewerEntries = newerEntries;
-      // No valid leading-item count can be negative, so this forces the index
-      // maps below to be rebuilt against the new arms.
       _sliverCacheLeadingItemCount = -1;
     }
     _scheduleTranscriptPivotFreeze();
@@ -8031,9 +7746,6 @@ class _ChatViewState extends State<ChatView> {
     _scheduleUnreadProgressUpdate();
     _scheduleShortFirstContactReveal();
     _scheduleTranscriptBottomGapCorrection();
-    // No fill of its own: ChatWallpaperBackground already covers this region
-    // with the same chatBackground when no wallpaper is set, and a transparent
-    // ColoredBox still issues a full-viewport drawRect.
     return NotificationListener<ScrollMetricsNotification>(
       onNotification: (notification) {
         if (notification.depth == 0) _scheduleTranscriptBottomGapCorrection();
@@ -8079,10 +7791,6 @@ class _ChatViewState extends State<ChatView> {
                     return _buildFirstContactCard(firstContactInfo!);
                   },
                   childCount: olderChildCount,
-                  // Nothing in the transcript keeps itself alive and there is
-                  // no SelectableRegion, so the two keep-alive wrappers are
-                  // dead weight; every row already carries its own
-                  // RepaintBoundary.
                   addAutomaticKeepAlives: false,
                   addRepaintBoundaries: false,
                   findChildIndexCallback: (key) {
@@ -8134,8 +7842,6 @@ class _ChatViewState extends State<ChatView> {
   }
 
   Widget _historyLoadingGap(String key) {
-    // The transcript slivers no longer add repaint boundaries, and the spinner
-    // repaints continuously — keep it off the sliver's layer.
     return RepaintBoundary(
       key: ValueKey(key),
       child: AnimatedSize(
@@ -8313,12 +8019,9 @@ class _ChatViewState extends State<ChatView> {
             chats.add(chat);
           }
         } catch (_) {
-          // A community peer can disappear while its directory is loading.
         }
       }
     } catch (_) {
-      // Bot API accounts expose the event's id and name but no community
-      // catalogue endpoint, so their preview opens with the available header.
     }
     if (!mounted) return;
     await Navigator.of(context).push(
@@ -8411,8 +8114,6 @@ class _ChatViewState extends State<ChatView> {
             KeyedSubtree(key: _unreadKey, child: _unreadDivider()),
           if (_needsSeparator(messageIndex, messages: messages))
             TimeSeparator(unix: message.date),
-          // Anchor the message itself: unread/date separators can disappear
-          // between visits and must not shift the restored reading position.
           TranscriptEntryBoundary(
             key: visibilityKey,
             messageId: entry.last.id,
@@ -8424,8 +8125,6 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// Washes the row holding a search hit. A full-width tint makes an album or
-  /// document run read as one destination.
   Widget _messageNavigationHighlight(_TranscriptEntry entry, Widget content) {
     final searchHighlighted =
         _searchHighlightId != null &&
@@ -8505,18 +8204,12 @@ class _ChatViewState extends State<ChatView> {
     });
   }
 
-  // The transcript is rebuilt on every view-model notification (send/read/
-  // typing/file progress); grouping a few hundred messages each time is
-  // avoidable garbage, so entries are memoized on their actual inputs.
   List<_TranscriptEntry>? _transcriptCache;
   List<ChatMessage>? _transcriptCacheMessages;
   bool _transcriptCacheGrouped = false;
   int _transcriptCacheUnreadCount = -1;
   int _transcriptCacheLastReadInboxId = -1;
 
-  // Downstream of the grouping memo: the pivot partition and the two sliver
-  // key→index maps. Keyed on the entry-list identity plus everything
-  // _partitionTranscript reads, so a cache hit leaves _transcriptPivot correct.
   List<_TranscriptEntry>? _sliverCacheEntries;
   TranscriptPivot? _sliverCachePivot;
   bool _sliverCacheInitialLoaded = false;
@@ -8528,11 +8221,6 @@ class _ChatViewState extends State<ChatView> {
 
   List<_TranscriptEntry> _transcriptEntries(bool groupImages) {
     final messages = _vm.messages;
-    // blockedByUser is only written inside _applyKeywordFilter, which always
-    // reassigns `messages` first — so the identity check below already covers
-    // blocked-state changes. (A previous per-build Object.hashAll signature
-    // over every message re-verified this at O(n) per frame; keep the flag
-    // writes behind _applyKeywordFilter or the memo goes stale.)
     final cached = _transcriptCache;
     if (cached != null &&
         identical(_transcriptCacheMessages, messages) &&
@@ -8547,8 +8235,6 @@ class _ChatViewState extends State<ChatView> {
     _transcriptCacheGrouped = groupImages;
     _transcriptCacheUnreadCount = _vm.unreadCount;
     _transcriptCacheLastReadInboxId = _vm.lastReadInboxId;
-    // Read in place rather than copied: nothing mutates the map between here
-    // and the swap below, and the copy was n-sized on every incoming message.
     final previousVisibilityKeys = _entryVisibilityKeys;
     final nextVisibilityKeys = <int, GlobalKey>{};
     final usedVisibilityKeys = <GlobalKey>{};
@@ -8659,8 +8345,6 @@ class _ChatViewState extends State<ChatView> {
     final oldSelectionState = _mobileTextSelectionAreaKey?.currentState;
     setState(() {
       _actionTarget = message;
-      // Keep the quote while the menu takes focus and clears Flutter's live
-      // selection. Each newly opened menu replaces this snapshot.
       _actionQuote = null;
       _actionRect = overlayRect;
       _mobileTextSelectionAreaKey = enableMobileTextSelection
@@ -8691,8 +8375,6 @@ class _ChatViewState extends State<ChatView> {
     try {
       availability = await _vm.messageReactionAvailability(messageId);
     } catch (_) {
-      // Fail closed. Offering the global defaults after a failed availability
-      // query recreates the exact MESSAGE_REACTION_INVALID bug this gate fixes.
     }
     if (!mounted ||
         !messageReactionAvailabilityResultIsCurrent(
@@ -8886,8 +8568,6 @@ class _ChatViewState extends State<ChatView> {
           _vm.messageRevisionListenable(message.id),
       ]),
       builder: (context) {
-        // Replies/reactions can move album interaction ownership to another
-        // member, so reselect the owner inside the localized rebuild.
         final owner = _mediaAlbumInteractionOwner(entry.messages);
         final ownerIndex = entry.startIndex + entry.messages.indexOf(owner);
         return _buildMessageBubble(
@@ -9139,8 +8819,6 @@ class _ChatViewState extends State<ChatView> {
 
     double reactionTop, menuTop;
     if (rect != null) {
-      // Reaction picker stays near the pressed message; the action menu is
-      // hidden while the picker is expanded.
       reactionTop = (rect.top - reactionH - gap).clamp(
         topSafe,
         bottomSafe - reactionH,
@@ -9195,7 +8873,6 @@ class _ChatViewState extends State<ChatView> {
                 child: const SizedBox.expand(),
               ),
             ),
-            // Call logs and other special messages aren't reactable — no strip.
             if (showReactions)
               Positioned(
                 top: reactionTop,
@@ -9423,9 +9100,6 @@ class _ChatViewState extends State<ChatView> {
   }
 }
 
-// Retained as a keyboard-accessible fallback surface for future non-message
-// text sources. Mobile messages now use the in-place SelectionArea flow.
-// ignore: unused_element
 class _MessageTextSelectionDialog extends StatefulWidget {
   const _MessageTextSelectionDialog({
     required this.text,

@@ -1,12 +1,3 @@
-//
-//  main.dart
-//
-//  HandyApp entry point. Wires the controllers (AuthManager, ThemeController,
-//  AccountStore, DrawerController) as providers, applies the adaptive theme +
-//  themeMode, and keys the content on the active account so the whole tree
-//  rebuilds for the newly active account. Port of the Swift `HandyApp`.
-//
-
 import 'dart:async';
 import 'dart:ui' as ui;
 
@@ -68,16 +59,10 @@ import 'theme/app_motion.dart';
 import 'theme/app_theme.dart';
 import 'theme/theme_controller.dart';
 
-/// Loads the locale catalogue before the first frame.
-///
-/// Strings come from assets now, so the app has to await this or its early
-/// widgets render bare keys. [prefs] supplies the saved language when it is
-/// available; without it the app follows the system language.
 Future<void> _preloadLocaleCatalogue([SharedPreferences? prefs]) {
   WidgetsFlutterBinding.ensureInitialized();
   Locale? saved;
   if (prefs != null) {
-    // Only the stored value is wanted here; the tree builds its own controller.
     final reader = AppLocaleController(prefs);
     saved = reader.locale;
     reader.dispose();
@@ -95,8 +80,6 @@ Future<void> main(List<String> arguments) async {
     return;
   }
 
-  // Let Sentry install its frame-aware WidgetsBinding before app code creates
-  // the ordinary binding. This is required for slow/frozen-frame measurements.
   await SentryFlutter.init(
     _configureSentry,
     appRunner: () async {
@@ -108,14 +91,8 @@ Future<void> main(List<String> arguments) async {
 
 Future<void> _bootstrapAndRunApp() async {
   GoogleFonts.config.allowRuntimeFetching = true;
-  // Bring TDLib up first: session restore is the longest serial chain in a
-  // launch, and nothing below depends on it — the widget tree attaches to
-  // AuthManager's stream whenever it is ready.
   final auth = AuthManager()..start();
   _initializeVideoBackend();
-  // Let iPhone and iPad follow every physical orientation. Nothing below reads
-  // the reply, and it only lands once the Activity has processed it, so it
-  // must not sit on the chain to runApp.
   unawaited(
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
@@ -124,13 +101,8 @@ Future<void> _bootstrapAndRunApp() async {
       DeviceOrientation.landscapeRight,
     ]),
   );
-  // Draw under transparent status / navigation bars (edge-to-edge).
   configureImmersiveSystemUI();
   final prefs = await SharedPreferences.getInstance();
-  // These must land before the first frame — the catalogue or early widgets
-  // render bare keys, the lock or the chat list flashes before the gate, and
-  // video surfaces must be selected before any controller is created. Their
-  // platform and asset reads are independent, so they overlap.
   await Future.wait<void>([
     _preloadLocaleCatalogue(prefs),
     LocalAppLockController.shared.initialize(),
@@ -142,12 +114,7 @@ Future<void> _bootstrapAndRunApp() async {
   CountryMessageFilter.shared.initialize(prefs);
   unawaited(SensitiveContentController.shared.initialize());
   MusicPlayerController.shared.initialize(prefs);
-  // Preload Telegram blocked-user list so chat filters have data right away.
   unawaited(BlockedUserService.shared.loadBlockedUsers());
-  // Firebase + analytics + Sentry tags are several platform-channel round
-  // trips that nothing in the widget tree depends on. Firebase's own init runs
-  // on the calling platform thread, so hold it until the scheduler is idle
-  // instead of letting it contend with the channel traffic launch needs.
   unawaited(
     SchedulerBinding.instance.scheduleTask<void>(_initTelemetry, Priority.idle),
   );
@@ -158,15 +125,9 @@ Future<void> _bootstrapAndRunApp() async {
 bool _shouldUseFvp() {
   if (kIsWeb) return false;
   if (defaultTargetPlatform == TargetPlatform.android) {
-    // Android's platform player owns Surface lifecycle transitions. Routing all
-    // video through FVP's SurfaceProducer can retain a stale Java Surface when
-    // Android 16 recreates it, which crashes in android_view_Surface_getSurface.
     return false;
   }
   if (defaultTargetPlatform == TargetPlatform.iOS) {
-    // The platform player requires a complete HTTP response for a range
-    // request, which prevents progressive playback of TDLib's sparse files.
-    // MDK can seek to the MP4 metadata range and decode while TDLib downloads.
     return true;
   }
   return true;
@@ -185,9 +146,6 @@ void _initializeVideoBackend() {
       ),
     );
   } catch (error, stackTrace) {
-    // Video is optional at launch. A missing or incompatible native backend
-    // must fall back to the platform player instead of aborting before
-    // runApp(), which otherwise leaves iOS displaying its empty white scene.
     debugPrint('FVP unavailable; using the platform video backend: $error');
     debugPrintStack(stackTrace: stackTrace);
   }
@@ -195,8 +153,6 @@ void _initializeVideoBackend() {
 
 Future<void> _initTelemetry() async {
   try {
-    // Two unrelated platform channels — awaiting them in turn costs an extra
-    // round trip on a platform thread that launch is already contending for.
     final (hasFirebaseConfiguration, appVersion) = await (
       FirebaseConfiguration.isAvailable,
       AppVersion.load(),
@@ -221,8 +177,6 @@ Future<void> _initTelemetry() async {
       });
     }
   } catch (error) {
-    // Telemetry must never take the app down (e.g. missing Firebase config
-    // on a dev build); the app runs fine without it.
     debugPrint('telemetry init failed: $error');
   }
 }
@@ -230,8 +184,6 @@ Future<void> _initTelemetry() async {
 void _configureSentry(SentryFlutterOptions options) {
   options.dsn = sentryDsn;
   options.environment = sentryEnvironment;
-  // Let SentryFlutter derive bundle-id@version+build so Dart events share the
-  // same release as native iOS crash reports. The git SHA remains a tag.
   options.navigatorKey = appNavigatorKey;
   options.sendDefaultPii = false;
   options.tracesSampleRate = sentryTracesSampleRate;
@@ -290,8 +242,6 @@ class HandyApp extends StatefulWidget {
   const HandyApp({super.key, required this.prefs, this.auth});
   final SharedPreferences prefs;
 
-  /// Bootstrap-started AuthManager, so TDLib session restore runs in
-  /// parallel with the first build instead of after it.
   final AuthManager? auth;
 
   @override
@@ -326,8 +276,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
   late final LocalAppLockController _appLock = LocalAppLockController.shared;
   late final CallManager _calls = CallManager()..start();
 
-  /// Whether the app has actually been in the background since the last
-  /// resume. Starts true so the first resume of a session still refreshes.
   bool _wasBackgrounded = true;
 
   @override
@@ -340,10 +288,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
     BusinessQuickReplyService.shared.startPreloading(
       enabled: _theme.quickRepliesEnabled,
     );
-    // FontLoader.load registers a multi-MB colour font on the UI thread and
-    // invalidates the font collection, forcing a re-layout of every laid-out
-    // string. Text renders with the platform emoji fallback until it lands,
-    // so it waits for a gap in the scheduler instead of the launch frames.
     unawaited(
       SchedulerBinding.instance.scheduleTask<void>(
         _theme.loadSelectedEmojiFontIfAvailable,
@@ -356,8 +300,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
     unawaited(_folderTags.refresh());
     unawaited(_accounts.recoverPendingAddOnStartup(_auth));
     NotificationController.shared.start(widget.prefs);
-    // An iOS registerForRemoteNotifications round trip that nothing observes
-    // during launch.
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => PushDeviceRegistrar.shared.start(),
     );
@@ -393,16 +335,12 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
     _appLock.handleLifecycleState(state);
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      // Drop decoded image cache when the app is backgrounded so hot reload
-      // and the OS memory manager do not fight over the working set.
       PaintingBinding.instance.imageCache.clear();
       PaintingBinding.instance.imageCache.clearLiveImages();
       clearChatMemoryCaches();
       clearAnimatedStickerMemoryCache();
     }
     if (state != AppLifecycleState.resumed) {
-      // `inactive` on its own is a Control Center glance, the notification
-      // shade or a permission sheet — the app never actually left.
       if (state != AppLifecycleState.inactive) _wasBackgrounded = true;
       return;
     }
@@ -419,10 +357,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
     clearAnimatedStickerMemoryCache();
   }
 
-  /// Last [_themeData] result per brightness, with the inputs it was built
-  /// from. `ColorScheme.fromSeed` is uncached HCT colour science and both
-  /// brightnesses are rebuilt on every ThemeController notification, almost
-  /// all of which (a toggle, a slider step) change nothing the theme reads.
   final Map<Brightness, _ThemeDataMemo> _themeDataMemo = {};
 
   ThemeData _themeData(Brightness brightness, ThemeController theme) {
@@ -496,8 +430,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
             navigatorKey: appNavigatorKey,
             title: 'Handy',
             debugShowCheckedModeBanner: false,
-            // Null follows the system language, which is what
-            // AppLocaleController stores for "follow system".
             locale: locale.locale,
             localeResolutionCallback: (locale, _) => locale == null
                 ? AppLocalizations.fallbackLocale
@@ -514,11 +446,7 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
             theme: _themeData(Brightness.light, theme),
             darkTheme: _themeData(Brightness.dark, theme),
             themeMode: theme.themeMode,
-            // Apply the user's chosen font size app-wide (设置 › 外观 › 字体大小).
             builder: (context, child) {
-              // Aspect-scoped: MediaQuery.of would re-run this whole closure on
-              // every keyboard-inset and window-resize frame just to read
-              // boldText.
               final boldText = MediaQuery.boldTextOf(context);
               final currentTheme = Theme.of(context);
               AppTheme.applyBrand(theme.brandColor);
@@ -533,11 +461,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
                     boldText: boldText,
                   ),
                 ),
-                // Cupertino-rooted screens (SearchView and friends) sit under no
-                // text style of their own, so any Text that omits a decoration
-                // inherits Flutter's yellow "unstyled" underline. A Material
-                // ancestor would also fix it, but the app avoids Material
-                // surfaces and only the text default is actually missing.
                 child: DefaultTextStyle.merge(
                   style: const TextStyle(decoration: TextDecoration.none),
                   child: child ?? const SizedBox.shrink(),
@@ -608,7 +531,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
                 ),
               );
             },
-            // Rebuild the whole tree when the active account changes.
             home: KeyedSubtree(
               key: ValueKey((accounts.activeSlot, accounts.activeUserId)),
               child: const ContentView(),
@@ -620,9 +542,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
   }
 }
 
-/// A built [ThemeData] together with everything [_HandyAppState._themeData]
-/// read to build it. Font scale and interface scale are deliberately absent:
-/// they are applied downstream by `_ScaledAppView`, never by the theme.
 class _ThemeDataMemo {
   const _ThemeDataMemo({
     required this.colors,
@@ -651,9 +570,7 @@ List<NavigatorObserver> _telemetryNavigatorObservers() {
         FirebaseAnalyticsObserver(analytics: FirebaseAnalytics.instance),
       );
     }
-  } catch (_) {
-    // Sentry navigation breadcrumbs do not depend on Firebase availability.
-  }
+  } catch (_) {}
   return observers;
 }
 
@@ -682,11 +599,6 @@ class _ScaledAppView extends StatelessWidget {
       viewPadding: _unscaleInsets(media.viewPadding, scale),
       viewInsets: _unscaleInsets(media.viewInsets, scale),
       systemGestureInsets: _unscaleInsets(media.systemGestureInsets, scale),
-      // Every surface reads this one scaler: Text applies it implicitly and
-      // the chat's RichText widgets read it explicitly. The outer transform
-      // scales geometry and text together for interface size, so the font
-      // preference belongs here on its own — dividing by interfaceScale caused
-      // normal Text widgets to stay small while noScaling text still grew.
       textScaler: TextScaler.linear(textScale),
     );
 

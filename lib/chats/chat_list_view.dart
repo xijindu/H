@@ -1,13 +1,3 @@
-//
-//  chat_list_view.dart
-//
-//  The 消息 tab: a custom reference header (avatar → profile drawer, name +
-//  online, trailing "+") over a search pill and the chat list. Rows use a custom
-//  left-swipe that reveals flush, full-height action blocks (置顶 / 标为未读 /
-//  删除), matching the reference rather than the rounded native swipe. The "+"
-//  opens a dropdown of create actions. Port of the Swift `ChatListView`.
-//
-
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -139,7 +129,6 @@ class ChatFolderRail extends StatelessWidget {
   final Key? Function(int? folderId)? keyForFolder;
   final ValueChanged<ChatFilterOption>? onEdit;
 
-  /// Live page-transition highlights; omitted for a settled folder rail.
   final Map<int?, double> highlights;
 
   double _highlight(ChatFilterOption filter) =>
@@ -235,8 +224,6 @@ class ChatListSelection {
   final ChatKind? resolvedKind;
   final int? initialMessageId;
 
-  /// The forum topic shown as an ordinary transcript when topics are folded
-  /// into the group chat; null shows the whole chat.
   final int? forumTopicId;
   final int composerFocusRequestId;
 
@@ -264,11 +251,6 @@ class ChatListSelection {
   );
 }
 
-/// Keeps the active conversation visually anchored in split layouts.
-///
-/// The subtle wash composes the user-selected brand color over the row's
-/// current themed surface. The short leading rail stays crisp in both light
-/// and dark/custom themes without changing the row's hit testing.
 class ChatListSelectionHighlight extends StatelessWidget {
   const ChatListSelectionHighlight({
     super.key,
@@ -327,11 +309,6 @@ class ChatListSelectionHighlight extends StatelessWidget {
   }
 }
 
-/// Live archive-list data handed to the adaptive shell when Archived Chats
-/// should replace only the list pane.
-///
-/// The chat list remains mounted behind that pane, so [chatsProvider] and
-/// [updates] continue to expose current archive contents while it is open.
 class ArchivedChatListSelection {
   const ArchivedChatListSelection({
     required this.chatsProvider,
@@ -356,11 +333,6 @@ bool chatListPreviewSupportsQuickReply(ChatSummary chat) =>
       ChatKind.channel || ChatKind.unknown => false,
     };
 
-/// Returns the exact leading offset for a chat-list item.
-///
-/// Chat rows do not include a separator in their layout, so even a fractional
-/// per-row adjustment accumulates into a visible error for targets farther
-/// down the list.
 double chatListItemScrollOffset({
   required int itemIndex,
   required double rowHeight,
@@ -368,39 +340,31 @@ double chatListItemScrollOffset({
   double leadingExtent = 0,
 }) => math.min(leadingExtent + itemIndex * rowHeight, maxScrollExtent);
 
-/// Keeps the pull-down archive slot after the search row when search is shown.
 int chatListPullDownArchiveItemIndex({required bool showSearch}) =>
     showSearch ? 1 : 0;
 
-/// Resolves the requested archive display mode for the current platform.
 ArchivedChatsDisplayMode effectiveChatListArchiveDisplayMode(
   ArchivedChatsDisplayMode requested, {
   TargetPlatform? platform,
   bool isWeb = kIsWeb,
 }) => requested.effectiveForPlatform(platform: platform, isWeb: isWeb);
 
-/// Returns the distance that leading chat-list content must move up to cancel
-/// the viewport's native top overscroll in the same frame.
 double chatListTopOverscrollOffset(
   double scrollPixels, {
   double minScrollExtent = 0,
 }) => math.max(0.0, minScrollExtent - scrollPixels).toDouble();
 
-/// Whether the current pull has crossed the archive reveal threshold.
 bool chatListShouldRevealPullDownArchive({
   required double pullOffset,
   required double rowHeight,
 }) => pullOffset >= rowHeight * 0.45;
 
-/// Whether forward scrolling has moved far enough to hide the archive row.
 bool chatListShouldHidePullDownArchive({
   required double scrollPixels,
   required double minScrollExtent,
   required double rowHeight,
 }) => scrollPixels - minScrollExtent > rowHeight * 0.5;
 
-/// Keeps leading pull-down content visually fixed while the surrounding list
-/// uses bouncing scroll physics.
 class ChatListTopOverscrollPin extends StatelessWidget {
   const ChatListTopOverscrollPin({
     super.key,
@@ -437,8 +401,6 @@ class ChatListTopOverscrollPin extends StatelessWidget {
   }
 }
 
-/// Animates the pull-down archive row without letting viewport overscroll move
-/// the row's painted position.
 class ChatListPullDownArchiveSlot extends StatelessWidget {
   const ChatListPullDownArchiveSlot({
     super.key,
@@ -651,8 +613,6 @@ class _ChatListViewState extends State<ChatListView>
       if (mounted) _onControllerRequest();
     });
     _loadMe();
-    // Keep the header's name/status/photo live — TDLib emits updateUser for us
-    // when the status or profile changes.
     _userSub = TdClient.shared.updatesOf('updateUser').listen((u) {
       if (u.obj('user')?.int64('id') == _meId) _loadMe();
     });
@@ -1321,7 +1281,6 @@ class _ChatListViewState extends State<ChatListView>
     );
   }
 
-  // MARK: - Header
 
   Widget _header() {
     final c = context.colors;
@@ -1463,8 +1422,6 @@ class _ChatListViewState extends State<ChatListView>
   Widget _chatFolderTabs() {
     final c = context.colors;
     final selectedFolderId = _model.selectedFilter.folderId;
-    // The strip scrolls horizontally, so its height is fixed; grow it with the
-    // label that sits above the selection indicator.
     final tabHeight = AppMetric.rowExtentFor(
       context,
       base: 44,
@@ -1548,7 +1505,6 @@ class _ChatListViewState extends State<ChatListView>
     );
   }
 
-  // MARK: - List
 
   Widget _chatList() {
     final c = context.colors;
@@ -1952,7 +1908,6 @@ class _ChatListViewState extends State<ChatListView>
     );
   }
 
-  // MARK: - "+" dropdown
 
   Widget _plusMenuOverlay({required bool visible}) {
     return _AnimatedAnchoredMenuOverlay(
@@ -2007,8 +1962,6 @@ class _ChatListViewState extends State<ChatListView>
   }
 }
 
-/// Keeps anchored menus mounted through their reverse animation so the
-/// barrier, hit testing, and menu surface leave as one coherent motion.
 class _AnimatedAnchoredMenuOverlay extends StatefulWidget {
   const _AnimatedAnchoredMenuOverlay({
     required this.visible,
@@ -2242,7 +2195,6 @@ class _PlaceholderBar extends StatelessWidget {
   }
 }
 
-/// Reference-style "+" dropdown of create actions.
 class PlusMenu extends StatelessWidget {
   const PlusMenu({
     super.key,
@@ -2276,9 +2228,6 @@ class PlusMenu extends StatelessWidget {
         decoration: BoxDecoration(
           color: c.card,
           borderRadius: BorderRadius.circular(AppRadius.card),
-          // The card and the empty content area behind it are the same colour
-          // in the light theme, so without an edge the menu did not read as a
-          // surface at all.
           border: Border.all(color: c.divider, width: 0.75),
           boxShadow: [
             BoxShadow(
@@ -2417,7 +2366,6 @@ class ChatFilterMenu extends StatelessWidget {
   }
 }
 
-/// Wraps a chat row with tap/long-press semantics.
 class ChatSwipeRow extends StatefulWidget {
   const ChatSwipeRow({
     super.key,

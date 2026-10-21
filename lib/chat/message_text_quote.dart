@@ -19,8 +19,6 @@ bool canQuoteMessageText(ChatMessage message) =>
       'messageDocument',
     }.contains(message.contentType);
 
-/// TDLib quotes address UTF-16 offsets and retain only these entity types.
-/// Preserve whitespace and the selected occurrence of repeated text exactly.
 MessageTextQuote? quoteMessageRange(
   ChatMessage message, {
   required int start,

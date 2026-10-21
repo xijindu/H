@@ -55,9 +55,6 @@ class _ChatAdministratorEditViewState extends State<ChatAdministratorEditView> {
     'is_anonymous',
   ];
 
-  /// Labels for admin rights. Keys ending in Group/Channel disambiguate the
-  /// same right by chat type, mirroring official Telegram wording; the
-  /// matching variant is resolved in [_labelFor].
   static const _labels = <String, String>{
     'can_manage_chat': AppStringKeys.chatAdminManageChat,
     'can_change_info': AppStringKeys.groupManagementPermissionEditGroupInfo,

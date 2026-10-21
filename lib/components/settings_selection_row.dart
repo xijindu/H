@@ -8,7 +8,6 @@ import '../theme/app_theme.dart';
 import 'app_icons.dart';
 import 'ui_components.dart';
 
-/// One value displayed by [SettingsSelectionRow].
 class SettingsSelectionOption<T> {
   const SettingsSelectionOption({
     required this.id,
@@ -19,7 +18,6 @@ class SettingsSelectionOption<T> {
     this.enabled = true,
   });
 
-  /// Stable identifier used for widget keys and focus restoration.
   final String id;
   final T value;
   final String label;
@@ -28,11 +26,6 @@ class SettingsSelectionOption<T> {
   final bool enabled;
 }
 
-/// A settings row that opens a draggable selection sheet.
-///
-/// The predicate-based selection API supports both single-choice menus and
-/// persistent multi-select menus without coupling this component to a
-/// particular controller or value type.
 class SettingsSelectionRow<T> extends StatelessWidget {
   const SettingsSelectionRow({
     super.key,

@@ -79,9 +79,7 @@ class _PollResultsViewState extends State<PollResultsView> {
             Brightness.dark,
       });
       if (mounted) setState(() => _statistics = result);
-    } catch (_) {
-      // Vote lists still remain useful when detailed statistics are private.
-    }
+    } catch (_) {}
   }
 
   Future<void> _loadSelected() async {

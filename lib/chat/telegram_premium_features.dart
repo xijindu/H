@@ -48,8 +48,6 @@ Future<void> _openTelegramPremiumFeatures(
   }
 }
 
-/// Low-level Premium route used by link handling, where failures must continue
-/// to the caller's normal unsupported-link fallback.
 Future<void> pushTelegramPremiumFeatures(
   NavigatorState nav, {
   required Map<String, dynamic> source,

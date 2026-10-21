@@ -17,10 +17,6 @@ final class NotificationService: UNNotificationServiceExtension {
       contentHandler(request.content)
       return
     }
-    // Stamp the account before anything else can return early. A tap reads
-    // back whatever userInfo was delivered, and the app's own account registry
-    // is empty when a tap is what started it — so this is the only moment the
-    // slot is both known and attachable.
     Self.stampAccountSlot(on: mutableContent)
     bestAttemptContent = mutableContent
 
@@ -45,13 +41,6 @@ final class NotificationService: UNNotificationServiceExtension {
     }
   }
 
-  /// Writes the account slot into `userInfo` when the payload names its
-  /// account and that account is signed in.
-  ///
-  /// Telegram carries the account as a user id; the slot is looked up from the
-  /// map the app shares through the app group. A payload naming no account, or
-  /// one no longer signed in, is left alone — a wrong slot would be worse than
-  /// none, since it would point navigation at the wrong conversation.
   private static func stampAccountSlot(on content: UNMutableNotificationContent) {
     var userInfo = content.userInfo
     let root = stringKeyed(userInfo)

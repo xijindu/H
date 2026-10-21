@@ -19,7 +19,6 @@ import '../tdlib/td_models.dart';
 import '../theme/app_theme.dart';
 import 'chat_folder_service.dart';
 
-/// Stand-in title for a chat whose real title has not been resolved yet.
 String _chatFallbackTitle(int id) =>
     AppStrings.t(AppStringKeys.chatFolderManagementChatValue1, {'value1': id});
 
@@ -43,8 +42,6 @@ class _ChatFolderManagementViewState extends State<ChatFolderManagementView> {
   int _mainListPosition = 0;
   int _generation = 0;
 
-  /// Null only in a harness with no provider above it; the toggle then simply
-  /// has nowhere to write.
   ChatFolderTagController? get _tags =>
       context.read<ChatFolderTagController?>();
   bool get _tagsEnabled => _tags?.enabled ?? false;
@@ -195,9 +192,7 @@ class _ChatFolderManagementViewState extends State<ChatFolderManagementView> {
           );
           if (leave) leaveChatIds = suggested;
         }
-      } catch (_) {
-        // Ordinary folders don't have chats suggested for leaving.
-      }
+      } catch (_) {}
       await _service.delete(folder.id, leaveChatIds: leaveChatIds);
       await _refresh();
     } catch (error) {
@@ -251,16 +246,11 @@ class _ChatFolderManagementViewState extends State<ChatFolderManagementView> {
     return entries;
   }
 
-  /// 文件夹标签 is a Premium setting on the server, so the controller writes it
-  /// there only for a Premium account and keeps everyone else's choice on this
-  /// device. Drawing the tags is local either way.
   Future<void> _toggleTags(bool enabled) async => _tags?.setEnabled(enabled);
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    // The switch follows the controller, so a change made anywhere — here, or
-    // a Premium account's own server update — lands on this row.
     final tagsEnabled =
         context.watch<ChatFolderTagController?>()?.enabled ?? false;
     return SettingsPageScaffold(
@@ -370,15 +360,9 @@ class _ChatFolderManagementViewState extends State<ChatFolderManagementView> {
     );
   }
 
-  /// The grip that starts a reorder. It leads the row — the thing you grab
-  /// sits where you reach for it, ahead of the folder it moves — and draws as
-  /// three bars, the drag-handle glyph, rather than the 2x2 squares it used to
-  /// borrow, which read as a menu button.
   Widget _dragHandle(int index) => ReorderableDragStartListener(
     index: index,
     child: const Padding(
-      // Vertical padding keeps the grab target a comfortable size on the
-      // compact row, where the row itself is only 42 tall.
       padding: EdgeInsets.fromLTRB(
         0,
         AppSpacing.sm,
@@ -389,8 +373,6 @@ class _ChatFolderManagementViewState extends State<ChatFolderManagementView> {
     ),
   );
 
-  /// The inset [SettingsRow] applies, so these hand-rolled rows line up with
-  /// the settings rows elsewhere on the page while still spanning the card.
   static EdgeInsets get _rowInset => const EdgeInsets.only(
     left: AppMetric.settingsLeadingInset,
     right: AppMetric.settingsTrailingInset,
@@ -527,9 +509,6 @@ class _ChatFolderManagementViewState extends State<ChatFolderManagementView> {
   Widget _sectionTitle(String text, {required Key key}) =>
       SettingsSectionHeader.text(text, key: key);
 
-  /// No horizontal padding: a settings row draws its own leading and trailing
-  /// insets and its tap surface has to reach the card's edges. Padding here
-  /// left the highlight floating in the middle of the card.
   Widget _card({required Key key, required List<Widget> children}) =>
       SettingsCard(key: key, children: children);
 
@@ -601,8 +580,6 @@ class _ChatFolderEditorViewState extends State<ChatFolderEditorView> {
       }
     }
 
-    // Serializing these left every row on its numeric fallback title until the
-    // last of N round trips landed.
     await Future.wait([for (final id in ids) resolve(id)]);
     if (mounted) setState(() {});
   }

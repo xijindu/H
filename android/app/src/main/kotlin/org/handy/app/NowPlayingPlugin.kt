@@ -21,14 +21,6 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
-/**
- * Publishes the in-app music player to the system media controls: the media
- * notification, the quick-settings player and the lock screen.
- *
- * flutter_sound plays through a bare MediaPlayer with no MediaSession, so the
- * system has nothing to show. Dart owns the queue and playback; this class
- * only mirrors its state and forwards remote commands back over the channel.
- */
 class NowPlayingPlugin(
     context: Context,
     messenger: BinaryMessenger,
@@ -138,8 +130,6 @@ class NowPlayingPlugin(
         playing: Boolean,
         labels: Map<String, String>,
     ) {
-        // MediaStyle notifications tied to a session are exempt from the
-        // Android 13 notification permission, so post even when it is off.
         val manager = NotificationManagerCompat.from(appContext)
         ensureNotificationChannel(labels["channel"].orEmpty())
         val builder = NotificationCompat.Builder(appContext, NOTIFICATION_CHANNEL)
@@ -177,15 +167,10 @@ class NowPlayingPlugin(
         launchIntent()?.let { builder.setContentIntent(it) }
         try {
             val notification = builder.build()
-            // Keep the latest notification around and host it in the
-            // foreground service so playback survives backgrounding; the
-            // service re-reads it on every start.
             lastNotification = notification
             MediaPlaybackService.start(appContext)
             manager.notify(NOTIFICATION_ID, notification)
         } catch (_: SecurityException) {
-            // Notification permission revoked; the session still serves
-            // headset buttons and Bluetooth controls.
         }
     }
 
@@ -284,7 +269,6 @@ class NowPlayingPlugin(
         private const val NOTIFICATION_CHANNEL = "handy_music_playback"
         const val NOTIFICATION_ID = 0x6d757369
 
-        /** Latest posted notification; [MediaPlaybackService] re-posts it as its foreground one. */
         @Volatile
         internal var lastNotification: Notification? = null
         private const val ARTWORK_SIZE = 512
@@ -307,7 +291,6 @@ class NowPlayingPlugin(
     }
 }
 
-/** Routes media notification buttons to the live player bridge. */
 class NowPlayingActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         NowPlayingPlugin.active?.handleAction(intent.action)

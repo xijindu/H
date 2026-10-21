@@ -1,11 +1,6 @@
 ﻿import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// Android media-stream volume used by fullscreen video gestures.
-///
-/// Other platforms retain their existing per-player volume behavior. Android
-/// values are read back after each write because the media stream uses a
-/// device-specific number of discrete steps.
 class PlayerSystemVolume {
   PlayerSystemVolume._();
 

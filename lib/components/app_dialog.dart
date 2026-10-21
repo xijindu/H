@@ -4,7 +4,6 @@ import '../l10n/app_localizations.dart';
 import '../theme/app_motion.dart';
 import '../theme/app_theme.dart';
 
-/// Project-owned modal surface with explicit dimensions, colors, and actions.
 class AppDialogSurface extends StatelessWidget {
   const AppDialogSurface({
     super.key,
@@ -142,7 +141,6 @@ Future<String?> showAppTextEntryDialog(
   bool allowEmpty = true,
   String? emptyError,
 }) async {
-  // Callers pass already-resolved copy; only the two defaults resolve here.
   final cancel = cancelLabel ?? AppStrings.t(AppStringKeys.confirmCancel);
   final required =
       emptyError ?? AppStrings.t(AppStringKeys.appDialogRequiredField);

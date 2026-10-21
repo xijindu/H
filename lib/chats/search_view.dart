@@ -1,12 +1,4 @@
-﻿//
-//  search_view.dart
-//
-//  Chat search — a pushed secondary screen. Custom header (back chevron +
-//  rounded search field) on the list-header wash, with a live list of matching
-//  chats below. Port of the Swift `SearchView` / `_SearchViewModel`.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:handy/l10n/app_localizations.dart';
@@ -25,9 +17,6 @@ import 'chat_row_view.dart';
 import 'mini_apps_page.dart';
 import 'public_discovery_view.dart';
 
-// Search is information-dense, especially on wide layouts and in popovers.
-// Keep its emphasis at medium so the UI retains hierarchy without rendering
-// every match like a bold heading.
 const FontWeight _searchEmphasisWeight = AppTextWeight.medium;
 
 class SearchView extends StatefulWidget {
@@ -40,8 +29,6 @@ class SearchView extends StatefulWidget {
 
   final String initialQuery;
 
-  /// Opens the view pre-scoped to one category (the dropdown's per-section
-  /// chevrons land here).
   final SearchTab? initialTab;
   final bool showBackButton;
 
@@ -80,9 +67,6 @@ class _SearchViewState extends State<SearchView> {
     super.dispose();
   }
 
-  /// A keystroke fans out into searchChats + searchContacts + searchPublicChats
-  /// and up to 60 per-result round trips each, so coalesce a burst of typing
-  /// the way Telegram clients do.
   void _scheduleSearch(String q) {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 240), () {
@@ -533,16 +517,8 @@ enum SearchTab {
 }
 
 class _SearchViewModel extends ChangeNotifier {
-  /// When set, message categories query this chat's history instead of every
-  /// chat list — the `in: <chat>` scope filter.
   int? scopeChatId;
 
-  /// When set, only this user's messages count — the `from:` token.
-  ///
-  /// TDLib can filter by sender per chat but not across a chat list, so an
-  /// unscoped sender search runs over the chats that user and the account
-  /// actually share. That is a bounded set and each request is still filtered
-  /// by the server, so counts stay honest.
   int? senderUserId;
 
   final Map<int, List<int>> _commonChatCache = {};
@@ -662,10 +638,6 @@ class _SearchViewModel extends ChangeNotifier {
         'limit': resultLimit,
       });
       if (!_isCurrent(tab, runId, trimmed)) return;
-      // The local ids always fit inside resultLimit, so every one of them would
-      // be fetched anyway — do it concurrently instead of paying up to 60
-      // sequential round trips before the first result can paint. Future.wait
-      // keeps index order, so the hit order is unchanged.
       final localIds = <int>[
         for (final id in (local.int64Array('chat_ids') ?? const <int>[]).take(
           resultLimit,
@@ -819,9 +791,6 @@ class _SearchViewModel extends ChangeNotifier {
     }
   }
 
-  /// Every chat the account and [userId] share, plus their private chat.
-  ///
-  /// A private chat's id is the user's own id in TDLib, so it needs no lookup.
   Future<List<int>> _commonChatIds(int userId) async {
     final cached = _commonChatCache[userId];
     if (cached != null) return cached;
@@ -834,9 +803,7 @@ class _SearchViewModel extends ChangeNotifier {
         'limit': 100,
       });
       ids.addAll(response.int64Array('chat_ids') ?? const <int>[]);
-    } catch (_) {
-      // No shared groups readable; the private chat alone is still a result.
-    }
+    } catch (_) {}
     final unique = List<int>.unmodifiable(ids.toSet());
     _commonChatCache[userId] = unique;
     return unique;

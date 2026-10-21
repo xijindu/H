@@ -1,22 +1,4 @@
-﻿//
-//  google_font_weights.dart
-//
-//  Real weight faces for a runtime Google font.
-//
-//  google_fonts fetches one file per weight and registers each under its own
-//  variant-suffixed family — `NotoSansTC_regular`, `NotoSansTC_500` — then
-//  returns a style pinned to that name. Such a family holds exactly one face,
-//  so asking it for w600, which most of this app's labels do, gets Skia's
-//  synthetic embolden of the regular face instead of the designed SemiBold:
-//  same advance widths, roughly 11% more ink, and w600 and w700 identical.
-//
-//  Registering the faces together under the plain family name lets Flutter
-//  match a requested weight to a real file. The bytes are the ones google_fonts
-//  already wrote to the application support directory, so this costs one extra
-//  weight of bandwidth rather than a second copy of the family.
-//
-
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -24,24 +6,16 @@ import 'package:flutter/widgets.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:path_provider/path_provider.dart';
 
-/// The weights this app actually renders. w600 dominates its labels; w400 and
-/// w500 arrive from the Material text theme.
 const List<FontWeight> kGoogleFontWeights = [
   FontWeight.w400,
   FontWeight.w500,
   FontWeight.w600,
 ];
 
-/// The variant segment google_fonts puts in a cached file's name.
-///
-/// It writes `<Family><NoSpaces>_<variant>_<hash>.ttf`, where the variant is
-/// `regular` for 400 and the plain number otherwise.
 @visibleForTesting
 String googleFontVariantSegment(FontWeight weight) =>
     weight == FontWeight.w400 ? 'regular' : '${weight.value}';
 
-/// Matches a cached file for [googleFamily] to the weight it carries, or null
-/// when the name is not one of google_fonts' own.
 @visibleForTesting
 FontWeight? googleFontWeightOfCacheFile({
   required String googleFamily,
@@ -59,10 +33,6 @@ FontWeight? googleFontWeightOfCacheFile({
   return null;
 }
 
-/// Loads a Google family's weight faces under one family name.
-///
-/// Notifies once a family gains its real faces, so a text style cached against
-/// the single-face variant name can be recomputed.
 class GoogleFontWeightLoader extends ChangeNotifier {
   GoogleFontWeightLoader._();
 
@@ -74,13 +44,9 @@ class GoogleFontWeightLoader extends ChangeNotifier {
   final Set<String> _loaded = {};
   final Map<String, Future<void>> _inFlight = {};
 
-  /// The family to name in a [TextStyle] once its faces are registered, or
-  /// null while this process is still using google_fonts' per-variant naming.
   String? loadedFamily(String googleFamily) =>
       _loaded.contains(googleFamily) ? googleFamily : null;
 
-  /// Fetches [googleFamily]'s weights and registers them together. Repeat
-  /// calls for a family already loaded or in flight are free.
   Future<void> ensure(String googleFamily) {
     if (_loaded.contains(googleFamily)) return Future.value();
     return _inFlight[googleFamily] ??= _load(
@@ -89,8 +55,6 @@ class GoogleFontWeightLoader extends ChangeNotifier {
   }
 
   Future<void> _load(String googleFamily) async {
-    // Ask google_fonts for each weight first: that is what downloads the file
-    // and puts it in the cache this then reads.
     for (final weight in kGoogleFontWeights) {
       GoogleFonts.getFont(googleFamily, fontWeight: weight);
     }
@@ -107,8 +71,6 @@ class GoogleFontWeightLoader extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// One file per requested weight, newest wins when a family was re-fetched
-  /// under a new hash.
   Future<List<File>> _cachedFaces(String googleFamily) async {
     final Directory support;
     try {

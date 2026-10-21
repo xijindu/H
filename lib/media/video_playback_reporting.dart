@@ -27,9 +27,6 @@ enum VideoFailureReason {
   unknown,
 }
 
-/// One diagnostics session per media selection. Recovery records stay local;
-/// only a terminal failure is submitted, including when the user retries it.
-/// Never retains an exception, URL, file name/path, media ID or chat identity.
 class VideoPlaybackDiagnostics {
   VideoPlaybackDiagnostics({
     required this.location,
@@ -78,13 +75,9 @@ class VideoPlaybackDiagnostics {
     VideoPlaybackSource? source,
   }) {
     if (_reported) return;
-    // FVideoPlayerError's own text can be a translated UI label. Its cause
-    // carries the native error; neither string is ever included in the event.
     while (error is FVideoPlayerError && error.cause != null) {
       error = error.cause;
     }
-    // Platform details often contain the whole data source. Do not inspect
-    // those, and discard URLs before extracting even numeric diagnostic codes.
     final description = error is PlatformException
         ? '${error.code} ${error.message ?? ''}'
         : error?.toString() ?? '';
@@ -99,8 +92,6 @@ class VideoPlaybackDiagnostics {
       'stage': stage.name,
       'reason': (reason ?? _classify(error, text)).name,
     };
-    // Numeric native error codes and a fixed codec vocabulary are useful
-    // across devices without forwarding messages containing private URLs.
     final code = RegExp(
       r'\b(?:errorcode|code)\s*[:=]\s*(-?\d{1,8})\b',
     ).firstMatch(text)?.group(1);
@@ -178,9 +169,6 @@ class VideoPlaybackDiagnostics {
   }
 }
 
-/// Error events are independent of the 2% transaction sample rate. Bound them
-/// per isolate: one per signature / 10 minutes, at most 20 total / rolling hour.
-/// This is diagnostic sampling, not a count of all failed playback attempts.
 class VideoFailureReporter {
   VideoFailureReporter({
     bool Function()? enabled,
@@ -211,7 +199,6 @@ class VideoFailureReporter {
         )) {
       return;
     }
-    // Reserve before starting the asynchronous send to prevent burst races.
     _sent.add((at: now, signature: signature));
     unawaited(_send(event));
   }
@@ -220,7 +207,6 @@ class VideoFailureReporter {
     try {
       await _capture(event);
     } catch (_) {
-      // Telemetry failure must not change recovery, UI or controller disposal.
     }
   }
 
@@ -231,9 +217,6 @@ class VideoFailureReporter {
 
 const videoPlaybackLogger = 'mithka.video';
 
-/// Runs in beforeSend, AFTER scope/native enrichment. The SDK's device/OS data
-/// is valuable, but ambient navigation breadcrumbs can contain private media
-/// URLs and titles even though the video payload itself is allowlisted.
 SentryEvent sanitizeVideoPlaybackEvent(SentryEvent event) {
   if (event.logger != videoPlaybackLogger) return event;
   final original = event.contexts;
@@ -282,8 +265,6 @@ SentryEvent sanitizeVideoPlaybackEvent(SentryEvent event) {
           compiler: runtime.compiler,
         ),
     ],
-    // App context also contains a device-specific hash and visible view names.
-    // Rebuild allowlisted contexts so neither these nor future SDK fields leak.
     app: app == null
         ? null
         : SentryApp(
@@ -326,7 +307,6 @@ SentryEvent sanitizeVideoPlaybackEvent(SentryEvent event) {
   event.user = null;
   event.serverName = null;
   event.transaction = 'video.playback';
-  // ignore: deprecated_member_use
   event.extra = null;
   return event;
 }

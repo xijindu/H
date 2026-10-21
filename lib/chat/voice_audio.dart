@@ -1,12 +1,3 @@
-//
-//  voice_audio.dart
-//
-//  Voice-note playback for the bubble's play/pause + draggable scrubber.
-//  Telegram voice notes are Opus-in-OGG (flutter_sound bundles libopus so it
-//  plays on iOS too). Resolves the file via TDFileCenter, plays it, exposes
-//  position/duration for the seek bar, supports pause/resume and drag-to-seek.
-//
-
 import 'dart:async';
 import 'dart:convert';
 
@@ -18,10 +9,6 @@ import 'package:logger/logger.dart' show Level;
 import '../tdlib/td_image_loader.dart';
 import '../tdlib/td_models.dart';
 
-/// Keeps track of whether an active player should resume after an audio
-/// interruption. iOS reports the equivalent of AVAudioSession's
-/// `shouldResume` option as a pause interruption ending event; Android's
-/// transient audio-focus loss uses the same event shape.
 @visibleForTesting
 class AudioInterruptionResumePolicy {
   bool _resumeAfterInterruption = false;
@@ -42,14 +29,6 @@ class AudioInterruptionResumePolicy {
   void clear() => _resumeAfterInterruption = false;
 }
 
-/// Reads the native playback position on a fixed cadence while playing.
-///
-/// flutter_sound's `onProgress` stream is driven by a native timer that does
-/// not fire reliably on every device (Android MediaPlayer sessions can go
-/// silent after prepare, upstream issue #1155), which froze the scrubber and
-/// elapsed time. Polling the same native position keeps progress moving no
-/// matter which source delivers it. A read that started before a seek is
-/// discarded, so a stale position never snaps the scrubber back.
 @visibleForTesting
 class PlaybackProgressPoller {
   PlaybackProgressPoller({
@@ -79,7 +58,6 @@ class PlaybackProgressPoller {
     _generation++;
   }
 
-  /// Drops any read already in flight. Call when the position jumps (seek).
   void invalidate() => _generation++;
 
   Future<void> _tick() async {
@@ -93,7 +71,6 @@ class PlaybackProgressPoller {
       }
       onProgress(value.position, value.duration);
     } catch (_) {
-      // The player may be between tracks; the next tick reads again.
     } finally {
       _reading = false;
     }
@@ -128,7 +105,6 @@ class VoicePlayer extends ChangeNotifier {
   Future<({Duration position, Duration duration})?> _readProgress() async {
     final player = _player;
     if (_disposed || player == null || !player.isPlaying) return null;
-    // ignore: deprecated_member_use
     final progress = await player.getProgress();
     final position = progress['progress'];
     if (position == null) return null;
@@ -153,9 +129,6 @@ class VoicePlayer extends ChangeNotifier {
   }
 
   Future<AudioSession> _prepareAudioSession() async {
-    // Re-apply the music category before every new track. Calls and other
-    // audio plugins may temporarily change the shared AVAudioSession; the
-    // official Telegram client restores its playback holder before resuming.
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
     _interruption ??= session.interruptionEventStream.listen((event) {
@@ -167,16 +140,12 @@ class VoicePlayer extends ChangeNotifier {
     return session;
   }
 
-  /// True when this player is the one bound to [file] (playing or paused).
   bool isActive(TdFileRef? file) => file != null && _fileId == file.id;
 
-  /// True when a loaded track is paused (not stopped or finished).
   bool get isPaused => _fileId != null && _player?.isPaused == true;
 
   Future<void>? _opening;
 
-  /// Opens the native player once. Rapid taps start several loads at the
-  /// same time; they share one open instead of racing a second openPlayer.
   Future<void> _ensureOpen() {
     if (_opened) return Future.value();
     return _opening ??= () async {
@@ -204,7 +173,6 @@ class VoicePlayer extends ChangeNotifier {
       try {
         await player.stopPlayer();
       } catch (_) {}
-      // Give the shared audio session back (calls, other media apps).
       try {
         final session = await _prepareAudioSession();
         if (!_disposed) {
@@ -231,7 +199,6 @@ class VoicePlayer extends ChangeNotifier {
   Future<void> _toggle(TdFileRef? file, {required Codec codec}) async {
     if (file == null) return;
 
-    // Same note already loaded → pause / resume.
     final player = _player;
     if (_fileId == file.id &&
         player != null &&
@@ -241,9 +208,6 @@ class VoicePlayer extends ChangeNotifier {
         await player.pausePlayer();
         isPlaying = false;
       } else {
-        // Calls and other audio apps can deactivate our shared audio
-        // session while we are paused; re-activate it before resuming, the
-        // same way interruption-end recovery does.
         _interruptionPolicy.clear();
         try {
           final session = await _prepareAudioSession();
@@ -272,17 +236,12 @@ class VoicePlayer extends ChangeNotifier {
     isLoading = true;
     _syncPolling();
     notifyListeners();
-    // Opening the native player and activating the audio session do not
-    // depend on the file. Run them while the path resolves instead of after
-    // it, so a cached track starts as soon as its path is known.
     final audioReady = _prepareOutput();
     final path =
         TdFileCenter.shared.cachedPath(file) ??
         await TdFileCenter.shared.pathFor(file, priority: 32);
     final ready = await audioReady;
     if (_disposed) return;
-    // The user may have tapped another note while this file resolved —
-    // don't clobber the newer load's state or start the stale file.
     if (_fileId != file.id) return;
     isLoading = false;
     if (path == null || ready == null) {
@@ -321,8 +280,6 @@ class VoicePlayer extends ChangeNotifier {
         fromURI: _path,
         codec: codec,
         whenFinished: () {
-          // The platform can deliver this after dispose(); notifying a
-          // disposed ChangeNotifier throws.
           if (_disposed) return;
           final finishedFileId = _fileId;
           isPlaying = false;
@@ -344,14 +301,10 @@ class VoicePlayer extends ChangeNotifier {
     }
   }
 
-  /// Resumes a paused track. No-op when nothing is loaded or already playing.
   Future<void> resume() async {
     final player = _player;
     if (_fileId == null || player == null || !player.isPaused) return;
     _interruptionPolicy.clear();
-    // Calls and other audio apps can deactivate our shared audio session
-    // while we are paused; re-activate it before resuming, the same way
-    // interruption-end recovery does.
     try {
       final session = await _prepareAudioSession();
       if (_disposed) return;
@@ -368,7 +321,6 @@ class VoicePlayer extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Pauses the playing track. No-op when nothing is playing.
   Future<void> pause() async {
     final player = _player;
     if (player == null || !player.isPlaying) return;
@@ -455,8 +407,6 @@ class VoicePlayer extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Drag-to-seek. [fraction] in 0..1; [fallbackSeconds] is the note's known
-  /// duration (used before playback has reported a duration).
   Future<void> seekFraction(double fraction, int fallbackSeconds) async {
     final f = fraction.clamp(0.0, 1.0);
     final dur = total.inMilliseconds > 0
@@ -488,8 +438,6 @@ class VoicePlayer extends ChangeNotifier {
   }
 }
 
-/// Encodes per-sample decibel levels into Telegram's 5-bit packed waveform
-/// representation, base64-encoded for `inputVoiceNote.waveform`.
 String encodeTelegramWaveform(List<double> decibels) {
   if (decibels.isEmpty) return '';
   const maxSamples = 100;

@@ -7,10 +7,6 @@ import 'package:flutter/material.dart';
 
 import 'app_theme.dart';
 
-/// Shared timing, easing, navigation, and scrolling behavior for Mithka.
-///
-/// Keeping these values in one place prevents screens, tabs, menus, and
-/// dialogs from each inventing a slightly different motion language.
 abstract final class AppMotion {
   static const Duration instant = Duration.zero;
   static const Duration quick = Duration(milliseconds: 140);
@@ -19,13 +15,10 @@ abstract final class AppMotion {
   static const Duration route = Duration(milliseconds: 300);
   static const Duration routeReverse = Duration(milliseconds: 240);
 
-  /// Smoothly decelerates without the abrupt stop of easeOutCubic.
   static const Curve standard = Cubic(0.20, 0.0, 0.0, 1.0);
 
-  /// Used when content is leaving and should get out of the way quickly.
   static const Curve accelerate = Cubic(0.30, 0.0, 1.0, 1.0);
 
-  /// A slightly more expressive arrival for floating and modal surfaces.
   static const Curve emphasized = Cubic(0.05, 0.70, 0.10, 1.0);
 
   static bool isReduced(BuildContext context) =>
@@ -56,10 +49,6 @@ abstract final class AppMotion {
   }
 }
 
-/// Opens a touch-native draggable sheet or a bounded centered modal.
-///
-/// All other arguments intentionally match [showModalBottomSheet]. Drag and
-/// drag-handle arguments apply only to the touch sheet presentation.
 @visibleForTesting
 const appCenteredModalFrameKey = ValueKey<String>('app-centered-modal-frame');
 
@@ -68,10 +57,6 @@ const appCenteredModalSurfaceKey = ValueKey<String>(
   'app-centered-modal-surface',
 );
 
-/// Whether a modal should use a bounded, centered surface instead of a sheet.
-///
-/// A landscape iPad has enough room for the same presentation, while phones and
-/// portrait tablets keep the native bottom-sheet interaction.
 bool appModalUsesCenteredPresentation(Size size, [TargetPlatform? platform]) {
   if (kIsWeb) return false;
   final targetPlatform = platform ?? defaultTargetPlatform;
@@ -81,14 +66,6 @@ bool appModalUsesCenteredPresentation(Size size, [TargetPlatform? platform]) {
       size.shortestSide >= 600;
 }
 
-/// Preserves a custom bottom-sheet route on portrait touch layouts while
-/// presenting the same content in Mithka's bounded centered modal surface.
-///
-/// This is for legacy/custom sheets whose mobile transition is intentionally
-/// different from [showModalBottomSheet]. The barrier, result, navigator,
-/// route settings, anchor, focus, and mobile animation contracts are carried
-/// through unchanged. The centered route keeps the same duration and curve
-/// pair while replacing the upward sheet motion with the centered modal motion.
 Future<T?> showAppAdaptiveSheetDialog<T>({
   required BuildContext context,
   required WidgetBuilder builder,
@@ -295,12 +272,6 @@ Future<T?> showAppModalSheet<T>({
   );
 }
 
-/// Preserves the native Cupertino popup route on touch platforms while
-/// presenting the same content in Mithka's bounded centered modal surface.
-///
-/// The arguments mirror [cupertino.showCupertinoModalPopup]. Centered
-/// presentation ignores the optional backdrop filter but keeps the barrier,
-/// navigator, route, anchor, and focus contracts intact.
 Future<T?> showAppCupertinoModalPopup<T>({
   required BuildContext context,
   required WidgetBuilder builder,
@@ -425,10 +396,6 @@ class _AppCenteredModalRoute<T> extends RawDialogRoute<T> {
   }
 }
 
-/// A consistent shared-axis transition for ordinary app routes.
-///
-/// Conversation routes keep their interactive full-page back gesture in
-/// [AppChatPageRoute], but use the same timing and easing constants.
 class AppPageTransitionsBuilder extends PageTransitionsBuilder {
   const AppPageTransitionsBuilder();
 
@@ -454,12 +421,6 @@ class AppPageTransitionsBuilder extends PageTransitionsBuilder {
   );
 }
 
-/// A route for app-owned screens that would otherwise use PageRouteBuilder's
-/// jump-cut default transition.
-///
-/// MaterialPageRoute keeps the platform navigation contract, including the
-/// interactive native edge-back gesture on Apple platforms. The theme supplies
-/// Mithka's transition elsewhere.
 class AppPageRoute<T> extends MaterialPageRoute<T> {
   AppPageRoute({
     super.settings,
@@ -492,8 +453,6 @@ class AppPageRoute<T> extends MaterialPageRoute<T> {
   Duration get reverseTransitionDuration => AppMotion.routeReverse;
 }
 
-/// A compact fade route for pickers and visual editors where spatial motion
-/// would imply a hierarchy that does not exist.
 class AppFadePageRoute<T> extends PageRouteBuilder<T> {
   AppFadePageRoute({
     super.settings,
@@ -578,7 +537,6 @@ Widget _buildAppPageTransition({
   );
 }
 
-/// Platform-adaptive scroll physics and native edge feedback.
 class AppScrollBehavior extends MaterialScrollBehavior {
   const AppScrollBehavior();
 }

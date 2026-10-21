@@ -1,13 +1,3 @@
-//
-//  app_camera_view.dart
-//
-//  拍摄: the in-app camera surface. Stories capture photos and up to 60 seconds
-//  of video and can hand off to the gallery; the composer reuses the same
-//  preview for photo-only capture, which is how a capture can be kept out of
-//  the system album — the system camera app writes its own copy there and the
-//  app cannot opt out of that.
-//
-
 import 'dart:async';
 import 'dart:io';
 
@@ -51,12 +41,8 @@ class AppCameraView extends StatefulWidget {
     @visibleForTesting this.controllerForTesting,
   });
 
-  /// Whether holding the shutter records video. Off for the composer, whose
-  /// camera button has always been photo-only.
   final bool allowVideo;
 
-  /// Whether the bottom bar offers a jump to the picker. Off where the caller
-  /// has no gallery route to hand the result to.
   final bool allowGallery;
 
   final Future<List<CameraDescription>> Function()? availableCamerasForTesting;
@@ -250,10 +236,8 @@ class _AppCameraViewState extends State<AppCameraView>
         final tempFile = File(file.path);
         if (await tempFile.exists()) await tempFile.delete();
       } catch (_) {
-        // Platform cache reclaims the temp file eventually.
       }
     } catch (_) {
-      // Recording may already be stopped by lifecycle events.
     } finally {
       _finishing = false;
       if (mounted) {
@@ -300,9 +284,6 @@ class _AppCameraViewState extends State<AppCameraView>
     if (state == AppLifecycleState.resumed &&
         appCameraShouldRetryOnResume(recording: _recording)) {
       if (_initializing) return;
-      // A permission grant made in system settings leaves the old controller
-      // allocated but uninitialized. Retry even when that stale controller is
-      // still present, including enumeration if the first attempt found none.
       unawaited(
         _cameras.isEmpty ? _loadCameras() : _initializeCamera(_cameraIndex),
       );
@@ -346,10 +327,6 @@ class _AppCameraViewState extends State<AppCameraView>
                         if (controller != null &&
                             controller.value.isInitialized)
                           Center(
-                            // CameraPreview already applies the preview's
-                            // orientation-aware aspect ratio. A second frame
-                            // with the sensor's landscape ratio makes the
-                            // live image narrow in portrait.
                             child: CameraPreview(controller),
                           )
                         else if (_initializing)
@@ -516,8 +493,6 @@ class _AppCameraViewState extends State<AppCameraView>
 
   Widget _permissionMessage() {
     final noCamera = _cameras.isEmpty;
-    // Without a gallery route there is nothing to fall back to, so the empty
-    // state just closes the camera.
     final offersGallery = noCamera && widget.allowGallery;
     final description = noCamera
         ? (widget.allowGallery ? AppStringKeys.chooseMediaHint : null)

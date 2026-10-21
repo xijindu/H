@@ -77,9 +77,6 @@ class MediaLibrarySaver {
     }
   }
 
-  /// Saves an already-downloaded or generated image/video. Sticker export uses
-  /// this so GIF/APNG/MOV output follows the same add-only Photos permission
-  /// path as ordinary chat media.
   static Future<MediaLibrarySaveResult> savePreparedFile(
     File file, {
     required bool isVideo,

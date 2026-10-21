@@ -1,12 +1,3 @@
-//
-//  emoji_store.dart
-//
-//  Backs the composer's emoji panel. Standard emoji are plain Unicode
-//  (EmojiCatalog); Telegram **Premium** users also get animated custom emoji,
-//  loaded here grouped by their installed custom-emoji sets so the panel shows
-//  one tab per pack. Port of the Swift `EmojiStore`.
-//
-
 import 'package:flutter/foundation.dart';
 
 import '../tdlib/json_helpers.dart';
@@ -43,8 +34,6 @@ class EmojiStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reloads after the installed sets changed elsewhere; a store nobody has
-  /// opened yet stays lazy.
   void invalidate() {
     if (!_loaded) return;
     _loaded = false;
@@ -99,7 +88,7 @@ class EmojiStore extends ChangeNotifier {
       customPacks = result;
       notifyListeners();
     } catch (_) {
-      _loaded = false; // allow retry on next loadIfNeeded()
+      _loaded = false;
     }
   }
 

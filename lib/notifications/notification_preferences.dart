@@ -70,8 +70,6 @@ class NotificationPreferences extends ChangeNotifier {
             previousInAppVibrate != _inAppVibrate ||
             previousInAppPreview != _inAppPreview ||
             previousNamesOnLockScreen != _namesOnLockScreen)) {
-      // Notify active consumers (most notably push registration) when a
-      // preference reload changes effective state.
       notifyListeners();
     }
   }

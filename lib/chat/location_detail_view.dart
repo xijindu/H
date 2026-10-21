@@ -1,12 +1,4 @@
-﻿//
-//  location_detail_view.dart
-//
-//  Read-only map screen for a received location / venue message. Uses native
-//  Apple Maps on iOS and flutter_map + OpenStreetMap elsewhere, matching the
-//  sender-side location picker stack.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 

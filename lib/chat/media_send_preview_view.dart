@@ -742,9 +742,6 @@ class _MediaSendPreviewViewState extends State<MediaSendPreviewView> {
     );
   }
 
-  /// [cacheWidth] is the display box in device pixels — a camera-roll original
-  /// otherwise decodes at full sensor resolution into a 72px filmstrip tile.
-  /// Width only, so the decode keeps the source aspect ratio.
   Widget _preview(
     AppColors c,
     OutgoingAttachment attachment, {

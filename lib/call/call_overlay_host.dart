@@ -6,8 +6,6 @@ import 'call_manager.dart';
 import 'call_screen.dart';
 import 'group_call_screen.dart';
 
-/// Renders call surfaces above the app navigator so calls remain visible from
-/// tab roots, conversations, and every other pushed page.
 class GlobalCallOverlayHost extends StatelessWidget {
   const GlobalCallOverlayHost({super.key});
 

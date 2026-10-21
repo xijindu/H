@@ -1,11 +1,4 @@
-﻿//
-//  video_split_controller.dart
-//
-//  Owns the single app-level video sibling pane. Starting another split video
-//  replaces the current pane instead of stacking split routes.
-//
-
-import 'package:flutter/foundation.dart';
+﻿import 'package:flutter/foundation.dart';
 
 import '../chat/video_playback_queue.dart';
 import '../tdlib/td_models.dart';

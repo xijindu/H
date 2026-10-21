@@ -1,10 +1,4 @@
-﻿//
-//  gif_store.dart
-//
-//  Loads Telegram's saved animations for the composer's GIF tab.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 

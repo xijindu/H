@@ -2,12 +2,6 @@
 import MediaPlayer
 import UIKit
 
-/// Publishes the in-app music player to Control Center and the lock screen.
-///
-/// flutter_sound plays through AVAudioPlayer and never touches
-/// MPNowPlayingInfoCenter, so without this the system shows no player even
-/// though audio keeps playing in the background. Remote commands are sent
-/// back to Dart, which owns the queue and playback state.
 @MainActor
 final class NowPlayingBridge {
   private let channel: FlutterMethodChannel
@@ -59,8 +53,6 @@ final class NowPlayingBridge {
     if let artwork = loadArtwork(arguments["artworkPath"] as? String) {
       info[MPMediaItemPropertyArtwork] = artwork
     }
-    // iOS derives playing/paused from the playback rate; `playbackState` is
-    // macOS / Mac Catalyst only.
     MPNowPlayingInfoCenter.default().nowPlayingInfo = info
   }
 
@@ -90,8 +82,6 @@ final class NowPlayingBridge {
     return artwork
   }
 
-  /// MediaPlayer calls the artwork handler on its own queue. Building it
-  /// outside the main actor keeps the closure free of main-actor isolation.
   private nonisolated static func makeArtwork(_ image: UIImage) -> MPMediaItemArtwork {
     MPMediaItemArtwork(boundsSize: image.size) { _ in image }
   }
@@ -107,7 +97,6 @@ final class NowPlayingBridge {
     let seek = center.changePlaybackPositionCommand
     seek.isEnabled = true
     let seekTarget = seek.addTarget { [weak self] event in
-      // MediaPlayer delivers remote commands on the main thread.
       MainActor.assumeIsolated {
         guard let self, let event = event as? MPChangePlaybackPositionCommandEvent else {
           return .commandFailed

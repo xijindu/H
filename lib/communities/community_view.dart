@@ -1,11 +1,4 @@
-﻿//
-//  community_view.dart
-//
-//  Telegram Communities browser based on the July 2026 iOS flow: a community
-//  can occupy one chat-list row, opening a compact hub for its related chats.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';

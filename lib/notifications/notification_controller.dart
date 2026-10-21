@@ -1,12 +1,4 @@
-﻿//
-//  notification_controller.dart
-//
-//  Local notifications driven by TDLib updates. This is not a push service:
-//  it can notify while the Flutter/TDLib process is alive in the background,
-//  but APNs/FCM would still be needed for killed-app delivery.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -66,10 +58,6 @@ String notificationTitleForAccount({
 TdFileRef? notificationChatPhotoFromChat(Map<String, dynamic> chat) =>
     TDParse.smallPhoto(chat.obj('photo'));
 
-/// Incoming messages up to `last_read_inbox_message_id` are read, no matter
-/// which device read them. TDLib replays the whole offline backlog as
-/// `updateNewMessage` once it reconnects, so this marker is what keeps a
-/// launch from announcing conversations the user already cleared elsewhere.
 @visibleForTesting
 bool notificationMessageIsRead({
   required int messageId,
@@ -98,8 +86,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
   NotificationController._();
   static final NotificationController shared = NotificationController._();
 
-  // Built per call rather than held as a const: the channel name and
-  // description are shown in Android's own settings and follow the app locale.
   static AndroidNotificationChannel get _androidChannel =>
       AndroidNotificationChannel(
         'messages',
@@ -114,8 +100,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
   );
   static const _inAppBannersKey = 'mithka.notifications.inAppBanners.v1';
 
-  /// How long the offline backlog is held when an account never reports
-  /// `connectionStateReady` — a stalled sync must not mute notifications.
   static const _backlogSettleTimeout = Duration(seconds: 8);
 
   final FlutterLocalNotificationsPlugin _plugin =
@@ -144,10 +128,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
   final Map<int, Timer> _backlogTimers = {};
   final Set<int> _syncedClients = {};
 
-  /// Join status per (clientId, is-supergroup, group id). Keyed by group rather
-  /// than chat because the invalidating update carries only the group, and the
-  /// kind is part of the key because basic-group and supergroup identifiers are
-  /// separate TDLib id spaces whose values can collide.
   final Map<(int, bool, int), bool> _groupJoinCache = {};
 
   bool get inAppBannersEnabled => _inAppBannersEnabled;
@@ -213,8 +193,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
         ], allAccounts: true)
         .listen(_handle);
     _ready = true;
-    // Foreground banners don't require notification permission. Subscribe
-    // before asking so an OS permission sheet can't create a blind spot.
     unawaited(requestPermissions());
   }
 
@@ -287,8 +265,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
         isSupergroupUpdate ? 'supergroup' : 'basic_group',
       );
       final joined = isJoinedMemberStatus(group?.obj('status'));
-      // The update already carries the whole group, so membership never has to
-      // be re-queried per incoming message once the group has been seen once.
       final groupId = group?.int64('id');
       if (groupId != null) {
         _groupJoinCache[(clientId, isSupergroupUpdate, groupId)] = joined;
@@ -303,10 +279,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
     final raw = update.obj('message');
     if (raw == null || (raw.boolean('is_outgoing') ?? false)) return;
 
-    // TDLib replays everything that arrived while the app was offline as fresh
-    // `updateNewMessage` events, before it has caught up on where the other
-    // devices left off. Hold that backlog until the account finishes syncing
-    // so read conversations stay silent instead of flooding the launch.
     if (!_syncedClients.contains(clientId)) {
       _holdBacklogMessage(raw, update, clientId: clientId);
       return;
@@ -363,7 +335,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
 
     final messageText = _notificationText(content);
     if (KeywordBlocker.shared.matches(messageText)) return;
-    // Same id space as ChatMessage.senderId: users positive, chats negative.
     final sender = raw.obj('sender_id');
     final senderId = sender?.int64('user_id') ?? sender?.int64('chat_id');
     if (HiddenSenderStore.shared.hides(senderId, chatId)) return;
@@ -372,10 +343,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
       inAppBannersEnabled: _inAppBannersEnabled,
       systemNotificationsAvailable: _notificationsAvailable,
     );
-    // Only the system notification needs the icon in hand. Every other surface
-    // still warms the app-group store the service extension reads for remote
-    // pushes — it just no longer holds the banner behind a file read and a
-    // possible avatar download.
     String? preparedIOSChatIconPath;
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       final prepared = _prepareIOSChatIcon(chat, chatId, clientId);
@@ -623,13 +590,8 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
     }
   }
 
-  TdFileRef _notificationPhotoPlaceholder(TdFileRef photo) => TdFileRef(
-    // TDLib file ids are account-local. Avoid resolving this id through a
-    // newly active account if the originating account download failed.
-    id: 0,
-    miniThumb: photo.miniThumb,
-    photoId: photo.photoId,
-  );
+  TdFileRef _notificationPhotoPlaceholder(TdFileRef photo) =>
+      TdFileRef(id: 0, miniThumb: photo.miniThumb, photoId: photo.photoId);
 
   Future<String?> _notificationAccountName(int clientId) async {
     try {
@@ -697,14 +659,9 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
       unawaited(_finishSync(clientId));
       return;
     }
-    // `connectionStateUpdating` is TDLib downloading what arrived while the
-    // app was offline. Every state short of ready can still deliver a backlog,
-    // so a dropped connection re-arms the hold for the next reconnect.
     _syncedClients.remove(clientId);
   }
 
-  /// Keeps only the newest held message per chat: a backlog is a summary of
-  /// what was missed, not a replay of every message one notification at a time.
   void _holdBacklogMessage(
     Map<String, dynamic> message,
     Map<String, dynamic> update, {
@@ -763,7 +720,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
       _backlogMessages.remove(key);
     }
 
-    // Reading on another device should also retire what is already on screen.
     final banner = _inAppBanner;
     final bannerMessageId = banner?.target.messageId;
     if (banner != null &&
@@ -876,8 +832,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
     );
   }
 
-  /// Holds a `updateNewMessage` the way [_handle] would while an account is
-  /// still syncing, and reports the chats still queued for announcement.
   @visibleForTesting
   List<int> holdBacklogMessageForTesting(Map<String, dynamic> update) {
     final clientId = update.integer('@client_id') ?? _client.activeClientId;
@@ -934,9 +888,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
     }
   }
 
-  /// Membership, answered from [_groupJoinCache] when the group's status has
-  /// already been delivered — otherwise every incoming group message pays a
-  /// getSupergroup/getBasicGroup round trip that the update stream repeats.
   Future<bool> _isJoinedChat(
     int chatId,
     Map<String, dynamic> chat, {
@@ -1159,12 +1110,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
     _openTarget(await _withAccountSlot(target));
   }
 
-  /// Tags a remote target with the slot its account occupies.
-  ///
-  /// Telegram's push payload names the account by user id; the slot is
-  /// Mithka's own numbering and only resolvable here, where the client
-  /// registry lives. Without it the tap reaches navigation carrying a chat id
-  /// and no way to say which account it belongs to.
   Future<NotificationTarget> _withAccountSlot(NotificationTarget target) async {
     final userId = target.accountUserId;
     if (target.accountSlot != null || userId == null) return target;
@@ -1176,8 +1121,6 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
     for (final entry in _accountUserIdsByClient.entries) {
       if (entry.value == userId) return _client.slotForClient(entry.key);
     }
-    // The cache only fills as notifications are filtered, so a tap that wakes
-    // the app finds it empty. Ask each signed-in client who it is.
     for (final clientId in _client.registeredClientIds.toList()) {
       if (_accountUserIdsByClient.containsKey(clientId)) continue;
       try {
@@ -1186,9 +1129,7 @@ class NotificationController with WidgetsBindingObserver, ChangeNotifier {
         if (id == null) continue;
         _accountUserIdsByClient[clientId] = id;
         if (id == userId) return _client.slotForClient(clientId);
-      } catch (_) {
-        // An account that cannot answer cannot be the destination either.
-      }
+      } catch (_) {}
     }
     return null;
   }

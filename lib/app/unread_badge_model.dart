@@ -7,7 +7,6 @@ import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 import '../theme/theme_controller.dart';
 
-/// Live unread totals for the active account's main chat list.
 class UnreadBadgeModel extends ChangeNotifier {
   UnreadBadgeModel({Stream<Map<String, dynamic>>? updates})
     : _updates =
@@ -34,10 +33,6 @@ class UnreadBadgeModel extends ChangeNotifier {
     _started = true;
     _subscription = _updates.listen((update) {
       switch (update.type) {
-        // Both aggregates carry several counters and TDLib emits them whenever
-        // any of them moves — traffic in a muted chat leaves the unmuted count
-        // alone. Notifying anyway schedules a whole frame that rebuilds the
-        // tab bar for a number that did not change.
         case 'updateUnreadChatCount':
           if (update.obj('chat_list')?.type != 'chatListMain') return;
           final chats = update.integer('unread_unmuted_count') ?? 0;

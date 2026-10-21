@@ -1,12 +1,3 @@
-//
-//  add_people_view.dart
-//
-//  添加 — custom "add" page reached from the 联系人 top-right +. A 找人 / 找群
-//  segmented toggle drives a single search field (people: searchContacts +
-//  searchPublicChat; groups: searchPublicChats), and an options grid (扫一扫 /
-//  创建群聊 / 创建频道) shows when the query is empty.
-//
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -45,7 +36,7 @@ class _AddPeopleViewState extends State<AddPeopleView> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
   Timer? _debounce;
-  int _mode = 0; // 0 找人, 1 找群
+  int _mode = 0;
   String _query = '';
   bool _loading = false;
   List<Contact> _people = [];
@@ -105,8 +96,6 @@ class _AddPeopleViewState extends State<AddPeopleView> {
         if (c != null) byId[id] = c;
       }
     } catch (_) {}
-    // searchContacts only covers saved contacts; if the input is an exact public
-    // username (or t.me link), resolve it so any user shows up as a candidate.
     final handle = _usernameOf(q);
     if (handle != null) {
       try {
@@ -151,8 +140,6 @@ class _AddPeopleViewState extends State<AddPeopleView> {
         } catch (_) {}
       }
     } catch (_) {}
-    // searchPublicChats won't always surface an exact, lesser-known channel; if
-    // the input is a valid public username/link, resolve it directly.
     final handle = _usernameOf(q);
     if (handle != null) {
       try {
@@ -183,8 +170,6 @@ class _AddPeopleViewState extends State<AddPeopleView> {
     _groups = hits;
   }
 
-  /// Extracts a Telegram public username from raw input — bare handle, `@handle`,
-  /// or a t.me / telegram.me link — or null if it isn't a valid username shape.
   String? _usernameOf(String q) {
     var s = q.trim();
     final link = RegExp(
@@ -210,8 +195,6 @@ class _AddPeopleViewState extends State<AddPeopleView> {
       return null;
     }
   }
-
-  // MARK: - Actions
 
   void _openUser(Contact u) => Navigator.of(context).push(
     MaterialPageRoute(

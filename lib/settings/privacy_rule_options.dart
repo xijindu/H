@@ -128,9 +128,6 @@ class PrivacyRuleSelection {
       return rules;
     }
 
-    // TDLib evaluates privacy rules in order. Keep rules which this UI doesn't
-    // understand in their original positions, and only replace the rule kinds
-    // represented by the broad selector and exception editors.
     final templateTypes = _ruleTemplate.map((rule) => rule.type).toSet();
     final missingExceptions = <Map<String, dynamic>>[];
     for (final type in _managedExceptionTypes) {
@@ -151,8 +148,6 @@ class PrivacyRuleSelection {
 
     for (final sourceRule in _ruleTemplate) {
       final type = sourceRule.type;
-      // Explicit user/chat exceptions need the highest priority. Insert newly
-      // created exception kinds before the first special or broad rule.
       if (!_managedExceptionTypes.contains(type)) writeMissingExceptions();
       if (_managedBroadTypes.contains(type)) {
         if (!wroteBroadRule) {
@@ -248,7 +243,6 @@ PrivacyVisibilityOption privacyVisibilityFromRules(
       };
       if (result != null) return result;
     }
-    // TDLib defines an unmatched privacy action as not allowed.
     return false;
   }
 

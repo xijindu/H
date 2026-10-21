@@ -285,8 +285,6 @@ class MiniAppPlatformService {
 
     final root = await _downloadDirectoryProvider();
     await root.create(recursive: true);
-    // The server-controlled Content-Disposition header is deliberately ignored.
-    // Only the user-confirmed, sanitized Mini App filename reaches the filesystem.
     final temporary = await _unusedFile(root, '.$safeName.mithka-part');
     IOSink? sink;
     try {

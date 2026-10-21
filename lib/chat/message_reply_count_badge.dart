@@ -4,10 +4,6 @@ import '../components/app_icons.dart';
 import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 
-/// Compact reply metadata for ordinary group messages.
-///
-/// Channel posts use the full-width comments attachment instead. Keeping the
-/// group form small avoids presenting normal replies as channel comments.
 class MessageReplyCountBadge extends StatelessWidget {
   const MessageReplyCountBadge({
     super.key,

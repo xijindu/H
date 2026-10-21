@@ -6,11 +6,6 @@ import '../tdlib/td_models.dart';
 import '../theme/app_theme.dart';
 import '../theme/theme_controller.dart';
 
-/// A compact, realistic conversation sample used by appearance pickers.
-///
-/// The preview deliberately uses local initials instead of remote photos so it
-/// remains stable offline and never starts network work while a theme grid is
-/// scrolling.
 class ChatAppearancePreview extends StatelessWidget {
   const ChatAppearancePreview({
     super.key,
@@ -68,7 +63,6 @@ class ChatAppearancePreview extends StatelessWidget {
   }
 }
 
-/// Applies the selected readability treatment behind a sender name.
 class SenderNameReadabilityPlate extends StatelessWidget {
   const SenderNameReadabilityPlate({
     super.key,
@@ -88,8 +82,6 @@ class SenderNameReadabilityPlate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (mode == SenderNameReadabilityMode.none) return child;
-    // Blend carries no decoration of its own — it is a colour applied to the
-    // name, which senderNameReadabilityColor resolves for the caller.
     if (mode == SenderNameReadabilityMode.blend) {
       return KeyedSubtree(
         key: const ValueKey('senderNameReadabilityBlend'),
@@ -107,9 +99,6 @@ class SenderNameReadabilityPlate extends StatelessWidget {
   }
 }
 
-/// Renders a role tag and sender name as touching, color-separated pills when
-/// the readability background is enabled. The shared component keeps live
-/// messages and appearance previews geometrically identical.
 class SenderIdentityPills extends StatelessWidget {
   const SenderIdentityPills({
     super.key,
@@ -129,14 +118,11 @@ class SenderIdentityPills extends StatelessWidget {
   final String name;
   final TextStyle nameStyle;
 
-  /// The bubble's own text colour, which the blend mode meets halfway.
   final Color? textColor;
   final MemberRole? role;
   final String? roleTitle;
   final bool roleAfterName;
 
-  /// Sits directly after the name, before any trailing role tag — an emoji
-  /// status belongs to the person, so it reads ahead of their badge.
   final Widget? trailing;
 
   @override
@@ -150,9 +136,6 @@ class SenderIdentityPills extends StatelessWidget {
       fontWeight: FontWeight.w500,
       color: resolvedColor,
     );
-    // The background treatment is one continuous pill — tag, then name joined
-    // to it. That geometry only reads as a single object with the tag leading,
-    // so it overrides the platform's preference for a trailing tag.
     final tagAfterName =
         roleAfterName &&
         readabilityMode != SenderNameReadabilityMode.background;
@@ -196,11 +179,6 @@ class SenderIdentityPills extends StatelessWidget {
   }
 }
 
-/// The colour a sender's name renders in under [mode].
-///
-/// [SenderNameReadabilityMode.blend] meets the bubble's own text colour
-/// halfway, which keeps the sender's hue recognisable while holding contrast
-/// over a wallpaper — the job a shadow used to do, without the halo.
 Color senderNameReadabilityColor({
   required SenderNameReadabilityMode mode,
   required Color senderColor,

@@ -18,10 +18,6 @@ typedef ChatListPreviewQuery =
     Future<Map<String, dynamic>> Function(Map<String, dynamic> request);
 typedef ChatListPreviewLoader = Future<List<ChatMessage>> Function();
 
-/// One action displayed alongside the read-only chat preview.
-///
-/// The overlay owns only presentation. The chat list supplies callbacks so the
-/// preview never depends on the chat-list model or duplicates row-action state.
 class ChatListPreviewAction {
   const ChatListPreviewAction({
     required this.label,
@@ -36,7 +32,6 @@ class ChatListPreviewAction {
   final bool destructive;
 }
 
-/// Concrete geometry for the modal's phone/tablet arrangements.
 @immutable
 class ChatListPreviewGeometry {
   const ChatListPreviewGeometry({
@@ -93,9 +88,6 @@ ChatListPreviewGeometry chatListPreviewGeometry(
   );
 }
 
-/// Shows a Telegram-style, lifted conversation preview without opening the
-/// chat or sending `viewMessages`. Selecting an action dismisses the preview
-/// before handing control back to the chat list.
 Future<void> showChatListPreview(
   BuildContext context, {
   required ChatSummary chat,
@@ -141,19 +133,11 @@ Future<void> showChatListPreview(
     },
   );
   final selected = await Navigator.of(context, rootNavigator: true).push(route);
-  // Route.popped resolves when dismissal starts; completed resolves after the
-  // reverse transition and overlay removal, so follow-up navigation cannot
-  // collide with the preview route.
   await route.completed;
   if (!context.mounted || selected == null) return;
   selected.onSelected();
 }
 
-/// Fetches and parses a bounded recent-history slice for the preview.
-///
-/// This intentionally uses only read APIs. In particular, it never calls
-/// `openChat`, `viewMessages`, or `closeChat`, so peeking does not clear unread
-/// state or interfere with the active full-chat session.
 Future<List<ChatMessage>> loadChatListPreviewMessages({
   required ChatSummary chat,
   ChatListPreviewQuery? query,
@@ -195,9 +179,6 @@ Future<void> _hydratePreviewSenders(
   for (final message in messages) {
     final senderId = message.senderId;
     if (senderId == null || senderId == 0 || message.isOutgoing) continue;
-    // TDLib chat identifiers can be negative. Only user identifiers are
-    // required to be positive; rejecting all negative values drops channel
-    // and anonymous-admin sender names/photos from the preview.
     if (!message.senderIsChat && senderId < 0) continue;
     bySender
         .putIfAbsent((message.senderIsChat, senderId), () => [])
@@ -229,7 +210,6 @@ Future<void> _hydratePreviewSenders(
           }
         }
       } catch (_) {
-        // A missing sender should not hide otherwise available history.
       }
     }),
   );

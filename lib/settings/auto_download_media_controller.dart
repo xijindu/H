@@ -1,11 +1,4 @@
-﻿//
-//  auto_download_media_controller.dart
-//
-//  Persists Mithka's auto-download media preferences and mirrors them into
-//  TDLib's per-network autoDownloadSettings.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';

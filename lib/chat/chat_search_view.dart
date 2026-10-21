@@ -1,13 +1,4 @@
-﻿//
-//  chat_search_view.dart
-//
-//  In-chat message search as a pushed screen, for callers that are not inside
-//  the conversation — chat info and a profile. It shares its state and its rows
-//  with the in-place search the chat itself uses, and pops the picked message
-//  id back to whoever opened it.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import 'chat_message_search_bar.dart';
@@ -36,8 +27,6 @@ class _ChatSearchViewState extends State<ChatSearchView> {
     super.initState();
     _search = ChatMessageSearchController(
       chatId: widget.chatId,
-      // Nothing here follows the cursor, so a fresh query must not mark a row
-      // the user never picked.
       autoActivateFirstResult: false,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {

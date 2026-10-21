@@ -1,10 +1,4 @@
-﻿//
-//  group_management_log_view.dart
-//
-//  群管理记录 backed by TDLib getChatEventLog.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 
 import '../app/ipad_window_chrome.dart';

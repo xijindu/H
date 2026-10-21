@@ -217,8 +217,6 @@ class _ProfilePhotoManagementViewState
           Expanded(
             child: _loading
                 ? const Center(child: AppActivityIndicator(size: 24))
-                // A shrinkWrap grid under a ListView gets unbounded height and
-                // lays out every cell, so all 100 photos used to decode at once.
                 : CustomScrollView(
                     slivers: [
                       SliverPadding(

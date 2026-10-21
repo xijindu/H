@@ -1,12 +1,8 @@
 ﻿import 'dart:convert';
 
-/// Keys the iOS notification service extension stamps onto a delivered push so
-/// the tap that follows knows which account it belongs to. Kept in step with
-/// `accountSlotUserInfoKey` in NotificationCommunicationContent.swift.
 const _accountSlotKey = 'mithka_account_slot';
 const _accountUserIdKey = 'mithka_account_user_id';
 
-/// A Telegram notification destination expressed with TDLib identifiers.
 class NotificationTarget {
   const NotificationTarget({
     required this.chatId,
@@ -22,11 +18,6 @@ class NotificationTarget {
   final int? accountUserId;
   final int? accountSlot;
 
-  /// The same target, told which account slot it belongs to.
-  ///
-  /// A remote payload names its account by user id; the slot is Mithka's own
-  /// numbering, so it can only be attached once the client registry is at
-  /// hand.
   NotificationTarget withAccountSlot(int slot) => NotificationTarget(
     chatId: chatId,
     messageId: messageId,
@@ -35,7 +26,6 @@ class NotificationTarget {
     accountSlot: slot,
   );
 
-  /// Decodes the payload attached to a notification created by Mithka.
   static NotificationTarget? fromLocalPayload(String? payload) {
     if (payload == null || payload.trim().isEmpty) return null;
     final data = _map(payload);
@@ -43,18 +33,10 @@ class NotificationTarget {
     return _fromTdIds(data);
   }
 
-  /// Decodes the unencrypted Telegram APNs payload delivered by iOS.
-  ///
-  /// Telegram's `custom` object uses raw MTProto peer/message identifiers;
-  /// TDLib exposes those identifiers in a different representation. Keep the
-  /// conversion here so every notification-tap path feeds navigation the same
-  /// TDLib IDs.
   static NotificationTarget? fromRemoteUserInfo(Object? userInfo) {
     final root = _map(userInfo);
     if (root == null) return null;
 
-    // This also makes the bridge tolerant of a locally-created notification
-    // being forwarded by native code on a future platform/plugin version.
     final payload = root['payload'];
     final local = fromLocalPayload(payload is String ? payload : null);
     if (local != null) return local;
@@ -69,7 +51,6 @@ class NotificationTarget {
         (data.containsKey('msg_id') ? data : null);
     if (custom == null) return null;
 
-    // These formulas mirror TDLib's DialogId constructors.
     final fromId = _integer(custom['from_id']);
     final basicGroupId = _integer(custom['chat_id']);
     final channelId = _integer(custom['channel_id']);
@@ -96,8 +77,6 @@ class NotificationTarget {
           _integer(root['user_id']) ??
           _integer(data[_accountUserIdKey]) ??
           _integer(root[_accountUserIdKey]),
-      // Stamped by the notification service extension as the push was
-      // delivered, when the account map was still readable.
       accountSlot:
           _integer(data[_accountSlotKey]) ?? _integer(root[_accountSlotKey]),
     );

@@ -1017,8 +1017,6 @@ class _StickerSetManageViewState extends State<StickerSetManageView> {
           Expanded(
             child: _loading
                 ? const Center(child: AppActivityIndicator(size: 24))
-                // A shrinkWrap grid under a ListView gets unbounded height and
-                // lays out every cell, mounting a decoder per sticker up front.
                 : CustomScrollView(
                     slivers: [
                       SliverPadding(

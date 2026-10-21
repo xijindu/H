@@ -129,8 +129,6 @@ final class CommunicationNotificationBridge {
       return
     }
     if call.method == "setAccountSlots" {
-      // The extension cannot ask the app which account a user id belongs to,
-      // so the app publishes the map whenever its accounts change.
       let arguments = call.arguments as? [String: Any] ?? [:]
       var slots: [String: Int] = [:]
       for (userId, slot) in arguments {

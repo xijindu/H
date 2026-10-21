@@ -1,13 +1,4 @@
-﻿//
-//  qr_code_view.dart
-//
-//  我的二维码 — a personal QR card: a brand-gradient identity header, a
-//  brand-tinted QR (high error correction) with the user's avatar inset in the
-//  centre, on a shadowed card over a soft gradient. Encodes the user's t.me
-//  profile link. Port of the Swift `QRCodeView`.
-//
-
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -28,7 +19,7 @@ class QRCodeView extends StatefulWidget {
     this.isGroup = false,
   });
   final String name;
-  final int? chatId; // non-null → render a group/chat QR instead of 我的二维码
+  final int? chatId;
   final bool isGroup;
 
   @override
@@ -81,8 +72,6 @@ class _QRCodeViewState extends State<QRCodeView> {
     }
   }
 
-  /// Group QR: a public chat → its t.me/username link; a private group → its
-  /// primary invite link (from full info). Falls back to a "no link" message.
   Future<void> _loadGroup() async {
     Map<String, dynamic>? chat;
     try {
@@ -293,7 +282,6 @@ class _QRCodeViewState extends State<QRCodeView> {
             data: _link!,
             size: 224,
             errorCorrectionLevel: QrErrorCorrectLevel.H,
-            // Fancy custom QR: rounded position eyes + circular data dots.
             eyeStyle: QrEyeStyle(
               eyeShape: QrEyeShape.circle,
               color: AppTheme.brand,
@@ -303,7 +291,6 @@ class _QRCodeViewState extends State<QRCodeView> {
               color: AppTheme.brand,
             ),
           ),
-          // Avatar inset (H correction keeps it scannable).
           Container(
             decoration: BoxDecoration(
               shape: squareGroupAvatar ? BoxShape.rectangle : BoxShape.circle,

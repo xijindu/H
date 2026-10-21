@@ -1,11 +1,6 @@
 ﻿import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
-/// A route-owned animation driver for [FullPageBackSwipe].
-///
-/// Keeping the animation controller on the route allows Flutter's navigator to
-/// reveal and repaint the actual previous route while the current page follows
-/// the pointer.
 abstract interface class FullPageBackSwipeDriver {
   bool get canStartFullPageBackSwipe;
 
@@ -18,11 +13,6 @@ abstract interface class FullPageBackSwipeDriver {
   void commitFullPageBackSwipe(VoidCallback? beforePop);
 }
 
-/// Observes a rightward back swipe from anywhere inside [child].
-///
-/// A raw pointer listener is intentional: nested horizontal controls can keep
-/// handling their own gestures while the page still observes the navigation
-/// gesture.
 class FullPageBackSwipe extends StatefulWidget {
   const FullPageBackSwipe({
     super.key,
@@ -42,10 +32,6 @@ class FullPageBackSwipe extends StatefulWidget {
 }
 
 class _FullPageBackSwipeState extends State<FullPageBackSwipe> {
-  // Keep a small horizontal drift from taking over the page. The back
-  // gesture is available across the conversation surface, so the intent and
-  // commit thresholds need to be high enough that ordinary diagonal/short
-  // drags remain with the control under the finger.
   static const _intentDistance = 18.0;
   static const _commitDistance = 96.0;
   static const _longCommitDistance = 128.0;

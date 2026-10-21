@@ -1,12 +1,4 @@
-﻿//
-//  blocked_user_service.dart
-//
-//  Account-scoped snapshots of Telegram blocked senders. Each load stays
-//  pinned to the account that initiated it and is published atomically, so a
-//  failed refresh cannot replace a known-good block list with an empty one.
-//
-
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
@@ -71,7 +63,6 @@ class BlockedUserService extends ChangeNotifier {
   StreamSubscription<Map<String, dynamic>>? _authSub;
   bool _started = false;
 
-  /// Whether the active account hides messages from its blocked users.
   bool get enabled => _enabledBySlot[_activeSlot()] ?? false;
   set enabled(bool value) {
     final slot = _activeSlot();
@@ -151,8 +142,6 @@ class BlockedUserService extends ChangeNotifier {
         offset += limit;
       }
     } catch (_) {
-      // Keep the previous known-good snapshot. In particular, never publish an
-      // empty list merely because an account is offline during a refresh.
       return;
     }
 

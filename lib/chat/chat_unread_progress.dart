@@ -41,9 +41,6 @@ ChatNewMessagesControlPlacement chatNewMessagesControlPlacement({
       : ChatNewMessagesControlPlacement.hidden;
 }
 
-/// Buffers only message IDs received through TDLib's `updateNewMessage` path.
-/// History pages loaded while restoring a saved scroll position must never be
-/// mistaken for live arrivals.
 class ChatLiveMessageBuffer {
   final Set<int> _messageIds = <int>{};
 
@@ -57,10 +54,6 @@ class ChatLiveMessageBuffer {
   }
 }
 
-/// Live incoming IDs that were appended to the currently loaded transcript.
-///
-/// A null previous newest ID means the chat previously had no server message;
-/// the first live arrival must still be surfaced if auto-follow is suppressed.
 List<int> appendedLiveIncomingMessageIds({
   required int? previousNewestMessageId,
   required Iterable<int> liveIncomingMessageIds,
@@ -76,9 +69,6 @@ List<int> appendedLiveIncomingMessageIds({
       .toList(growable: false);
 }
 
-/// Returns the earliest loaded incoming message beyond a captured read
-/// boundary. The boundary must be the value from when the chat opened: TDLib
-/// advances its live boundary as soon as the latest messages are marked read.
 int? firstUnreadMessageIdAfterBoundary({
   required Iterable<int> incomingMessageIds,
   required int lastReadInboxId,
@@ -91,19 +81,12 @@ int? firstUnreadMessageIdAfterBoundary({
   return earliest;
 }
 
-/// Whether [messageId] belonged to the unread range captured when the chat
-/// entry state was recorded. The upper bound prevents later auto-followed
-/// arrivals from consuming the fixed entry unread count after their live-ID
-/// marker has already been cleared.
 bool isCapturedEntryUnreadMessage({
   required int messageId,
   required int lastReadInboxId,
   required int latestMessageId,
 }) => messageId > lastReadInboxId && messageId <= latestMessageId;
 
-/// Whether a transcript row begins the unread range captured when the chat
-/// opened. Live TDLib read updates must not be used here: viewing the row can
-/// advance the live boundary while the divider is still on screen.
 bool isCapturedUnreadDividerMessage({
   required int entryUnreadCount,
   required int? firstUnreadMessageId,
@@ -148,9 +131,6 @@ class ChatUnreadProgress {
   int remaining({required int entryUnreadCount}) =>
       initialRemaining(entryUnreadCount: entryUnreadCount) + liveCount;
 
-  /// Count shown by the new-message control. Live arrivals retain their
-  /// existing priority, while entry unread messages now reflect what has
-  /// actually entered the viewport instead of staying frozen at open time.
   int badgeCount({required int entryUnreadCount}) => liveCount > 0
       ? liveCount
       : initialRemaining(entryUnreadCount: entryUnreadCount);
@@ -170,11 +150,6 @@ class ChatUnreadProgress {
     return initialUnread && _seenInitialMessageIds.add(messageId);
   }
 
-  /// Records one incoming message intersecting the laid-out viewport.
-  ///
-  /// [shouldReportViewed] is true only on the first observation so callers can
-  /// issue TDLib's `viewMessages` exactly once even when layout is measured
-  /// again without a scroll event.
   ({bool shouldReportViewed, bool unreadCountChanged}) observeVisibleIncoming({
     required int messageId,
     required bool initialUnread,
