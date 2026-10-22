@@ -230,7 +230,7 @@ abstract final class AppMetric {
   static const double searchHeight = 36;
   static const double searchIcon = 16;
   static const double onlineDot = 7;
-  static const double menuWidth = 220;
+  static const double menuWidth = 180;
   static const double menuRowHeight = 50;
   static const double menuIconSlot = 24;
 

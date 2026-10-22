@@ -5,21 +5,29 @@ import 'package:flutter/material.dart';
 import 'package:handy/l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
 
+import '../app/bottom_bar_layout.dart';
 import '../app/ipad_window_chrome.dart';
-import '../app/primary_chat_launcher.dart';
 import '../auth/account_store.dart';
 import '../auth/auth_manager.dart';
-import '../call/calls_view.dart';
 import '../chat/chat_wallpaper.dart';
 import '../chat/custom_emoji.dart';
-import '../chat/shared_media_view.dart';
 import '../components/app_icons.dart';
 import '../components/confirm_dialog.dart';
 import '../components/photo_avatar.dart';
 import '../components/ui_components.dart';
 import '../components/vip_badge.dart';
+import '../security/local_app_lock_views.dart';
+import '../settings/appearance_view.dart';
+import '../settings/blocking_settings_view.dart';
+import '../settings/chat_folder_management_view.dart';
 import '../settings/edit_profile_view.dart';
-import '../settings/settings_view.dart';
+import '../settings/feature_settings_view.dart';
+import '../settings/general_settings_view.dart';
+import '../settings/language_settings_view.dart';
+import '../settings/notification_settings_view.dart';
+import '../settings/privacy_detail_views.dart';
+import '../settings/privacy_security_view.dart';
+import '../settings/storage_usage_view.dart';
 import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
 import '../tdlib/td_models.dart';
@@ -34,7 +42,6 @@ import 'profile_username_summary.dart';
 class ProfileViewModel extends ChangeNotifier {
   CurrentUser? user;
   List<String> usernames = const [];
-  int? savedChatId;
   bool _loaded = false;
   StreamSubscription? _sub;
 
@@ -66,13 +73,6 @@ class ProfileViewModel extends ChangeNotifier {
     try {
       final me = await TdClient.shared.query({'@type': 'getMe'});
       _applyUser(me);
-      final chat = await TdClient.shared.query({
-        '@type': 'createPrivateChat',
-        'user_id': user?.id ?? me.int64('id') ?? 0,
-        'force': false,
-      });
-      savedChatId = chat.int64('id') ?? user?.id;
-      notifyListeners();
     } catch (_) {}
   }
 
@@ -164,12 +164,7 @@ class _ProfileViewState extends State<ProfileView> {
     super.dispose();
   }
 
-  NavigatorState get _root => Navigator.of(context, rootNavigator: true);
-
-  void _openSaved(String title) {
-    final cid = _vm.savedChatId ?? _vm.user?.id ?? 0;
-    unawaited(openChatFromCurrentWindow(context, chatId: cid, title: title));
-  }
+  NavigatorState get _navigator => Navigator.of(context);
 
   void _openStatusPicker() {
     showEmojiStatusPicker(
@@ -181,7 +176,7 @@ class _ProfileViewState extends State<ProfileView> {
   void _openMyProfile() {
     final user = _vm.user;
     if (user == null || user.id <= 0) return;
-    _root.push(
+    _navigator.push(
       MaterialPageRoute(
         builder: (_) => ProfileDetailView(userId: user.id, name: user.name),
       ),
@@ -198,12 +193,8 @@ class _ProfileViewState extends State<ProfileView> {
           _banner(),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.only(),
-              children: [
-                _rowsCard(),
-                const SizedBox(height: 12),
-                _accountsCard(),
-              ],
+              padding: EdgeInsets.only(bottom: BottomBarInset.of(context)),
+              children: [..._accountsAndSettings()],
             ),
           ),
         ],
@@ -255,22 +246,6 @@ class _ProfileViewState extends State<ProfileView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  const Spacer(),
-                  GestureDetector(
-                    onTap: () => _root.push(
-                      MaterialPageRoute(builder: (_) => const SettingsView()),
-                    ),
-                    child: AppIcon(
-                      HeroAppIcons.gear,
-                      size: 22,
-                      color: foreground,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
               Row(
                 children: [
                   GestureDetector(
@@ -343,7 +318,7 @@ class _ProfileViewState extends State<ProfileView> {
                   const SizedBox(width: 8),
                   GestureDetector(
                     key: const ValueKey('profile-banner-edit'),
-                    onTap: () => _root.push(
+                    onTap: () => _navigator.push(
                       MaterialPageRoute(
                         builder: (_) => const EditProfileView(),
                       ),
@@ -394,105 +369,6 @@ class _ProfileViewState extends State<ProfileView> {
                   color: foreground.withValues(alpha: 0.9),
                 ),
               ),
-      ),
-    );
-  }
-
-  Widget _rowsCard() {
-    return Container(
-      decoration: BoxDecoration(color: context.colors.card),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          _row(
-            HeroAppIcons.phone,
-            const Color(0xFF34C759),
-            AppStrings.t(AppStringKeys.callsTitle),
-            () {
-              _root.push(MaterialPageRoute(builder: (_) => const CallsView()));
-            },
-          ),
-          _row(
-            HeroAppIcons.thumbtack,
-            const Color(0xFFFF9D2E),
-            AppStrings.t(AppStringKeys.savedMessages),
-            () => _openSaved(AppStrings.t(AppStringKeys.savedMessages)),
-          ),
-          _row(
-            HeroAppIcons.folder,
-            const Color(0xFF3C8CF0),
-            AppStrings.t(AppStringKeys.topicPostContentFile),
-            () {
-              _root.push(
-                MaterialPageRoute(
-                  builder: (_) => SharedMediaView(
-                    chatId: 0,
-                    title: AppStrings.t(AppStringKeys.topicPostContentFile),
-                    initialTab: 1,
-                    displayTitle: AppStringKeys.topicPostContentFile,
-                  ),
-                ),
-              );
-            },
-          ),
-          _row(
-            HeroAppIcons.video,
-            const Color(0xFF7B61FF),
-            AppStrings.t(AppStringKeys.sharedMediaVideos),
-            () {
-              _root.push(
-                MaterialPageRoute(
-                  builder: (_) => SharedMediaView(
-                    chatId: 0,
-                    title: AppStrings.t(AppStringKeys.sharedMediaVideos),
-                    initialTab: 4,
-                    displayTitle: AppStringKeys.sharedMediaVideos,
-                    lockedTab: true,
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _row(AppIconData icon, Color color, String label, VoidCallback onTap) {
-    final c = context.colors;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: SizedBox(
-        height: 54,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 8, right: 18),
-          child: Row(
-            children: [
-              Container(
-                width: 42,
-                height: 32,
-                alignment: Alignment.center,
-                child: AppIcon(icon, size: 20, color: color),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 15, color: c.textPrimary),
-                ),
-              ),
-              const SizedBox(width: 12),
-              AppIcon(
-                HeroAppIcons.chevronRight,
-                size: 15,
-                color: c.textTertiary,
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -565,6 +441,40 @@ class _ProfileViewState extends State<ProfileView> {
         ],
       ),
     );
+  }
+
+  void _openSetting(_ProfileSettingEntry entry) {
+    _navigator.push(
+      MaterialPageRoute<void>(builder: (_) => entry.destination()),
+    );
+  }
+
+  List<Widget> _accountsAndSettings() {
+    final entries = List<_ProfileSettingEntry>.from(_profileSettingsEntries)
+      ..sort((a, b) {
+        final gc = a.group.compareTo(b.group);
+        if (gc != 0) return gc;
+        return a.order.compareTo(b.order);
+      });
+    return [
+      _accountsCard(),
+      const SizedBox(height: AppSpacing.lg),
+      SettingsCard(
+        addDividers: true,
+        children: [
+          for (final entry in entries)
+            SettingsRow(
+              key: ValueKey('profile-setting-${entry.id}'),
+              title: entry.titleKey,
+              leading: SettingsIconTile(
+                icon: entry.icon,
+                backgroundColor: entry.color,
+              ),
+              onTap: () => _openSetting(entry),
+            ),
+        ],
+      ),
+    ];
   }
 
   String _accountLabel(AccountSummary s) =>
@@ -661,6 +571,137 @@ class _ProfileViewState extends State<ProfileView> {
     );
   }
 }
+
+class _ProfileSettingEntry {
+  const _ProfileSettingEntry({
+    required this.id,
+    required this.group,
+    required this.order,
+    required this.titleKey,
+    required this.icon,
+    required this.color,
+    required this.destination,
+  });
+
+  final String id;
+  final int group;
+  final int order;
+  final String titleKey;
+  final AppIconData icon;
+  final Color color;
+  final Widget Function() destination;
+}
+
+final List<_ProfileSettingEntry> _profileSettingsEntries = [
+  _ProfileSettingEntry(
+    id: 'notifications',
+    group: 2,
+    order: 0,
+    titleKey: AppStringKeys.notificationNotifications,
+    icon: HeroAppIcons.solidBell,
+    color: const Color(0xFFF5A623),
+    destination: () => const NotificationSettingsView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'telegram-privacy',
+    group: 2,
+    order: 20,
+    titleKey: AppStringKeys.privacySecurityTitle,
+    icon: HeroAppIcons.shieldHalved,
+    color: const Color(0xFF16B05A),
+    destination: () => const PrivacySecurityView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'telegram-blocked-users',
+    group: 2,
+    order: 30,
+    titleKey: AppStringKeys.blockingBlocklist,
+    icon: HeroAppIcons.ban,
+    color: const Color(0xFFDA405B),
+    destination: () => const BlockedUsersView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'mithka-content-filters',
+    group: 2,
+    order: 40,
+    titleKey: AppStringKeys.settingsContentFilters,
+    icon: HeroAppIcons.filter,
+    color: const Color(0xFFDA405B),
+    destination: () => const BlockingSettingsView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'mithka-app-lock',
+    group: 2,
+    order: 50,
+    titleKey: AppStringKeys.appLockTitle,
+    icon: HeroAppIcons.lock,
+    color: const Color(0xFF16B05A),
+    destination: () => const AppLockSettingsView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'mithka-theme',
+    group: 3,
+    order: 0,
+    titleKey: AppStringKeys.appearanceTheme,
+    icon: HeroAppIcons.palette,
+    color: const Color(0xFF6C5CE7),
+    destination: () => const ThemeSettingsView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'mithka-appearance',
+    group: 3,
+    order: 5,
+    titleKey: AppStringKeys.appearanceSize,
+    icon: HeroAppIcons.wandMagicSparkles,
+    color: const Color(0xFF8E7BFF),
+    destination: () => const AppearanceView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'telegram-chat-folders',
+    group: 3,
+    order: 10,
+    titleKey: AppStringKeys.appearanceChatFolders,
+    icon: HeroAppIcons.solidFolder,
+    color: const Color(0xFF34A2DF),
+    destination: () => const ChatFolderManagementView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'mithka-chat-behavior',
+    group: 3,
+    order: 20,
+    titleKey: AppStringKeys.settingsChatBehavior,
+    icon: HeroAppIcons.solidMessage,
+    color: const Color(0xFF3C8CF0),
+    destination: () => const ChatBehaviorSettingsView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'mithka-data-storage',
+    group: 3,
+    order: 30,
+    titleKey: AppStringKeys.settingsDataAndStorage,
+    icon: HeroAppIcons.compactDisc,
+    color: const Color(0xFF16B0A0),
+    destination: () => const StorageUsageView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'telegram-language',
+    group: 4,
+    order: 10,
+    titleKey: AppStringKeys.languageHandyLanguage,
+    icon: HeroAppIcons.globe,
+    color: const Color(0xFF34A2DF),
+    destination: () => const AppLanguageSettingsView(),
+  ),
+  _ProfileSettingEntry(
+    id: 'mithka-features',
+    group: 5,
+    order: 0,
+    titleKey: AppStringKeys.featureTitle,
+    icon: HeroAppIcons.grip,
+    color: const Color(0xFF3C8CF0),
+    destination: () => const FeatureSettingsView(),
+  ),
+];
 
 class AccountActionRow extends StatefulWidget {
   const AccountActionRow({

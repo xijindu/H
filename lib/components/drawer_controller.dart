@@ -1,20 +1,5 @@
-﻿import 'package:flutter/scheduler.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
-
-class DrawerController extends ChangeNotifier {
-  bool _isOpen = false;
-  bool get isOpen => _isOpen;
-
-  void open() {
-    _isOpen = true;
-    notifyListeners();
-  }
-
-  void close() {
-    _isOpen = false;
-    notifyListeners();
-  }
-}
 
 class TabBarVisibility extends ChangeNotifier {
   final Map<int, int> _depths = {};

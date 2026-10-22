@@ -32,7 +32,6 @@ import 'chat/animated_sticker_view.dart';
 import 'chat/chat_view.dart';
 import 'chat/music_player_controller.dart';
 import 'chats/chat_folder_tag_controller.dart';
-import 'components/drawer_controller.dart' as dc;
 import 'components/keyboard_dismiss_on_tap.dart';
 import 'l10n/app_locale_controller.dart';
 import 'l10n/app_localizations.dart';
@@ -260,7 +259,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
     widget.prefs,
   );
   late final AppLocaleController _locale = AppLocaleController(widget.prefs);
-  late final dc.DrawerController _drawer = dc.DrawerController();
   late final ChatDeepLinkController _chatDeepLinks =
       ChatDeepLinkController.shared;
   late final ChatFolderTagController _folderTags = ChatFolderTagController(
@@ -422,7 +420,6 @@ class _HandyAppState extends State<HandyApp> with WidgetsBindingObserver {
         ChangeNotifierProvider.value(value: _sensitiveContent),
         ChangeNotifierProvider.value(value: _appLock),
         ChangeNotifierProvider.value(value: _calls),
-        ChangeNotifierProvider<dc.DrawerController>.value(value: _drawer),
       ],
       child: _HandyAppConsumer(
         builder: (context, theme, accounts, locale, _) {

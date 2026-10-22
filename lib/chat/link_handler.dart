@@ -28,7 +28,6 @@ import '../settings/network_usage_view.dart';
 import '../settings/notification_settings_view.dart';
 import '../settings/privacy_detail_views.dart';
 import '../settings/privacy_security_view.dart';
-import '../settings/settings_view.dart';
 import '../settings/storage_usage_view.dart';
 import '../tdlib/json_helpers.dart';
 import '../tdlib/td_client.dart';
@@ -359,7 +358,6 @@ Future<bool> _openSettingsLink(
     'settingsSectionNotifications' => const NotificationSettingsView(),
     'settingsSectionPrivacyAndSecurity' => const PrivacySecurityView(),
     'settingsSectionQrCode' => const QRCodeView(),
-    'settingsSectionSearch' => const SettingsView(focusSearch: true),
     _ => null,
   };
   if (destination == null) return false;

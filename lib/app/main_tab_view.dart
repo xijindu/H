@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -252,7 +251,7 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
   static const _allTabs = [
     _MainTabItem(0, AppStringKeys.tabMessages, HeroAppIcons.solidMessage),
     _MainTabItem(1, AppStringKeys.tabContacts, HeroAppIcons.users),
-    _MainTabItem(2, AppStringKeys.profileSettings, HeroAppIcons.gear),
+    _MainTabItem(2, AppStringKeys.chatMeLabel, HeroAppIcons.solidCircleUser),
   ];
 
   List<_MainTabItem> _visibleTabs() {
@@ -428,14 +427,10 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
           onPopInvokedWithResult: (didPop, _) async {
             if (!didPop) await _onWillPop();
           },
-          child: _rootStack(),
+          child: _classicTabs(),
         ),
       ),
     );
-  }
-
-  Widget _rootStack() {
-    return Stack(children: [_classicTabs(), _drawerOverlay()]);
   }
 
 
@@ -972,10 +967,6 @@ abstract class _MainRootViewState<T extends StatefulWidget> extends State<T> {
   bool get _hasCompactNavigationStack =>
       _navKeys[_selection].currentState != null &&
       _tabBar.depth(_selection) > 0;
-
-
-  Widget _drawerOverlay() =>
-      _ProfileDrawerOverlay(controller: context.read<dc.DrawerController>());
 }
 
 class _SplitResizeHandle extends StatefulWidget {
@@ -1026,108 +1017,6 @@ class _SplitResizeHandleState extends State<_SplitResizeHandle> {
               ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ProfileDrawerOverlay extends StatefulWidget {
-  const _ProfileDrawerOverlay({required this.controller});
-
-  final dc.DrawerController controller;
-
-  @override
-  State<_ProfileDrawerOverlay> createState() => _ProfileDrawerOverlayState();
-}
-
-class _ProfileDrawerOverlayState extends State<_ProfileDrawerOverlay>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  void _rebuild() => setState(() {});
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: AppMotion.deliberate,
-      reverseDuration: AppMotion.responsive,
-      value: widget.controller.isOpen ? 1 : 0,
-    )..addListener(_rebuild);
-    widget.controller.addListener(_sync);
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _controller.duration = AppMotion.duration(context, AppMotion.deliberate);
-    _controller.reverseDuration = AppMotion.duration(
-      context,
-      AppMotion.responsive,
-    );
-    _sync();
-  }
-
-  @override
-  void didUpdateWidget(covariant _ProfileDrawerOverlay oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (identical(oldWidget.controller, widget.controller)) return;
-    oldWidget.controller.removeListener(_sync);
-    widget.controller.addListener(_sync);
-    _sync();
-  }
-
-  void _sync() {
-    if (AppMotion.isReduced(context)) {
-      _controller.value = widget.controller.isOpen ? 1 : 0;
-    } else if (widget.controller.isOpen) {
-      _controller.forward();
-    } else {
-      _controller.reverse();
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_sync);
-    _controller
-      ..removeListener(_rebuild)
-      ..dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final width = math.min(MediaQuery.sizeOf(context).width * 0.88, 420.0);
-    final progress = AppMotion.emphasized.transform(_controller.value);
-    return IgnorePointer(
-      ignoring: _controller.isDismissed,
-      child: ExcludeSemantics(
-        excluding: _controller.isDismissed,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: widget.controller.close,
-                child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.35 * progress),
-                ),
-              ),
-            ),
-            Positioned(
-              left: -width * (1 - progress),
-              top: 0,
-              bottom: 0,
-              width: width,
-              child: Material(
-                color: context.colors.groupedBackground,
-                child: const ProfileView(),
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -1484,9 +1373,7 @@ class _MainBottomBar extends StatelessWidget {
         sideGeometry?.fits(items.length, sideItemHeight) == true) {
       return SideNavigationPortal(
         fillSide: true,
-        visible:
-            (ModalRoute.isCurrentOf(context) ?? true) &&
-            !context.watch<dc.DrawerController>().isOpen,
+        visible: ModalRoute.isCurrentOf(context) ?? true,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6),
           child: Column(
